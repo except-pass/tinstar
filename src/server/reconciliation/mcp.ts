@@ -116,17 +116,24 @@ export class ReconciliationMcp {
     }
     const readAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     const reviewAnnotations = { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true }
-    const preparedCall = async (perform: (reviews: PreparedReviews) => Promise<unknown>) => {
+    const preparedCall = async (perform: (reviews: PreparedReviews) => Promise<unknown>, exactClaim = false) => {
       if (!this.readers.preparedReviews) return { outcome: 'unavailable', message: 'Prepared review storage unavailable' }
       try { return await perform(this.readers.preparedReviews) }
       catch (error) {
-        if (error instanceof CardLeaseError) return leaseFailure(error)
+        if (error instanceof CardLeaseError) {
+          const refusal = leaseFailure(error)
+          return exactClaim && refusal.code === 'source-write-pending'
+            ? { ...refusal, message: 'The pending write may belong to the card already bound to this review session. The owner can find the reserved card and operation in the pending-writes list through the Decision Desk API.' }
+            : refusal
+        }
         if (error instanceof DecisionDeskConflict) return { outcome: 'operation-conflict', message: error.message }
         throw error
       }
     }
     const preparedInstructions = 'Use the returned packet to review the card. Keep the lease_token in tool arguments. Use it to resume or answer in the same chat. Generate a unique operation_id for each operation and reuse it to retry.'
-    const claim = async (input: z.infer<typeof preparedClaimInput>) => result(await preparedCall(reviews => reviews.claim(caller, actor, input)))
+    const claim = async (input: z.infer<typeof preparedClaimInput>) => result(await preparedCall(
+      reviews => reviews.claim(caller, actor, input), input.card_id !== undefined,
+    ))
     const nextClaim = { description: 'Claim the next unleased, prepared card that needs Will. ' + preparedInstructions, inputSchema: preparedClaimInput.omit({ card_id: true }), annotations: reviewAnnotations }
     const exactClaim = { description: 'Claim the prepared packet for one specific card that needs Will. ' + preparedInstructions, inputSchema: preparedClaimInput.required({ card_id: true }), annotations: reviewAnnotations }
     catalog.registerTool('claim_next_card', nextClaim, claim)

@@ -26,6 +26,11 @@ async function body(req: IncomingMessage) {
 }
 
 const base = '/api/reconciliation/decision-desk/'
+const pendingWriteHint = 'The pending write may belong to the card already bound to this review session. '
+  + `Find the reserved card and operation in the Decision Desk pending-writes list at GET ${base}source-writes. `
+  + `Once the earlier request has settled, send POST ${base}reconcile-source-write with a JSON body containing card_id, operation, earlier_request_settled: true, and a reason. `
+  + 'Include the Content-Type: application/json header on the POST. '
+  + 'Include the X-Tinstar-UI: 1 header on both requests.'
 const paths = new Set(['snapshot', 'submit', 'submission-state', 'metrics', 'sessions', 'claim', 'release', 'close-session',
   'source-writes', 'reconcile-source-write'])
 
@@ -48,6 +53,7 @@ export class DecisionDeskApi {
     if (typeof login !== 'string' || !await this.authorized(req)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required for Decision Desk', { headers })
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
     const caller = leaseHash(JSON.stringify(['web-review', login, this.packets.scope]))
+    let exactClaim = false
     try {
       if (req.method === 'GET') {
         switch (path) {
@@ -60,8 +66,11 @@ export class DecisionDeskApi {
       }
       if (req.method === 'POST') {
         switch (path) {
-          case 'claim':
-            return respond(await this.reviews.claim(caller, 'Browser review', preparedClaimInput.required({ review_session_token: true }).parse(await body(req))))
+          case 'claim': {
+            const input = preparedClaimInput.required({ review_session_token: true }).parse(await body(req))
+            exactClaim = input.card_id !== undefined
+            return respond(await this.reviews.claim(caller, 'Browser review', input))
+          }
           case 'release':
             return respond(await this.reviews.release(caller, 'Browser review', preparedReleaseInput.parse(await body(req))))
           case 'sessions':
@@ -84,7 +93,10 @@ export class DecisionDeskApi {
       }
       return fail(res, 'BAD_REQUEST', 'Method unavailable for this resource', { headers, status: 405 })
     } catch (error) {
-      if (error instanceof CardLeaseError) return respond(leaseFailure(error))
+      if (error instanceof CardLeaseError) {
+        const refusal = leaseFailure(error)
+        return respond(exactClaim && refusal.code === 'source-write-pending' ? { ...refusal, message: pendingWriteHint } : refusal)
+      }
       if (error instanceof DecisionDeskConflict) return fail(res, 'CONFLICT', error.message, { headers })
       if (error instanceof z.ZodError) return fail(res, 'BAD_REQUEST', error.issues.map(issue => `${issue.path.join('.') || 'request'}: ${issue.message}`).join('; '), { headers })
       if (error instanceof SyntaxError) return fail(res, 'BAD_REQUEST', 'Invalid JSON request', { headers })

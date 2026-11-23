@@ -127,8 +127,23 @@ chats from holding the same card. Leases last 60 minutes and successful holder
 writes renew the lease. Background preparation never owns a review lease.
 
 Source mutations acquire per-card reservations. An interrupted write is
-checked against the card before any retry, and ambiguous provider writes can
-be inspected and reconciled through the existing audited source-write API.
+checked against the card before any retry.
+
+When an exact-card claim reports a reservation with `source-write-pending`,
+the pending write may belong to the card already bound to the review session.
+The owner can find the reserved card and operation in the Decision Desk
+pending-writes list at `GET /api/reconciliation/decision-desk/source-writes`.
+Once the earlier request has settled, send
+`POST /api/reconciliation/decision-desk/reconcile-source-write` with
+`Content-Type: application/json` and a JSON body containing the reservation's
+exact `card_id` (listed as `card`) and `operation`,
+`earlier_request_settled` set to `true`, and a nonempty `reason`. Include the
+`X-Tinstar-UI: 1` header on both requests.
+Automatic recovery runs on startup and every minute, checking reservations
+that have aged at least five minutes and whose writes are no longer running
+in the server. Reconciling an unresolved reservation requires complete source
+readback.
+
 If the answer comment saves before the property handoff completes, retrying
 the same operation or the next refill pass completes the handoff while the
 same decision revision remains, including its owner, Will action tags, and

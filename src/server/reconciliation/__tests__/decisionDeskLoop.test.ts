@@ -1,3 +1,4 @@
+import { ok } from 'node:assert/strict'
 import { createServer, type RequestListener } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -673,6 +674,70 @@ describe('prepared-card loop', () => {
     expect(card.comments.filter(comment => comment.includes(deskAnswerMarker))).toHaveLength(1)
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH'])
     expect(sources.leases.status(card.id)).toBeNull()
+  })
+
+  it.each(['Desk', 'MCP'] as const)('explains the existing pending-write claim refusal through %s', async surface => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
+    const otherCard = withOpenRequest(page(2, { owner: 'Will', tag: 'Decision' }))
+    const { sources, tool, web } = await setup([card, otherCard], true, 'lost')
+    await sources.preparation.replenish()
+    const review = surface === 'Desk'
+      ? (await web('sessions', { operation_id: 'open-review', label: 'Fixture owner' })).data.review_session_token
+      : (await tool('open_prepared_review_session', { operation_id: 'open-review', label: 'Fixture owner' })).review_session_token
+    const claim = { operation_id: 'claim-before-lost-write', card_id: card.id, review_session_token: review }
+    const callClaim = async (input = claim) => surface === 'Desk' ? (await web('claim', input)).data : tool('claim_card', input)
+    const held = await callClaim()
+    const answer = { operation_id: 'lost-write', lease_token: held.lease_token, review_session_token: review, option_id: '1', answer: 'Proceed.' }
+    const submitted = surface === 'Desk' ? (await web('submit', answer)).data : await tool('submit_prepared_decision', answer)
+    expect(submitted.outcome).toBe('save-unconfirmed')
+    expect(sources.leases.pendingWrites()).toEqual([expect.objectContaining({ card: card.id })])
+    const [pendingWrite] = sources.leases.pendingWrites()
+    ok(pendingWrite)
+    now += 61 * 60_000
+
+    const refusal = await callClaim()
+    expect(refusal).toEqual({
+      outcome: 'not-saved', code: 'source-write-pending', message: expect.any(String), operation_id: '', saved_fields: [], lease: null,
+    })
+    expect(refusal.message).not.toContain(pendingWrite.operation)
+    expect(refusal.message).toContain('The pending write may belong to the card already bound to this review session.')
+    expect(refusal.message).toContain('pending-writes list')
+    expect(await callClaim({ ...claim, operation_id: 'claim-other-card', card_id: otherCard.id })).toEqual(refusal)
+    if (surface === 'Desk') {
+      expect(refusal.message).toContain('GET /api/reconciliation/decision-desk/source-writes')
+      expect(refusal.message).toContain('POST /api/reconciliation/decision-desk/reconcile-source-write')
+      expect(refusal.message).toContain('a JSON body containing card_id, operation, earlier_request_settled: true, and a reason')
+      expect(refusal.message).toContain('Include the Content-Type: application/json header on the POST.')
+      expect(refusal.message).toContain('Include the X-Tinstar-UI: 1 header on both requests.')
+    } else {
+      expect(refusal.message).toContain('through the Decision Desk API')
+    }
+  })
+
+  it.each(['Desk', 'MCP'] as const)('preserves the base refusal after a rejected answer handoff through %s', async surface => {
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
+    const { sources, tool, web } = await setup([card], true, 'rejected')
+    await sources.preparation.replenish()
+    const review = surface === 'Desk'
+      ? (await web('sessions', { operation_id: 'open-review', label: 'Fixture owner' })).data.review_session_token
+      : undefined
+    const claim = { operation_id: 'claim-card', card_id: card.id, review_session_token: review }
+    const held = surface === 'Desk' ? (await web('claim', claim)).data : await tool('claim_card', claim)
+    const answer = { operation_id: 'answer', lease_token: held.lease_token, review_session_token: review, option_id: '1', answer: 'Proceed.' }
+    const submitted = surface === 'Desk' ? (await web('submit', answer)).data : await tool('submit_prepared_decision', answer)
+    expect(submitted.outcome).toBe('save-unconfirmed')
+    expect(sources.leases.pendingWrites()).toEqual([])
+
+    const release = { operation_id: 'release-card', action: 'release', lease_token: held.lease_token, review_session_token: review, reason: 'Done reviewing' }
+    const refused = surface === 'Desk' ? (await web('release', release)).data : await tool('release_prepared_decision', release)
+    const baseMessage = 'Source write unresolved; inspect and reconcile the reserved operation before retrying'
+    expect(refused.message).toBe(baseMessage)
+    if (surface === 'Desk') {
+      const closed = await web('close-session', { review_session_token: review, reason: release.reason })
+      expect(closed.data.message).toBe(baseMessage)
+    }
   })
 
   it('resumes an uncertain answer on the same lease after timeout without duplicating the comment or PATCH', async () => {
