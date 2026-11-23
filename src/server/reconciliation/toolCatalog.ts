@@ -17,8 +17,15 @@ function inputSchema(input: Input, root?: { branch: string; fields: readonly str
     const selectedIndex = schema.options.findIndex((option: z.AnyZodObject) => option.shape[schema.discriminator].value === root?.branch)
     const selected = branches[selectedIndex]
     const properties = Object.fromEntries(Object.entries(selected?.properties ?? {}).filter(([name]) => root?.fields.includes(name)))
-    properties[schema.discriminator] = { type: 'string', enum: schema.options.map((option: z.AnyZodObject) => option.shape[schema.discriminator].value) }
     const required = branches[0]?.required?.filter(name => branches.every(branch => branch.required?.includes(name))) ?? []
+    if (root?.fields.includes('card_id') && required.includes('card_id')) {
+      const ids = new Map(branches.map(branch => {
+        const id = branch.properties.card_id
+        return [JSON.stringify(id), id] as const
+      }))
+      if (ids.size > 1) properties.card_id = { anyOf: [...ids.values()] }
+    }
+    properties[schema.discriminator] = { type: 'string', enum: schema.options.map((option: z.AnyZodObject) => option.shape[schema.discriminator].value) }
     return { ...rest, type: 'object', properties, ...(root ? { required } : {}), oneOf: anyOf }
   }
   return { ...json, type: 'object' }

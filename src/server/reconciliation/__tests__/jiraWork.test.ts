@@ -234,8 +234,16 @@ it('publishes update_work schemas that accept Notion IDs for shared updates', as
   const { client } = await (await fixture()).connect()
   const { tools } = await client.listTools()
   const ajv = addFormats(new Ajv({ strict: false }))
-  const update = ajv.compile(tools.find(tool => tool.name === 'update_work')!.inputSchema)
+  const schema = tools.find(tool => tool.name === 'update_work')!.inputSchema
+  const update = ajv.compile(schema)
+  const rootId = schema.properties?.card_id
+  expect(rootId).toBeDefined()
+  const validateId = ajv.compile(rootId as object)
   const notion = 'a'.repeat(32)
+  const jira = `jira:${new URL(config.url).hostname}:${config.projectId}:60001`
+  expect(validateId(notion)).toBe(true)
+  expect(validateId(jira)).toBe(true)
+  expect(validateId('invalid-card-id')).toBe(false)
   const operation_id = 'schema-proof'
   const observed_at = '2026-11-23T20:00:00Z'
   for (const fields of [
@@ -248,7 +256,7 @@ it('publishes update_work schemas that accept Notion IDs for shared updates', as
     expect(update({ card_id: notion, operation_id, ...fields }), ajv.errorsText(update.errors)).toBe(true)
   }
   const jiraEdit = { kind: 'jira_edit', operation_id, note: 'Fixture' }
-  expect(update({ ...jiraEdit, card_id: `jira:${new URL(config.url).hostname}:${config.projectId}:60001` })).toBe(true)
+  expect(update({ ...jiraEdit, card_id: jira })).toBe(true)
   expect(update({ ...jiraEdit, card_id: notion })).toBe(false)
 })
 
