@@ -32,9 +32,14 @@ const eventId = (parts: unknown[]) => createHash('sha256').update(JSON.stringify
 const pullUrl = (value: unknown) => typeof value === 'string' && parsePullUrl(value) ? value : null
 const eventVerb = (value: string | null) => value?.trim().match(/^([a-z-]+)(?=\s|:|$)/i)?.[1]?.toLowerCase()
 
+// TSW Owner dropdown values follow the owner/main convention agreed on 2026-11-23.
+const mateAuthority = new Map([
+  ['main', { actor: 'Firstmate', owner: 'Firstmate' }],
+  ['hulk', { actor: 'Firstmate Hulk', owner: 'Hulk' }],
+])
+
 function authority(label: string) {
-  const actor = label === 'main' ? 'Firstmate' : label === 'hulk' ? 'Firstmate Hulk' : `Firstmate ${label}`
-  return { actor, owner: label === 'hulk' ? 'Hulk' : actor }
+  return mateAuthority.get(label) ?? { actor: `Firstmate ${label}`, owner: `Firstmate ${label}` }
 }
 
 function classify(id: string, task: Task | undefined, row: Backlog | undefined, now: number) {
@@ -50,7 +55,7 @@ function classify(id: string, task: Task | undefined, row: Backlog | undefined, 
   const attempt = task?.[tswEvidence]
   const terminal = [source, attempt].find(s => s?.merged || s?.completion === 'merged' || s?.completion === 'done')
   const pull = pullUrl(terminal?.pull) ?? pullUrl(task?.pr.url) ?? pullUrl(source?.pull) ?? pullUrl(attempt?.pull)
-  const mergedState = /^(?:run passed: PR merged|PR merged)(?:\b|:)/i.test(detail)
+  const mergedState = /^(?:(?:run passed|checks green): )?PR merged(?:\b|:)/i.test(detail)
   const mergedEvent = verb === 'merged' || verb === 'landed' || verb === 'done' &&
     /^(?:merged\b|landed\b|PR https:\/\/github\.com\/\S+\/pull\/\d+ merged\b)/i.test(summary ?? '')
   if (terminal || mergedState || mergedEvent) {

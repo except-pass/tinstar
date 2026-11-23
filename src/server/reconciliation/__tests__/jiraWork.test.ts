@@ -520,6 +520,42 @@ it.each(['Fast-track', 'Complete Directly'] as const)('recovers evidence for a l
   if (verb === 'Complete Directly') expect(notes.some(note => note.includes(fixturePull))).toBe(true)
 })
 
+it('repairs the oldest note first without consuming the forward-write allowance', async () => {
+  const f = await tswFixture()
+  await f.create('forward')
+  await f.create('newer repair')
+  await f.create('older repair')
+  await f.publish([tswTask('TSW-2'), tswTask('TSW-3')])
+  await f.run(true)
+  const complete = (key: string) => f.publish([], [{ id: `landed-${key}`, body_lines: [`card: ${key}`], completion: { verb: 'done' }, pr_url: fixturePull }])
+  f.controls.commentResponse = 'rejected'
+  await complete('TSW-3')
+  await f.run(true, 1)
+  await complete('TSW-2')
+  await f.run(true, 1)
+  f.controls.commentResponse = undefined
+  await f.publish([tswTask('TSW-1')])
+  const first = await f.run(true, 1)
+  expect(first.audits.filter(entry => entry.result === 'note-repaired').map(entry => entry.cardId)).toEqual(['TSW-3'])
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe('In Progress')
+  const second = await f.run(true, 1)
+  expect(second.audits.filter(entry => entry.result === 'note-repaired').map(entry => entry.cardId)).toEqual(['TSW-2'])
+})
+
+it('completes a linked PR from the CI monitor merge detail after worker exit', async () => {
+  const f = await tswFixture()
+  await f.create('CI monitor merge')
+  await f.publish([tswTask('TSW-1', 'checks green: PR merged (ci monitor ended)', 'on', {
+    endpoint: { exists: false, agent_alive: 'dead' },
+    hints: { last_event_text: 'done [at=1]: checks green' },
+  })])
+  expect(await f.run(true)).toMatchObject({ stopped: false })
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe('Done')
+  expect(f.issues.get('60001')!.comments.map(comment => adfText(comment.body))).toContainEqual(
+    expect.stringContaining(`Complete Directly via Tin Star (Firstmate fleet)\nEvidence: First Mate reported delivery for task-TSW-1. ${fixturePull}`),
+  )
+})
+
 it('abandons each rejected note after three repair passes without blocking Start', async () => {
   const f = await tswFixture()
   await f.create('abandon unavailable note')

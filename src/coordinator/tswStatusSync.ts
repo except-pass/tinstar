@@ -10,7 +10,7 @@ import { collectTswEvents, type StatusEvent } from './tswStatusEvents'
 type Step = JiraTransition | JiraEdit
 type CardState = Pick<JiraWorkCard, 'status' | 'assignee_id' | 'owner'>
 type Pending = { eventId: string; input: Step; actor: string; before: CardState; unconfirmed?: number; retry?: boolean }
-type NoteRepair = { input: JiraTransition; actor: string; attempts: number }
+type NoteRepair = { input: JiraTransition; actor: string; attempts: number; queuedAt?: number }
 type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean }
 type StatusAudit = { provider: 'jira'; time: string; cardId: string | null; result: string; home?: string; task?: string; eventId?: string; operationId?: string; detail?: string }
 type Options = {
@@ -139,10 +139,32 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
       await writeFile(temporary, JSON.stringify(state), { mode: 0o600 })
       await rename(temporary, stateFile)
     }
+    const repairs = Object.entries(state).flatMap(([key, checkpoint]) =>
+      (checkpoint.noteRepairs ?? []).map(repair => ({ key, repair })))
+      .sort((a, b) => (a.repair.queuedAt ?? 0) - (b.repair.queuedAt ?? 0))
+    let lastQueuedAt = repairs.at(-1)?.repair.queuedAt ?? 0
+    if (apply) {
+      for (const { key, repair } of repairs.filter(({ key }) => allowed(key)).slice(0, options.maxCards!)) {
+        const checkpoint = state[key]!
+        const { operation_id: operationId } = repair.input
+        const result = await (async () => {
+          const card = await jira.readTswCard(key)
+          if (card.id !== checkpoint.cardId || card.id !== repair.input.card_id) return
+          return await jira.repairTransitionAudit(repair.input, repair.actor) as { outcome?: string }
+        })().catch(() => undefined)
+        const repaired = result?.outcome === 'saved'
+        const attempts = repair.attempts + 1
+        const abandoned = !repaired && attempts >= noteRepairLimit
+        const noteRepairs = checkpoint.noteRepairs!.flatMap(entry =>
+          entry !== repair ? [entry] : repaired || abandoned ? [] : [{ ...entry, attempts }])
+        await save(key, { ...checkpoint, noteRepairs })
+        await audit(key, repaired ? 'note-repaired' : abandoned ? 'note-repair-abandoned' : 'note-repair-pending', { operationId })
+      }
+    }
     const byKey = new Map<string, StatusEvent | undefined>(events.map(event => [event.key, event]))
     for (const [key, checkpoint] of Object.entries(state)) {
       const input = checkpoint.pending?.input
-      if (!byKey.has(key) && (checkpoint.noteRepairs?.length || input && linearVerbs.some(verb => !isEdit(input) && input.verb === verb))) byKey.set(key, undefined)
+      if (!byKey.has(key) && input && linearVerbs.some(verb => !isEdit(input) && input.verb === verb)) byKey.set(key, undefined)
     }
     for (const [key, event] of byKey) {
       const previous = state[key]
@@ -154,7 +176,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
       let card: JiraWorkCard
       try {
         card = await jira.readTswCard(key)
-        if (['Done', 'Canceled'].includes(card.status) && !previous?.pending && !previous?.noteRepairs?.length) { await log('terminal-card'); continue }
+        if (['Done', 'Canceled'].includes(card.status) && !previous?.pending) { await log('terminal-card'); continue }
         if (previous && previous.cardId !== card.id) { await log('issue-identity-changed'); continue }
         let history = await jira.statusHistory(card.id, previous?.cursor)
         let checkpoint: Checkpoint = previous ?? { cardId: card.id, cursor: history.cursor, eventId, completed: [] }
@@ -167,25 +189,6 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
         }
 
         let resumed = false
-        if (apply && checkpoint.noteRepairs?.length) {
-          processed++
-          resumed = true
-          const remaining: NoteRepair[] = []
-          for (const repair of checkpoint.noteRepairs) {
-            const result = await jira.repairTransitionAudit(repair.input, repair.actor).catch(() => undefined) as { outcome?: string } | undefined
-            if (result?.outcome === 'saved') {
-              await log('note-repaired', repair.input.operation_id)
-            } else if (repair.attempts + 1 >= noteRepairLimit) {
-              await log('note-repair-abandoned', repair.input.operation_id)
-            } else {
-              remaining.push({ ...repair, attempts: repair.attempts + 1 })
-              await log('note-repair-pending', repair.input.operation_id)
-            }
-          }
-          checkpoint = { ...checkpoint, noteRepairs: remaining }
-          await save(key, checkpoint)
-        }
-
         // A resumed operation may confirm its original write. If a newer source
         // event arrived, it may not issue the older operation's mutation.
         const execute = async (pending: Pending): Promise<boolean> => {
@@ -221,9 +224,10 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           const missingNote = !isEdit(input) && (outcome.code === 'unconfirmed' || outcome.outcome === 'saved' && !!outcome.message)
           if ((verified || missingNote) && card.id === checkpoint.cardId && confirms(pending, card, history.changes)) {
             const { pending: _pending, ...prior } = checkpoint
+            if (missingNote) lastQueuedAt = Math.max(now(), lastQueuedAt + 1)
             checkpoint = { ...prior, cursor: history.cursor, eventId: pending.eventId,
               statusVersion: statusVersion(history.changes, prior.statusVersion),
-              noteRepairs: missingNote ? [...(prior.noteRepairs ?? []), { input, actor, attempts: 0 }] : prior.noteRepairs,
+              noteRepairs: missingNote ? [...(prior.noteRepairs ?? []), { input, actor, attempts: 0, queuedAt: lastQueuedAt }] : prior.noteRepairs,
               completed: [...(checkpoint.eventId === pending.eventId ? checkpoint.completed : []), original.operation_id] }
             await save(key, checkpoint)
             await log(missingNote ? 'landed-note-pending' : 'verified', input.operation_id, outcome.message)
