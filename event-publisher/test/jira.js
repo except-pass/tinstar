@@ -208,7 +208,10 @@ Server.prototype.listen = function (port, host) {
 
   equal((await post('new-ticket', webhookEvent('jira:issue_created', { issue: { ...issue, id: '98766', key: 'WORK-2', fields: { ...issue.fields, summary: "Token: TTL tuning " + pat } } }))).status, 204)
   const links = (id, fromString, toString) => webhookEvent('jira:issue_updated', {
-    changelog: { id, items: [{ field: 'Link', fieldtype: 'jira', fromString, toString }] },
+    changelog: { id, items: [
+      { field: 'Link', fieldtype: 'jira', fromString, toString },
+      { fieldId: 'issuelinks', fromString, toString },
+    ] },
   })
   equal((await post('linked', links('65002', null, 'This issue is blocked by OTHER-99'))).status, 204)
   equal((await post('unlinked', links('65003', 'This issue is blocked by OTHER-99', null))).status, 204)
@@ -239,13 +242,11 @@ Server.prototype.listen = function (port, host) {
   ok(!JSON.stringify(comment).includes(unsafe))
   equal((await run('replay', '--source', 'firstmate', '--after', '0', '--json')).stdout, '')
   const allAtStop = lines((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout)
-  equal(allAtStop.length, 11)
+  equal(allAtStop.length, 9)
   equal(allAtStop.filter(event => event.event_type === 'ticket.created').length, 1)
   equal(allAtStop.find(event => event.event_type === 'ticket.created').change.after.summary, 'Token: [credential omitted] tuning [credential omitted]')
-  deepEqual(allAtStop.filter(event => event.change.field === 'links').map(event => event.change), [
-    { field: 'links', before: null, after: 'This issue is blocked by OTHER-99' },
-    { field: 'links', before: 'This issue is blocked by OTHER-99', after: null },
-  ])
+  ok(allAtStop.every(event => event.event_type !== 'ticket.links.changed'))
+  ok(!JSON.stringify(allAtStop).includes('OTHER-99'))
   const [stopCode] = await publisher.stop()
   equal(stopCode, 0)
   publisher = await serve()
@@ -273,7 +274,7 @@ Server.prototype.listen = function (port, host) {
   equal(redacted.evidence.source_reference.comment_visibility_restricted, true)
   deepEqual(redacted.change, { field: 'comment' })
   const missingValues = {
-    summary: 'summary', description: 'description', status: 'status', ...jira.fields, links: 'issuelinks',
+    summary: 'summary', description: 'description', status: 'status', ...jira.fields,
   }
   equal((await post('missing-values', webhookEvent('jira:issue_updated', {
     changelog: { id: '65004', items: Object.values(missingValues).map(fieldId => ({ fieldId })) },

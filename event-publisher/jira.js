@@ -13,7 +13,6 @@ const nativeIdentifier = /^[a-zA-Z0-9:_-]{1,160}$/
 const customField = /^customfield_[1-9]\d*$/
 const builtInFields = new Map([
   ['summary', 'summary'], ['description', 'description'], ['status', 'status'],
-  ['issuelinks', 'links'], ['Link', 'links'],
 ])
 const projectFields = new Set(['owner', 'decisions', 'blockerType', 'blockerTarget', 'blockerCondition'])
 const decoder = new TextDecoder('utf-8', { fatal: true })

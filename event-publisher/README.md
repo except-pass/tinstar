@@ -141,9 +141,9 @@ identities when available. A native creation notice is the sole source for
 
 Ticket change previews are redacted and bounded. The journal preserves the
 immutable Jira issue ID, display key, source delivery ID, source timestamp when
-supplied, and the available before and after values. Link changes are recorded
-when present in the issue update changelog. Issue-link webhooks are recorded
-separately, because an issue update often carries no Link changelog item. For
+supplied, and the available before and after values. Dedicated issue-link
+webhooks are the sole source of link activity. The publisher ignores link
+entries in issue update changelogs. For
 both `issuelink_created` and `issuelink_deleted`, the publisher skips the
 `jira_subtask` and `jira_gh_epic_story` hierarchy styles without looking up
 issues or writing to the journal. For a new ordinary link delivery with a
