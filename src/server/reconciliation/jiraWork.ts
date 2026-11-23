@@ -520,7 +520,7 @@ export class JiraWork extends JiraClient {
     })
   }
 
-  transition(input: JiraTransition, actor: string, beforeWrite?: BeforeWrite) {
+  transition(input: JiraTransition, actor: string, beforeWrite?: BeforeWrite, beforeRepair?: BeforeWrite) {
     return this.mutate('transition', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = this.transitionAudit(input, actor)
@@ -529,18 +529,34 @@ export class JiraWork extends JiraClient {
         if (issue.status !== destination) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
         return issue
       }
+      const postAudit = async (note: string) => {
+        const baseline = await this.commentBaseline(id).catch(() => undefined)
+        await this.checkProject(id)
+        const posted = await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) }).catch(error => {
+          if (isWriteRejection(error)) {
+            const Rejected = beforeRepair ? JiraWorkUnconfirmed : JiraAuditRejected
+            throw new Rejected(`Jira confirmed the destination status but rejected the audit comment (HTTP ${error.status}).`)
+          }
+          return undefined
+        })
+        const expected = nativeId(posted?.id) ? posted.id : baseline
+        if (!expected) throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+        await this.checkComment(id, note, expected)
+      }
       if (attempt.dispatched) {
         const destination = jiraTransitionDestination(input)
         if (!destination) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
-        let auditMissing = false
         try {
           await this.checkComment(id, note)
         } catch (error) {
           if (!(error instanceof JiraWorkUnconfirmed)) throw error
-          auditMissing = true
+          if (!beforeRepair || !note) {
+            return { ...attempt.confirm(await readDestination(destination)), message: 'The audit note may be missing from Jira.' }
+          }
+          beforeRepair(this.view(await readDestination(destination)))
+          await postAudit(note)
         }
-        const confirmed = attempt.confirm(await readDestination(destination))
-        return auditMissing ? { ...confirmed, message: 'The audit note may be missing from Jira.' } : confirmed
+        return attempt.confirm(await readDestination(destination))
       }
       const current = await this.read(id)
       const blocker = input.verb === 'Block' ? Boolean(this.blocker(current)) : this.externalPresent(current) || this.nativeBlockers(current).length > 0
@@ -555,17 +571,7 @@ export class JiraWork extends JiraClient {
       })
       const saved = await readDestination(to)
       if (!note) return attempt.confirm(saved)
-      const baseline = await this.commentBaseline(id).catch(() => undefined)
-      await this.checkProject(id)
-      const posted = await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) }).catch(error => {
-        if (isWriteRejection(error)) {
-          throw new JiraAuditRejected(`Jira confirmed the destination status but rejected the audit comment (HTTP ${error.status}).`)
-        }
-        return undefined
-      })
-      const expected = nativeId(posted?.id) ? posted.id : baseline
-      if (!expected) throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
-      await this.checkComment(id, note, expected)
+      await postAudit(note)
       return attempt.confirm(await readDestination(to))
     })
   }

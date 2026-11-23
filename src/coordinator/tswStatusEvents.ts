@@ -4,7 +4,6 @@ import { retainedExecutionLiveness } from '../shared/executionLiveness'
 import { parsePullUrl } from '../server/fleet/attention'
 import type { SourceSnapshot } from '../server/reconciliation'
 import { dispatchForTask } from '../server/reconciliation/dispatchProvenance'
-import type { JiraExternalBlocker } from '../server/reconciliation/jiraWorkRules'
 import { ageObservation } from '../server/reconciliation/observation'
 import { tswEvidence } from '../server/reconciliation/tswSnapshot'
 
@@ -16,8 +15,6 @@ type EventDetails =
   | { target: 'In Progress' }
   | { target: 'Ready for Review'; pull: string }
   | { target: 'Done' }
-  | { target: 'Decision'; questions: string[]; sideIds: string[] }
-  | { target: 'Waiting For'; blocker: JiraExternalBlocker; sideIds: string[] }
 
 export type StatusEvent = EventDetails & {
   key: string
@@ -40,7 +37,7 @@ function authority(label: string) {
   return { actor, owner: label === 'hulk' ? 'Hulk' : actor }
 }
 
-function classify(home: string, label: string, id: string, task: Task | undefined, row: Backlog | undefined, now: number, applied: string[]) {
+function classify(id: string, task: Task | undefined, row: Backlog | undefined, now: number) {
   function event(details: EventDetails, witness: unknown, evidence: string) {
     return { details, witness, evidence }
   }
@@ -61,37 +58,12 @@ function classify(home: string, label: string, id: string, task: Task | undefine
     return event({ target: 'Done' }, [pull, terminal?.completedOn ?? null], `First Mate reported delivery for ${id}. ${pull}`)
   }
 
-  const decisions = (task?.queue?.decisions ?? []).flatMap(item => {
-    if (item.verb !== 'needs-decision' || !item.key || !item.summary?.trim()) return []
-    const identity = eventId([home, id, 'Decision', item.key])
-    return applied.includes(identity) ? [] : [{ identity, question: item.summary.trim() }]
-  })
-  const questions = [...new Set(decisions.map(item => item.question))].sort()
-  if (questions.length) {
-    const sideIds = [...new Set(decisions.map(item => item.identity))].sort()
-    return event({ target: 'Decision', questions, sideIds }, sideIds, `First Mate requested a decision for ${id}.`)
-  }
-
-  const hold = source?.holdKind === 'external' ? row : attempt?.holdKind === 'external' ? task?.backlog : undefined
-  if (hold) {
-    const reason = typeof hold.hold_reason === 'string' ? hold.hold_reason.trim() : ''
-    const target = hold.blocked_by_ids?.[0] ?? `fm:${label}:${id}`
-    if (!reason || !/^[^\s/\\]+$/.test(target)) return 'external-hold-without-blocker-evidence'
-    const until = typeof hold.hold_until === 'string' ? hold.hold_until.trim() : ''
-    const blocker = { type: 'Event' as const, target, unblocks_when: until ? `${reason}\nHold until ${until}` : reason }
-    const identity = eventId([home, hold.id ?? id, 'Waiting For', target])
-    if (!applied.includes(identity)) {
-      return event({ target: 'Waiting For', blocker, sideIds: [identity] }, identity, `First Mate declared an external wait for ${id}.`)
-    }
-  }
-
   const readyEvent = verb === 'pr-ready' || verb === 'done' &&
     /^PR https:\/\/github\.com\/\S+\/pull\/\d+ checks green\b/i.test(summary ?? '')
   const readyState = /^(?:run passed: PR open|checks green: PR (?:held for merge|ready for review))\b/i.test(detail)
-  if (readyState || readyEvent) {
+  if ((readyState || readyEvent) && attempt?.yolo !== 'on') {
     if (!pull) return 'review-without-pull-evidence'
     if (attempt?.yolo === 'off') return event({ target: 'Ready for Review', pull }, pull, `First Mate reported checks green. ${pull}`)
-    if (attempt?.yolo === 'on') return event({ target: 'In Progress' }, ['mate-merges', pull], `First Mate is responsible for merging ${pull}`)
     return 'merge-authority-unavailable'
   }
   if (task?.identity.spawn_gen && task.endpoint.exists !== false && task.endpoint.agent_alive !== 'dead' &&
@@ -105,7 +77,7 @@ function classify(home: string, label: string, id: string, task: Task | undefine
   return 'no-actionable-event'
 }
 
-export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number, applied: (key: string) => string[] = () => []) {
+export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
   const findings: StatusSourceFinding[] = []
   const byKey = new Map<string, StatusEvent[]>()
   for (const { source, observation: read } of fleet) {
@@ -138,7 +110,7 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number, ap
         findings.push({ home, key, task: id, reason: 'snapshot-label-missing' })
         continue
       }
-      const signal = classify(home, label, id, task, row, now, applied(key))
+      const signal = classify(id, task, row, now)
       if (typeof signal === 'string') {
         findings.push({ home, key, task: id, reason: signal })
         continue

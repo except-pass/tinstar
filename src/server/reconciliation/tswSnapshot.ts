@@ -10,7 +10,6 @@ type Evidence = {
   completedOn: string | null
   merged: boolean
   pull: string | null
-  holdKind: string | null
   yolo: 'on' | 'off' | null
 }
 
@@ -23,7 +22,6 @@ export function tswSnapshot(row: Record<string, unknown>, source: string, yolo?:
     completedOn: text(completion.date),
     merged: row.merged === true,
     pull: text(row.pr_url),
-    holdKind: text(row.hold_kind),
     yolo: yolo === 'on' || yolo === 'off' ? yolo : null,
   } }
 }
