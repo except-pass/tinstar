@@ -137,6 +137,7 @@ Server.prototype.listen = function (port, host) {
   equal((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout, '')
   const linkDelivery = (name, id, sourceId, destinationId) => ({
     timestamp: occurred, webhookEvent: name,
+    user: { accountId: '123:synthetic-link-actor' },
     issueLink: {
       id, sourceIssueId: sourceId, destinationIssueId: destinationId,
       issueLinkType: { id: 10000, name: 'Blocks', outwardName: 'blocks', inwardName: 'is blocked by' },
@@ -413,6 +414,9 @@ globalThis.fetch = async (url, options = {}) => {
   const deleteCursor = await afterSequence()
   equal((await post('link-delete', linkDelivery('issuelink_deleted', 77001, 98765, 98766))).status, 204)
   const deleted = await since(deleteCursor)
+  for (const event of [...created, ...deleted]) {
+    equal(Object.hasOwn(event.evidence.source_reference, 'account_id'), false)
+  }
   deepEqual(deleted.map(linkShape), [
     { key: 'WORK-1', id: '98765', link: '77001', webhook: 'issuelink_deleted', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: 'blocks WORK-2', after: null } },
     { key: 'WORK-2', id: '98766', link: '77001', webhook: 'issuelink_deleted', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98766`, change: { field: 'links', before: 'is blocked by WORK-1', after: null } },

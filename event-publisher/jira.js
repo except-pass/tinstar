@@ -373,7 +373,6 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
       const rendered = redact(`${label} ${target}`)
       return typeof rendered === 'string' ? rendered : `${label} ${target}`
     }
-    const account = redact(typeof body.user?.accountId === 'string' && nativeIdentifier.test(body.user.accountId) ? body.user.accountId : undefined)
     const events = participants.map(({ subject, other, name }) => {
       const text = phrase(name, other)
       const created = action === 'created'
@@ -393,7 +392,6 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
           source_reference: {
             interface: 'Jira Cloud admin webhook', issue_id: subject.id, issue_key: subject.key,
             webhook_event: body.webhookEvent, link_id: link.id,
-            ...(typeof account === 'string' ? { account_id: account } : {}),
           },
           confidence_basis: 'signed Jira delivery',
         },
