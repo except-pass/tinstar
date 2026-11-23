@@ -50,6 +50,7 @@ export class DecisionDeskApi {
     if (typeof login !== 'string' || !await this.authorized(req)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required for Decision Desk', { headers })
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
     const caller = leaseHash(JSON.stringify(['web-review', login, this.packets.scope]))
+    let exactClaim = false
     try {
       if (req.method === 'GET') {
         switch (path) {
@@ -62,8 +63,11 @@ export class DecisionDeskApi {
       }
       if (req.method === 'POST') {
         switch (path) {
-          case 'claim':
-            return respond(await this.reviews.claim(caller, 'Browser review', preparedClaimInput.required({ review_session_token: true }).parse(await body(req))))
+          case 'claim': {
+            const input = preparedClaimInput.required({ review_session_token: true }).parse(await body(req))
+            exactClaim = input.card_id !== undefined
+            return respond(await this.reviews.claim(caller, 'Browser review', input))
+          }
           case 'release':
             return respond(await this.reviews.release(caller, 'Browser review', preparedReleaseInput.parse(await body(req))))
           case 'sessions':
@@ -88,7 +92,7 @@ export class DecisionDeskApi {
     } catch (error) {
       if (error instanceof CardLeaseError) {
         const refusal = leaseFailure(error)
-        return respond(refusal.code === 'source-write-pending' ? { ...refusal, message: pendingWriteHint } : refusal)
+        return respond(exactClaim && refusal.code === 'source-write-pending' ? { ...refusal, message: pendingWriteHint } : refusal)
       }
       if (error instanceof DecisionDeskConflict) return fail(res, 'CONFLICT', error.message, { headers })
       if (error instanceof z.ZodError) return fail(res, 'BAD_REQUEST', error.issues.map(issue => `${issue.path.join('.') || 'request'}: ${issue.message}`).join('; '), { headers })

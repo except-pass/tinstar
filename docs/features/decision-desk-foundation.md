@@ -130,7 +130,8 @@ Source mutations acquire per-card reservations. An interrupted write is
 checked against the card before any retry, and ambiguous provider writes can
 be inspected and reconciled through the existing audited source-write API.
 
-For a `source-write-pending` refusal, the owner can use
+When an exact-card claim reports a reservation with `source-write-pending`,
+the owner can use
 `GET /api/reconciliation/decision-desk/source-writes` to find the reservation.
 Once the earlier request has settled, send
 `POST /api/reconciliation/decision-desk/reconcile-source-write` with the

@@ -707,6 +707,30 @@ describe('prepared-card loop', () => {
     }
   })
 
+  it.each(['Desk', 'MCP'] as const)('preserves the base refusal after a rejected answer handoff through %s', async surface => {
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
+    const { sources, tool, web } = await setup([card], true, 'rejected')
+    await sources.preparation.replenish()
+    const review = surface === 'Desk'
+      ? (await web('sessions', { operation_id: 'open-review', label: 'Fixture owner' })).data.review_session_token
+      : undefined
+    const claim = { operation_id: 'claim-card', card_id: card.id, review_session_token: review }
+    const held = surface === 'Desk' ? (await web('claim', claim)).data : await tool('claim_card', claim)
+    const answer = { operation_id: 'answer', lease_token: held.lease_token, review_session_token: review, option_id: '1', answer: 'Proceed.' }
+    const submitted = surface === 'Desk' ? (await web('submit', answer)).data : await tool('submit_prepared_decision', answer)
+    expect(submitted.outcome).toBe('save-unconfirmed')
+    expect(sources.leases.pendingWrites()).toEqual([])
+
+    const release = { operation_id: 'release-card', action: 'release', lease_token: held.lease_token, review_session_token: review, reason: 'Done reviewing' }
+    const refused = surface === 'Desk' ? (await web('release', release)).data : await tool('release_prepared_decision', release)
+    const baseMessage = 'Source write unresolved; inspect and reconcile the reserved operation before retrying'
+    expect(refused.message).toBe(baseMessage)
+    if (surface === 'Desk') {
+      const closed = await web('close-session', { review_session_token: review, reason: release.reason })
+      expect(closed.data.message).toBe(baseMessage)
+    }
+  })
+
   it('resumes an uncertain answer on the same lease after timeout without duplicating the comment or PATCH', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)

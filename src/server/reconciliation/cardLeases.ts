@@ -35,12 +35,7 @@ export const withSourceOperation = <T>(actor: string, operation: string, perform
 const sourceWriteAccess = new AsyncLocalStorage<{ dispatched: boolean }>()
 export const sourceWriteDispatched = () => { const context = sourceWriteAccess.getStore(); if (context) context.dispatched = true }
 const runningWrites = new Map<string, Promise<unknown>>()
-export const leaseFailure = (error: CardLeaseError, operation_id = '') => {
-  const pending = error instanceof SourceWritePending
-  return { outcome: 'not-saved' as const, code: pending ? 'source-write-pending' : error.lease ? 'card-held' : 'claim-lost',
-    message: pending ? 'Source write unresolved. The owner can recover it from the Decision Desk.' : error.message,
-    operation_id, saved_fields: [], lease: error.lease }
-}
+export const leaseFailure = (error: CardLeaseError, operation_id = '') => ({ outcome: 'not-saved' as const, code: error instanceof SourceWritePending ? 'source-write-pending' : error.lease ? 'card-held' : 'claim-lost', message: error.message, operation_id, saved_fields: [], lease: error.lease })
 export const publicLease = (row: LeaseRow): CardLease => ({ card_id: row.card, generation: row.generation, holder: row.holder!, expires_at: new Date(row.expires).toISOString() })
 
 /** Short SQLite transactions fence each card before provider I/O. Unresolved
