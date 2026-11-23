@@ -26,7 +26,8 @@ async function body(req: IncomingMessage) {
 }
 
 const base = '/api/reconciliation/decision-desk/'
-const pendingWriteHint = `Source write unresolved. Find the card and reservation operation in GET ${base}source-writes. `
+const pendingWriteHint = 'The pending write may belong to the card already bound to this review session. '
+  + `Find the reserved card and operation in the Decision Desk pending-writes list at GET ${base}source-writes. `
   + `Once the earlier request has settled, send POST ${base}reconcile-source-write with card_id, operation, earlier_request_settled: true, and a reason.`
 const paths = new Set(['snapshot', 'submit', 'submission-state', 'metrics', 'sessions', 'claim', 'release', 'close-session',
   'source-writes', 'reconcile-source-write'])

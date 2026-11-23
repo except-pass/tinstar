@@ -131,8 +131,9 @@ checked against the card before any retry, and ambiguous provider writes can
 be inspected and reconciled through the existing audited source-write API.
 
 When an exact-card claim reports a reservation with `source-write-pending`,
-the owner can use
-`GET /api/reconciliation/decision-desk/source-writes` to find the reservation.
+the pending write may belong to the card already bound to the review session.
+The owner can find the reserved card and operation in the Decision Desk
+pending-writes list at `GET /api/reconciliation/decision-desk/source-writes`.
 Once the earlier request has settled, send
 `POST /api/reconciliation/decision-desk/reconcile-source-write` with the
 reservation's exact `card_id` (listed as `card`) and `operation`, set
