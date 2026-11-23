@@ -10,6 +10,8 @@ import { loadReconciliationConfig, type JiraWorkConfig } from '../config'
 import { ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { jiraTransitions, jiraVerbs } from '../jiraWorkRules'
+import { externalWorkers } from '../../../shared/workflow'
+import { decisionRequests } from '../../../shared/workflowRequests'
 
 const cloudId = '5bac40b8-c168-4931-90d1-2c8dfe15c6ea'
 const config = {
@@ -255,20 +257,28 @@ it('publishes branch-specific update IDs and TSW workflow reference IDs', async 
   expect(update({ ...edit, kind: 'jira_edit', card_id: tsw, note: 'Fixture' })).toBe(true)
   expect(update({ ...edit, kind: 'jira_edit', note: 'Fixture' })).toBe(false)
 
-  for (const [card_id, accepted] of [[notion, true], [tsw, true], [pilot, false]] as const) {
+  for (const [card_id, accepted] of [[notion, true], [tsw, true], [pilot, true], [tsw.replace(':10639:', ':10640:'), false]] as const) {
     for (const name of ['Parent item', 'Epic', 'Initiative']) {
       const properties = { [name]: [card_id] }
       expect(update({ ...edit, properties }), name).toBe(accepted)
       expect(create({ operation_id, name: 'Fixture', owner: 'Hulk', area: 'Engineering', properties }), name).toBe(accepted)
     }
-    expect(start({ card_id: notion, operation_id, worker: { kind: 'external', system: 'fixture', run_id: '1',
-      reference: 'https://example.test/run/1', card_id, observed_at, state: 'running', evidence: 'Fixture test running' } })).toBe(accepted)
-    expect(update({ ...edit, kind: 'request_decision', request_id: 'request', question: 'Proceed?', requested_from: 'Will',
-      proposal: { schema: 'tinstar.decision-proposal.v1', proposal_id: 'fixture', request_key: 'request', card_id,
-        question: 'Proceed?', rationale: 'Fixture advice', recommended_action_id: 'proceed',
-        actions: [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the fixture' }], references: [],
-        source: { kind: 'firstmate-request', id: 'request', revision: '1' }, published_at: observed_at, supersedes: null,
-      } })).toBe(accepted)
+    const worker = { kind: 'external', system: 'fixture', run_id: '1',
+      reference: 'https://example.test/run/1', card_id, observed_at, state: 'running', evidence: 'Fixture test running' }
+    const proposal = { schema: 'tinstar.decision-proposal.v1', proposal_id: 'fixture', request_key: 'request', card_id,
+      question: 'Proceed?', rationale: 'Fixture advice', recommended_action_id: 'proceed',
+      actions: [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the fixture' }], references: [],
+      source: { kind: 'firstmate-request', id: 'request', revision: '1' }, published_at: observed_at, supersedes: null,
+    }
+    expect(start({ card_id: card_id === pilot ? pilot : notion, operation_id, worker })).toBe(accepted)
+    expect(update({ ...edit, kind: 'request_decision', request_id: 'request', question: 'Proceed?', requested_from: 'Will', proposal })).toBe(accepted)
+    if (card_id === pilot) {
+      const savedReport = JSON.stringify({ schema: 'tinstar.external-worker.v1', reported_by: 'Fixture', ...worker })
+      expect(externalWorkers(savedReport, Date.parse(observed_at))).toMatchObject([{ card_id: pilot, freshness: 'current-report' }])
+      const savedRequest = JSON.stringify({ id: 'request', action: 'Decision', proposal })
+      expect(decisionRequests([{ id: 'saved-decision', text: `Tin Star request: ${savedRequest}` }]))
+        .toMatchObject([{ id: 'request', proposal }])
+    }
   }
 })
 
