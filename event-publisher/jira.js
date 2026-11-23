@@ -370,8 +370,7 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     const phrase = (name, other) => {
       const label = typeof name === 'string' && name.trim() ? name.trim().replace(/\s+/g, ' ') : 'linked'
       const target = other.kind === 'tsw' ? other.key : '[redacted]'
-      const rendered = redact(`${label} ${target}`)
-      return typeof rendered === 'string' ? rendered : `${label} ${target}`
+      return redact(`${label} ${target}`)
     }
     const events = participants.map(({ subject, other, name }) => {
       const text = phrase(name, other)

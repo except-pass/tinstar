@@ -369,7 +369,7 @@ globalThis.fetch = async (url, options = {}) => {
   const method = options.method ?? 'GET'
   if (target.hostname !== 'api.atlassian.com') {
     appendFileSync(log, 'OTHER-HOST ' + method + '\\n')
-    return realFetch(url, options)
+    throw new Error('Unexpected host in Jira lookup fixture')
   }
   appendFileSync(log, method + ' ' + (target.search === '?fields=project,key' ? 'fields=project,key' : 'query') + ' auth=' + authorization(options) + '\\n')
   if (method !== 'GET') return new Response(null, { status: 405 })
