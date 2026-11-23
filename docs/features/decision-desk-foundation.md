@@ -137,10 +137,11 @@ pending-writes list at `GET /api/reconciliation/decision-desk/source-writes`.
 Once the earlier request has settled, send
 `POST /api/reconciliation/decision-desk/reconcile-source-write` with the
 reservation's exact `card_id` (listed as `card`) and `operation`, set
-`earlier_request_settled` to `true`, and supply a nonempty `reason`.
+`earlier_request_settled` to `true`, and supply a nonempty `reason`. Include
+the `X-Tinstar-UI: 1` header on both requests.
 Automatic recovery checks reservations on startup and every minute after the
-five-minute settlement window. A reservation clears only after complete source
-readback.
+five-minute settlement window. Reconciling an unresolved reservation requires
+complete source readback.
 
 If the answer comment saves before the property handoff completes, retrying
 the same operation or the next refill pass completes the handoff while the

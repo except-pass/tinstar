@@ -123,7 +123,7 @@ export class ReconciliationMcp {
         if (error instanceof CardLeaseError) {
           const refusal = leaseFailure(error)
           return exactClaim && refusal.code === 'source-write-pending'
-            ? { ...refusal, message: 'The pending write may belong to the card already bound to this review session. The owner can find the reserved card and operation in the Decision Desk pending-writes list.' }
+            ? { ...refusal, message: 'The pending write may belong to the card already bound to this review session. The owner can find the reserved card and operation in the pending-writes list through the Decision Desk API.' }
             : refusal
         }
         if (error instanceof DecisionDeskConflict) return { outcome: 'operation-conflict', message: error.message }

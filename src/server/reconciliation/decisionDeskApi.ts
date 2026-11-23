@@ -28,7 +28,8 @@ async function body(req: IncomingMessage) {
 const base = '/api/reconciliation/decision-desk/'
 const pendingWriteHint = 'The pending write may belong to the card already bound to this review session. '
   + `Find the reserved card and operation in the Decision Desk pending-writes list at GET ${base}source-writes. `
-  + `Once the earlier request has settled, send POST ${base}reconcile-source-write with card_id, operation, earlier_request_settled: true, and a reason.`
+  + `Once the earlier request has settled, send POST ${base}reconcile-source-write with card_id, operation, earlier_request_settled: true, and a reason. `
+  + 'Include the X-Tinstar-UI: 1 header on both requests.'
 const paths = new Set(['snapshot', 'submit', 'submission-state', 'metrics', 'sessions', 'claim', 'release', 'close-session',
   'source-writes', 'reconcile-source-write'])
 

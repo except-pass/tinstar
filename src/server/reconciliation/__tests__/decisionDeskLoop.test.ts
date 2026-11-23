@@ -701,12 +701,15 @@ describe('prepared-card loop', () => {
     })
     expect(refusal.message).not.toContain(operation)
     expect(refusal.message).toContain('The pending write may belong to the card already bound to this review session.')
-    expect(refusal.message).toContain('Decision Desk pending-writes list')
+    expect(refusal.message).toContain('pending-writes list')
     expect(await callClaim({ ...claim, operation_id: 'claim-other-card', card_id: otherCard.id })).toEqual(refusal)
     if (surface === 'Desk') {
       expect(refusal.message).toContain('GET /api/reconciliation/decision-desk/source-writes')
       expect(refusal.message).toContain('POST /api/reconciliation/decision-desk/reconcile-source-write')
       expect(refusal.message).toContain('card_id, operation, earlier_request_settled: true, and a reason')
+      expect(refusal.message).toContain('Include the X-Tinstar-UI: 1 header on both requests.')
+    } else {
+      expect(refusal.message).toContain('through the Decision Desk API')
     }
   })
 
