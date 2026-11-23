@@ -1,4 +1,3 @@
-import { pilotGetWorkSchema } from './pilotWorkflowSchemas'
 import { JiraWork } from './jiraWork'
 import { CardLeases, CardLeaseError } from './cardLeases'
 import { deferredDecisionCard } from './claimPolicy'
@@ -36,7 +35,7 @@ import { NotionApi } from './notionApi'
 import { WorkReader, type WorkCard } from './workReader'
 import { getConfigRoot } from '../configRoot'
 import { WorkflowOperations } from './workflow'
-import { externalWorkers, searchWorkSchema, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
+import { externalWorkers, searchWorkSchema, getWorkSchema, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
 import { closedWorkBlocker, coverageFromObservation, waitingForIssues, waitingForWorkIds, waitState, type WorkBlocker } from '../../shared/waitingForPolicy'
 import { searchSeeds, directNeighbors } from '../../shared/smartSearch'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
@@ -75,7 +74,6 @@ export class ReconciliationSources {
   readonly proposalSource
   readonly workflow
   readonly jiraWork?: JiraWork
-  get hasJiraPilot() { return this.workReader.jira !== undefined }
   readonly notionApi
   private context
   private sourceWriteRecoveryPass?: Promise<void>
@@ -370,7 +368,7 @@ export class ReconciliationSources {
         .flatMap(value => value.match(/https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/g) ?? []))] })
   }
   async getWork(input: unknown) {
-    const args = pilotGetWorkSchema.parse(input)
+    const args = getWorkSchema.parse(input)
     let reconciliationWarning: string | undefined
     try {
       let [card, fleet] = await Promise.all([this.workReader.card(args.card_id, args.refresh), this.fleetSnapshot(args.refresh)])

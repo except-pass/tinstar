@@ -1,5 +1,5 @@
 import type { JiraWork } from './jiraWork'
-import { jiraCreateSchema, jiraEditSchema, jiraLinkSchema, jiraTransitionSchema, jiraReadIdSchema, type JiraCreate, type JiraEdit } from './jiraWorkRules'
+import { jiraCreateSchema, jiraEditSchema, jiraLinkSchema, jiraTransitionSchema, jiraWorkIdSchema, type JiraCreate, type JiraEdit } from './jiraWorkRules'
 import { jiraWorkReadback } from './workReadback'
 import { preparedRecoveryInput, preparedSubmitInput, type PreparedSubmissions } from './preparedSubmissions'
 import { preparedClaimInput, preparedReleaseInput, reviewSessionInput, type PreparedReviews } from './preparedReviews'
@@ -23,9 +23,7 @@ import { actionSchema, stateSchema, targetSchema, type CommandResult } from '../
 import type { QueueRead } from '../../shared/reconciliationQueue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { SceneSessions, secretEquals } from './sessions'
-import { waitSchema, searchWorkSchema, getWorkSchema, startWorkSchema, updateWorkSchema, createWorkSchema, submitHandoffSchema, leaseTokenSchema, workflowRules, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
-import { pilotGetWorkSchema, pilotStartWorkSchema, pilotSubmitHandoffSchema, pilotUpdateWorkSchema, pilotWorkflowCardIdSchema } from './pilotWorkflowSchemas'
-import { notionCardIdSchema } from '../../shared/workIdentity'
+import { cardIdSchema, waitSchema, searchWorkSchema, getWorkSchema, startWorkSchema, updateWorkSchema, createWorkSchema, submitHandoffSchema, leaseTokenSchema, workflowRules, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
 import type { WorkerLinkReport } from './workerLinkReport'
 import { registerDomainReadTools, type DomainReadTools } from './domainReads'
 import { createToolCatalog } from './toolCatalog'
@@ -67,7 +65,6 @@ const commandInput = {
 }
 export interface PresentationReaders {
   jiraWork?: JiraWork
-  hasJiraPilot?: boolean
   leases?: CardLeases
   preparedReviews?: PreparedReviews
   preparedSubmissions?: PreparedSubmissions
@@ -105,13 +102,12 @@ export class ReconciliationMcp {
     const server = new McpServer({ name: 'tinstar-overview', version: '6.0.0' })
     const catalog = createToolCatalog(server)
     const jira = this.readers.jiraWork
-    const pilot = !jira && this.readers.hasJiraPilot
-    const jiraGetSchema = getWorkSchema.pick({ details: true }).extend({ card_id: jiraReadIdSchema })
-    const notionGetSchema = getWorkSchema.extend({ card_id: notionCardIdSchema })
-    const getSchema = jira ? z.union([jiraGetSchema, notionGetSchema]) : pilot ? pilotGetWorkSchema : notionGetSchema
+    const jiraGetSchema = getWorkSchema.pick({ details: true }).extend({ card_id: jiraWorkIdSchema })
+    const notionGetSchema = getWorkSchema.extend({ card_id: z.string().regex(/^[a-f0-9]{32}$/) })
+    const getSchema = jira ? z.union([jiraGetSchema, notionGetSchema]) : getWorkSchema
     const notionCreateSchema = createWorkSchema.extend({ provider: z.literal('notion').optional() })
     const createSchema = jira ? z.union([jiraCreateSchema, notionCreateSchema]) : createWorkSchema
-    const updateSchema = jira ? z.discriminatedUnion('kind', [...updateWorkSchema.options, jiraEditSchema]) : pilot ? pilotUpdateWorkSchema : updateWorkSchema
+    const updateSchema = jira ? z.discriminatedUnion('kind', [...updateWorkSchema.options, jiraEditSchema]) : updateWorkSchema
     const caller = leaseCaller(actor, request?.headers ?? {})
     const cardCall = async <T extends { lease_token?: string }>(input: T, perform: (clean: CardInput<T>) => Promise<unknown>) => {
       const { lease_token, ...clean } = input
@@ -151,7 +147,7 @@ export class ReconciliationMcp {
       }
       catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }
     })
-    catalog.registerTool('not_for_me', { description: 'Return this leased card to its responsible mate with a one-line owner reason. Records the reason, clears Will action badges, replaces the Will wait with the mate blocker, notifies Firstmate through the existing workflow bridge and releases the lease after confirmed save. Keep lease_token in arguments only.', inputSchema: { card_id: notionCardIdSchema, operation_id: z.string().min(1).max(128), lease_token: z.string().min(1).max(256), reason: z.string().trim().min(1).max(1000).refine(value => !/[\r\n]/.test(value), 'Use a one-line reason') }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } }, async input => {
+    catalog.registerTool('not_for_me', { description: 'Return this leased card to its responsible mate with a one-line owner reason. Records the reason, clears Will action badges, replaces the Will wait with the mate blocker, notifies Firstmate through the existing workflow bridge and releases the lease after confirmed save. Keep lease_token in arguments only.', inputSchema: { card_id: cardIdSchema, operation_id: z.string().min(1).max(128), lease_token: z.string().min(1).max(256), reason: z.string().trim().min(1).max(1000).refine(value => !/[\r\n]/.test(value), 'Use a one-line reason') }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } }, async input => {
       try {
         const held = await this.leases.claim([input.card_id], caller, actor, `not-for-me:${input.operation_id}`, input.lease_token, true)
         if (held.outcome !== 'held') return result(held)
@@ -199,8 +195,8 @@ export class ReconciliationMcp {
     })
     catalog.registerTool('get_work_views', { description: 'Read canonical review-status cards in reviews (independent of owner/asks), with truthful coverage, plus the same Needs Will requests, associated PR/check evidence, honest request age and per-source execution warnings as Decisions. Operational reconciliation and uncached review history refresh in the background; warnings identify unconfirmed evidence. Passing checks alone never create a merge ask; unknown/stale sources never prove a stranded worker. No scene/window required. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: {}, annotations: { ...readAnnotations, readOnlyHint: false, idempotentHint: true, openWorldHint: true } }, async () => result(await (this.readers.workViews?.() ?? this.readers.queue()).catch(() => ({ outcome: 'queue-source-unavailable', message: 'Workflow views unavailable; retained client data is last-known' }))))
     catalog.registerTool('get_workflow_rules', { description: 'Read code-enforced workflow rules, required fields, tracked native/external workers, coupled decisions, checkpoint limits and safe retry rules. No separate rules-page permission required.', inputSchema: {}, annotations: readAnnotations }, async () => result(workflowRules))
-    catalog.registerTool('submit_handoff', { description: 'Record a complete approved implementation contract in one call. Supply a stable submission_id, explicit card_id or stable external_ref create intent, declared owner/area and complete caller-written specification. No fuzzy title matching. Exact multipart Notion readback/hash, durable same-ID reconciliation and explicit revisions; preserves existing status/worker/waits unless assignment intent is declared. New cards queue only after full verification. Returns separate record, assignment, Firstmate inbox delivery and tracked execution outcomes; inbox delivery never means worker acceptance. Retrieve all exact contract chunks through get_work implementation_contract; refresh connector catalog once after deployment. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: pilot ? pilotSubmitHandoffSchema : submitHandoffSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await cardCall(input, async clean => await this.readers.submitHandoff?.(clean, actor)) ?? { outcome: 'not-saved', code: 'unavailable' }))
-    catalog.registerTool('start_work', { description: 'Record a real execution: merge exact tracked worker provenance and set In Progress together, attributed to the authenticated caller. Requires Owner and Area; rejects stale/historical/owner-only evidence. Returns confirmed readback or precise not-saved/partially-saved result. Retry identical operation_id/input; no checkpoint/ask changes. External running evidence is explicitly consumer-reported. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: pilot ? pilotStartWorkSchema : startWorkSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await cardCall(input, async clean => await this.readers.startWork?.(clean, actor)) ?? { outcome: 'not-saved', code: 'unavailable' }))
+    catalog.registerTool('submit_handoff', { description: 'Record a complete approved implementation contract in one call. Supply a stable submission_id, explicit card_id or stable external_ref create intent, declared owner/area and complete caller-written specification. No fuzzy title matching. Exact multipart Notion readback/hash, durable same-ID reconciliation and explicit revisions; preserves existing status/worker/waits unless assignment intent is declared. New cards queue only after full verification. Returns separate record, assignment, Firstmate inbox delivery and tracked execution outcomes; inbox delivery never means worker acceptance. Retrieve all exact contract chunks through get_work implementation_contract; refresh connector catalog once after deployment. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: submitHandoffSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await cardCall(input, async clean => await this.readers.submitHandoff?.(clean, actor)) ?? { outcome: 'not-saved', code: 'unavailable' }))
+    catalog.registerTool('start_work', { description: 'Record a real execution: merge exact tracked worker provenance and set In Progress together, attributed to the authenticated caller. Requires Owner and Area; rejects stale/historical/owner-only evidence. Returns confirmed readback or precise not-saved/partially-saved result. Retry identical operation_id/input; no checkpoint/ask changes. External running evidence is explicitly consumer-reported. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: startWorkSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await cardCall(input, async clean => await this.readers.startWork?.(clean, actor)) ?? { outcome: 'not-saved', code: 'unavailable' }))
     catalog.registerTool('create_work', { description: jira
       ? 'Create a Jira ticket with provider:jira, name and operation_id. Task is the default, Epic optional. Jira starts in Backlog with optional description and Owner. Omit provider for the existing Notion workflow.'
       : 'Create a configured-board card (Notion by default; provider:jira selects the isolated synthetic pilot) with declared owner/area, ordinary properties, brief and acceptance criteria. Firstmate assignment is Queued. Authenticated attribution, confirmed readback and retryable operation_id; no scene/window required.',
@@ -212,7 +208,7 @@ export class ReconciliationMcp {
     catalog.registerTool('update_work', { description: (jira ? 'For native Jira use kind:jira_edit with an exact ticket ID and operation_id. Edit description or Owner, add D1-style questions, answer them by ID, set or clear one typed external blocker, or append a note. Use transition_work for status and link_work for Jira links. ' : '') + 'Shared workflow operation: submit_for_review requires deployed SHA/receipt, canonical PR/card links, live proof and scope; accept_review/request_review_changes explicitly record owner feedback. Review retries reconcile durable receipts and preserve feedback. Other operations: close_worker explicitly removes one exact First Mate home/task/spawn declaration with done/failed/absent/cancelled disposition and evidence, preserving siblings and card status; release_wait adds awaited PR URLs to a Waiting for Prod Release card without converting it to generic Waiting For. edit ordinary properties/brief/acceptance or note; assign/handoff; evidence-backed checkpoint (provisional or owner-confirmed); wait requires type (Actor/Event/Work), id, dependency, unblocks_when, follow_up_by and future next_check_in and rejects worker pickup, queue position and a check-in date alone. Supply replace_wait with the exact current entry to replace; withdraw_decision retires an exact open card-native request_id with a reason. supersede_decision also records replacement {request_id,question,requested_from,options?} with a fresh ID in the same audit note; request/answer a specific decision with declared next owner/status (source_request binds an exact First Mate home/task/id/kind; its answer is delivered through the existing receipt bridge and remains pending until acknowledgment plus source closure); complete/park with supported disposition. In Progress requires worker evidence, other asks/history survive. Returns exact saved fields and partial results. Retry identical operation_id/input; no scene/window required. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: updateSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async (input: UpdateWorkInput | JiraEdit) => {
       if (input.kind === 'jira_edit') return result(jiraWorkReadback(await jira?.edit(input, actor) ?? { outcome: 'not-saved', code: 'unavailable' }))
       return result(await cardCall(input, async clean => await this.readers.updateWork?.(clean, actor)) ?? { outcome: 'not-saved', code: 'unavailable' })
-    }, jira ? { branch: 'jira_edit', fields: Object.keys(jiraEditSchema.shape) }
+    }, jira ? { branch: 'jira_edit', fields: Object.keys(jiraEditSchema.shape).filter(name => name !== 'card_id') }
       : { branch: 'wait', fields: ['card_id', 'operation_id', ...Object.keys(waitSchema.shape), 'replace_wait'] })
     if (jira) {
       const writeAnnotations = { readOnlyHint: false, idempotentHint: true, openWorldHint: true }
@@ -254,7 +250,7 @@ export class ReconciliationMcp {
       const claims = evidence ? [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'card' ? c.cardId === target.id : target.kind === 'execution' ? c.executionId === target.id : c.id === target.id) : undefined
       return result({ outcome: record ? 'available' : 'unknown-id', record, ...(target.kind === 'card' ? { lease: this.leases.status(target.id) } : {}), evidence: claims, freshness: scene.coverage })
     })
-    catalog.registerTool('get_card_context', { description: 'Read a card from the authorized configured board, including bounded prose, properties, coverage and omissions. No code/transcripts or credentials. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: { scene_id: z.string().uuid(), card_id: pilot ? pilotWorkflowCardIdSchema : notionCardIdSchema, lease_token: leaseTokenSchema }, annotations: readAnnotations }, async ({ scene_id, card_id }) => {
+    catalog.registerTool('get_card_context', { description: 'Read a card from the authorized configured board, including bounded prose, properties, coverage and omissions. No code/transcripts or credentials. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: { scene_id: z.string().uuid(), card_id: cardIdSchema, lease_token: leaseTokenSchema }, annotations: readAnnotations }, async ({ scene_id, card_id }) => {
       if (this.sessions.read(scene_id).outcome === 'unknown-id') return result({ outcome: 'unknown-id' })
       const scene = await this.sceneForWindow(scene_id), card = scene.cards.find(c => c.id === card_id)
       return result(card ? { card, lease: this.leases.status(card_id), context: await this.readers.card(card_id), freshness: scene.coverage.intentions } : { outcome: 'unknown-id' })
@@ -327,7 +323,7 @@ export class ReconciliationMcp {
       try {
         const request = z.object({ operation: z.enum(['search', 'get', 'start', 'update', 'rules', 'lease', 'release-lease']), input: z.unknown().optional() }).strict().parse(await body(req))
         if (request.operation === 'lease' || request.operation === 'release-lease') {
-          const input = z.object({ card_id: pilotWorkflowCardIdSchema, generation: z.number().int().nonnegative().optional(), reason: z.string().trim().min(1).max(1000).optional() }).strict().parse(request.input)
+          const input = z.object({ card_id: cardIdSchema, generation: z.number().int().nonnegative().optional(), reason: z.string().trim().min(1).max(1000).optional() }).strict().parse(request.input)
           const canRelease = !!await this.readers.authorizePulls?.(req)
           if (request.operation === 'lease') return ok(res, { lease: this.leases.status(input.card_id), can_release: canRelease }, { headers })
           if (!canRelease) return fail(res, 'FORBIDDEN', 'Authorized owner required to release a card lease', { headers })
@@ -336,9 +332,9 @@ export class ReconciliationMcp {
         }
         if (request.operation === 'rules') return ok(res, workflowRules, { headers })
         if (request.operation === 'search') return ok(res, await this.readers.searchWork?.(searchWorkSchema.parse(request.input)), { headers })
-        if (request.operation === 'get') return ok(res, await this.readers.getWork?.(pilotGetWorkSchema.parse(request.input)), { headers })
-        if (request.operation === 'update') return ok(res, await this.readers.updateWork?.(pilotUpdateWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
-        return ok(res, await this.readers.startWork?.(pilotStartWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
+        if (request.operation === 'get') return ok(res, await this.readers.getWork?.(getWorkSchema.parse(request.input)), { headers })
+        if (request.operation === 'update') return ok(res, await this.readers.updateWork?.(updateWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
+        return ok(res, await this.readers.startWork?.(startWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
       } catch { return fail(res, 'BAD_REQUEST', 'Invalid workflow request; use the shared workflow operation schema', { headers }) }
     }
     try {

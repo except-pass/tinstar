@@ -3,14 +3,14 @@ import { performance } from 'node:perf_hooks'
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { notionCardIdSchema } from '../../shared/workIdentity'
+import { cardIdSchema } from '../../shared/workIdentity'
 import { CardLeaseError, leaseHash, publicLease, SourceWritePending, type CardLease } from './cardLeases'
 import { DecisionDeskConflict, DecisionPackets, type StoredDecisionPacket } from './decisionPackets'
 import { isLivePreparation, type DecisionPreparation } from './decisionPrep'
 import type { WorkCard } from './workReader'
 
 export const reviewSessionInput = z.object({ operation_id: z.string().min(1).max(128), label: z.string().trim().min(1).max(100), device: z.enum(['phone', 'desktop', 'other']).default('other') }).strict()
-export const preparedClaimInput = z.object({ operation_id: z.string().min(1).max(128), review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256).optional(), card_id: notionCardIdSchema.optional() }).strict()
+export const preparedClaimInput = z.object({ operation_id: z.string().min(1).max(128), review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256).optional(), card_id: cardIdSchema.optional() }).strict()
 export const preparedReleaseInput = z.object({ ...preparedClaimInput.omit({ card_id: true }).shape, reason: z.string().trim().min(1).max(1000).default('No reason supplied'), action: z.enum(['release', 'skip']).default('release') }).strict()
 type ClaimInput = z.infer<typeof preparedClaimInput>
 interface Session { id: string; caller: string; scope: string; label: string; device: string; token_hash: string; operation: string; signature: string; created: number; expires: number; revoked: number | null }

@@ -16,8 +16,7 @@ import { decisionRequests, isVerifiedDecisionRetraction, withdrawnDecisionIds, w
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
-import { pilotStartWorkSchema, pilotUpdateWorkSchema } from './pilotWorkflowSchemas'
-import { updateWorkSchema, decisionOptionsSchema, createWorkSchema, type SubmitHandoffInput, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
+import { startWorkSchema, updateWorkSchema, decisionOptionsSchema, createWorkSchema, type SubmitHandoffInput, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { canonicalWorkId, independentWaitIssue, retainedWaitText, typedWaitEntry, waitEntries, waitLine, hasActiveTypedWait, waitingForIssues, waitState, workIdShape } from '../../shared/waitingForPolicy'
 import { ContractError, ImplementationContracts } from './implementationContract'
 import { HandoffOperations } from './workflowHandoff'
@@ -232,7 +231,7 @@ export class WorkflowOperations {
   }
 
   private startUnchecked(input: StartWorkInput, actor: string): Promise<StartWorkResult> {
-    const parsed = pilotStartWorkSchema.safeParse(input)
+    const parsed = startWorkSchema.safeParse(input)
     const failed = (code: string, message: string): StartWorkResult => ({ outcome: 'not-saved', code, message, operation_id: input?.operation_id ?? '', saved_fields: [] })
     if (!parsed.success) return Promise.resolve(failed('invalid-input', parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')))
     if (!actor.trim()) return Promise.resolve(failed('unauthenticated', 'Authenticated caller identity required'))
@@ -325,7 +324,7 @@ export class WorkflowOperations {
     }
   }
   private updateUnchecked(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
-    const parsed = pilotUpdateWorkSchema.safeParse(input)
+    const parsed = updateWorkSchema.safeParse(input)
     if (!parsed.success) return Promise.resolve({ outcome: 'not-saved', code: 'invalid-input', message: parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '), operation_id: input?.operation_id ?? '', saved_fields: [] })
     if (isReviewOperation(parsed.data)) {
       const review = parsed.data

@@ -1,6 +1,6 @@
 import { updateWorkSchema, waitSchema } from '../workflow'
 import { describe, expect, it } from 'vitest'
-import { dispatchOnlyWait, independentWaitIssue, retainedWaitText, waitingForIssues, waitingForWorkIds, type WorkBlocker, type WaitState, type SourceCoverage, workIdShape, waitLine, parseWaitLine, waitEntries, typedWaitEntry } from '../waitingForPolicy'
+import { dispatchOnlyWait, independentWaitIssue, retainedWaitText, waitingForIssues, type WorkBlocker, type WaitState, type SourceCoverage, workIdShape, waitLine, parseWaitLine, waitEntries, typedWaitEntry } from '../waitingForPolicy'
 
 const id = 'a'.repeat(32)
 const other = 'e'.repeat(32)
@@ -211,16 +211,4 @@ it('accepts maximum serialized waits as exact assignment and decision resolution
     const parsed = updateWorkSchema.parse({ card_id: id, operation_id: `length-${operation.kind}`, ...operation, resolve_wait })
     expect('resolve_wait' in parsed && parsed.resolve_wait).toBe(resolve_wait)
   }
-})
-
-it('excludes TSW ticket IDs from Work blocker lookup candidates', () => {
-  const tsw = 'jira:fortresspower-jira.atlassian.net:10639:60001'
-  const pilot = 'jira:fortresspower-jira.atlassian.net:10638:60001'
-  const waitingFor = [other, tsw, pilot].map(id => waitLine({
-    type: 'Work', id, dependency: 'Firmware rollout', unblocks_when: 'Receipt verified', follow_up_by: 'Will',
-  })).join('\n')
-  const state = { cardId: id, status: 'Waiting For', type: 'Work', id: tsw, waitingFor, observedAt: null }
-  expect(waitingForWorkIds(state)).toEqual([other, pilot])
-  expect(waitingForIssues({ ...state, coverage: 'complete' }, new Map([[tsw, { id: tsw, status: 'Queued' }]])))
-    .toContainEqual(expect.objectContaining({ code: 'invalid-work-id' }))
 })

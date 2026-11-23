@@ -13,7 +13,7 @@ import { jiraTransitions, jiraVerbs } from '../jiraWorkRules'
 
 const cloudId = '5bac40b8-c168-4931-90d1-2c8dfe15c6ea'
 const config = {
-  mode: 'work', url: 'https://fortresspower-jira.atlassian.net', cloudId, projectId: '10639', token: 'fixture-scoped-service-token',
+  mode: 'work', url: 'https://sample.atlassian.net', cloudId, projectId: '10001', token: 'fixture-scoped-service-token',
   issueTypes: { Task: '10100', Epic: '10101' },
   fields: { owner: 'customfield_11001', decisions: 'customfield_11002', blockerType: 'customfield_11003', blockerTarget: 'customfield_11004', blockerCondition: 'customfield_11005' },
   blocksLinkTypeId: '10000',
@@ -62,11 +62,11 @@ const response = (value: unknown, status = 200) => value === undefined
   ? new Response(null, { status })
   : new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 
-async function fixture(scope?: Pick<JiraWorkConfig, 'url' | 'projectId'>) {
-  const { token, ...settings } = { ...config, ...scope }
+async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'jira-work-mcp-'))
   roots.push(root)
-  await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { jira: { ...settings, token } } }), { mode: 0o600 })
+  const { token: _token, ...settings } = config
+  await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { jira: { ...settings, token: config.token } } }), { mode: 0o600 })
   const parsed = loadReconciliationConfig(root)
   expect(parsed.jiraWork).toMatchObject(settings)
   expect(parsed.jira).toBeUndefined()
@@ -105,13 +105,13 @@ async function fixture(scope?: Pick<JiraWorkConfig, 'url' | 'projectId'>) {
     if (path === 'myself') return response({ accountId: 'fixture-service' })
     if (path === 'search/jql') {
       if (controls.rejectSearch) return response({}, 403)
-      expect(body.jql).toContain(`project = ${settings.projectId}`)
-      return response({ isLast: true, issues: controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === settings.projectId) })
+      expect(body.jql).toContain(`project = ${config.projectId}`)
+      return response({ isLast: true, issues: controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === config.projectId) })
     }
     if (path === 'issue' && method === 'POST') {
       if (body.fields[config.fields.owner] && !['Avery', 'Taylor'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
       const id = String(nextIssue++)
-      const issue = make(id, `WORK-${Number(id) - 60000}`, settings.projectId, body.fields)
+      const issue = make(id, `WORK-${Number(id) - 60000}`, config.projectId, body.fields)
       if (controls.wrongCreate) issue.fields.summary = 'Unexpected Jira summary'
       issues.set(id, issue)
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
@@ -230,118 +230,46 @@ async function fixture(scope?: Pick<JiraWorkConfig, 'url' | 'projectId'>) {
   return { root, connect, requests, controls, issues, links, historicalKeys }
 }
 
-it('publishes write schemas that accept the supported Notion and TSW card IDs', async () => {
-  const f = await fixture()
-  const { client, call } = await f.connect()
+it('publishes branch-specific update IDs and TSW workflow reference IDs', async () => {
+  const { client } = await (await fixture()).connect()
   const { tools } = await client.listTools()
   const ajv = addFormats(new Ajv({ strict: false }))
-  const notionId = 'a'.repeat(32), tswId = 'jira:fortresspower-jira.atlassian.net:10639:60001'
-  const pilotId = 'jira:fortresspower-jira.atlassian.net:10638:60001'
-  const invalidId = 'jira:fortresspower-jira.atlassian.net:106390:60001'
-  const publishedAt = '2026-11-23T20:00:00Z'
+  const update = ajv.compile(tools.find(tool => tool.name === 'update_work')!.inputSchema)
+  const create = ajv.compile(tools.find(tool => tool.name === 'create_work')!.inputSchema)
+  const start = ajv.compile(tools.find(tool => tool.name === 'start_work')!.inputSchema)
+  const notion = 'a'.repeat(32)
+  const tsw = 'jira:fortresspower-jira.atlassian.net:10639:60001'
+  const pilot = tsw.replace(':10639:', ':10638:')
   const operation_id = 'schema-proof'
-  const sharedWrites: Array<readonly [string, (card_id: string) => Record<string, unknown>]> = [
-    ['update_work', card_id => ({ card_id, operation_id, kind: 'complete', disposition: 'Completed fixture', evidence: 'Read back fixture' })],
-    ['update_work', card_id => ({ card_id, operation_id, kind: 'park', disposition: 'Parked fixture' })],
-    ['update_work', card_id => ({ card_id, operation_id, kind: 'wait', type: 'Event', id: 'fixture', dependency: 'Fixture deployment',
-      unblocks_when: 'Deployment verified', follow_up_by: 'Hulk', next_check_in: publishedAt })],
-    ['update_work', card_id => ({ card_id, operation_id, kind: 'edit', note: 'Fixture note' })],
-    ['start_work', card_id => ({ card_id, operation_id, worker: {
-      kind: 'firstmate', fm_home: '/fixture', task_id: 'test', first_observed_spawn_gen: '1',
-    } })],
-    ['submit_handoff', card_id => ({ submission_id: operation_id, target: { card_id }, title: 'Fixture handoff',
-      area: 'Engineering', owner: 'Hulk', objective: 'Verify the fixture', spec_markdown: 'Run the fixture.',
-      acceptance_criteria: ['Readback confirmed'], decisions: [], forbidden_approaches: [], references: [] })],
-    ...(['claim_card', 'claim_prepared_decision', 'not_for_me'] as const).map(name =>
-      [name, (card_id: string) => ({ card_id, operation_id, ...(name === 'not_for_me' ? { lease_token: 'fixture', reason: 'Reassign' } : {}) })] as const),
-  ]
-  const handoff = sharedWrites.find(([name]) => name === 'submit_handoff')![1]
-  sharedWrites.push(
-    ['submit_handoff', card_id => ({ ...handoff(notionId), target: { external_ref: 'fixture', candidate_ids: [card_id] } })],
-    ['submit_handoff', card_id => ({ ...handoff(notionId), parent_card_id: card_id })],
-  )
-  for (const relation of ['Parent item', 'Epic', 'Initiative']) {
-    sharedWrites.push(
-      ['update_work', card_id => ({ card_id: notionId, operation_id, kind: 'edit', properties: { [relation]: [card_id] } })],
-      ['create_work', card_id => ({ provider: 'notion', operation_id, name: 'Fixture card', owner: 'Hulk', area: 'Engineering',
-        properties: { [relation]: [card_id] } })],
-    )
+  const edit = { kind: 'edit', card_id: notion, operation_id }
+  const observed_at = '2026-11-23T20:00:00Z'
+  for (const fields of [
+    { kind: 'complete', disposition: 'Completed fixture', evidence: 'Read back fixture' },
+    { kind: 'park', disposition: 'Parked fixture' },
+    { kind: 'edit', note: 'Fixture note' },
+    { kind: 'wait', type: 'Event', id: 'fixture', dependency: 'Fixture deployment',
+      unblocks_when: 'Deployment verified', follow_up_by: 'Hulk', next_check_in: observed_at },
+  ]) {
+    expect(update({ card_id: notion, operation_id, ...fields }), ajv.errorsText(update.errors)).toBe(true)
   }
-  for (const field of ['epic', 'initiative']) {
-    sharedWrites.push(['submit_handoff', card_id => ({ ...handoff(notionId), [field]: [card_id] })])
-  }
-  const sharedReferences: typeof sharedWrites = [
-    ['update_work', card_id => ({ card_id: notionId, operation_id, kind: 'request_decision', request_id: 'request',
-      question: 'Proceed?', requested_from: 'Will', proposal: {
-        schema: 'tinstar.decision-proposal.v1', proposal_id: 'fixture', request_key: 'request', card_id,
+  expect(update({ ...edit, kind: 'jira_edit', card_id: tsw, note: 'Fixture' })).toBe(true)
+  expect(update({ ...edit, kind: 'jira_edit', note: 'Fixture' })).toBe(false)
+
+  for (const [card_id, accepted] of [[notion, true], [tsw, true], [pilot, false]] as const) {
+    for (const name of ['Parent item', 'Epic', 'Initiative']) {
+      const properties = { [name]: [card_id] }
+      expect(update({ ...edit, properties }), name).toBe(accepted)
+      expect(create({ operation_id, name: 'Fixture', owner: 'Hulk', area: 'Engineering', properties }), name).toBe(accepted)
+    }
+    expect(start({ card_id: notion, operation_id, worker: { kind: 'external', system: 'fixture', run_id: '1',
+      reference: 'https://example.test/run/1', card_id, observed_at, state: 'running', evidence: 'Fixture test running' } })).toBe(accepted)
+    expect(update({ ...edit, kind: 'request_decision', request_id: 'request', question: 'Proceed?', requested_from: 'Will',
+      proposal: { schema: 'tinstar.decision-proposal.v1', proposal_id: 'fixture', request_key: 'request', card_id,
         question: 'Proceed?', rationale: 'Fixture advice', recommended_action_id: 'proceed',
         actions: [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the fixture' }], references: [],
-        source: { kind: 'firstmate-request', id: 'request', revision: '1' }, published_at: publishedAt, supersedes: null,
-      } })],
-    ['start_work', card_id => ({ card_id: notionId, operation_id, worker: { kind: 'external', system: 'fixture',
-      run_id: '1', reference: 'https://example.test/run/1', card_id, observed_at: publishedAt, state: 'running', evidence: 'Fixture test running' } })],
-  ]
-  for (const [cases, tswAccepted] of [[sharedWrites, false], [sharedReferences, true]] as const) {
-    for (const [name, args] of cases) {
-      const validate = ajv.compile(tools.find(tool => tool.name === name)!.inputSchema)
-      expect(validate(args(notionId)), `${name} ${ajv.errorsText(validate.errors)}`).toBe(true)
-      expect(validate(args(tswId)), JSON.stringify(args(tswId))).toBe(tswAccepted)
-      for (const bad of [pilotId, invalidId]) expect(validate(args(bad)), JSON.stringify(args(bad))).toBe(false)
-    }
+        source: { kind: 'firstmate-request', id: 'request', revision: '1' }, published_at: observed_at, supersedes: null,
+      } })).toBe(accepted)
   }
-  for (const name of ['claim_next_card', 'claim_next_prepared_decision', 'release_claim', 'release_prepared_decision']) {
-    const validate = ajv.compile(tools.find(tool => tool.name === name)!.inputSchema)
-    const args = name === 'release_claim' ? { lease_token: 'fixture', reason: 'Release' }
-      : name === 'release_prepared_decision' ? { operation_id, lease_token: 'fixture', reason: 'Release', action: 'release' }
-      : { operation_id }
-    expect(validate(args), `${name} ${ajv.errorsText(validate.errors)}`).toBe(true)
-  }
-
-  const nativeWrites = [
-    ['update_work', { kind: 'jira_edit', note: 'TSW fixture note' }],
-    ['transition_work', { verb: 'Prioritize' }],
-    ['link_work', { action: 'remove', link_id: '123' }],
-  ] as const
-  for (const [name, fields] of nativeWrites) {
-    const validate = ajv.compile(tools.find(tool => tool.name === name)!.inputSchema)
-    expect(validate({ ...fields, card_id: tswId, operation_id }), name).toBe(true)
-    for (const bad of [pilotId, invalidId]) expect(validate({ ...fields, card_id: bad, operation_id }), name).toBe(false)
-    const arguments_ = { ...fields, card_id: notionId, operation_id }
-    expect(validate(arguments_), name).toBe(false)
-    const before = f.requests.length
-    const rejected = await client.callTool({ name, arguments: arguments_ })
-    expect(rejected.isError).toBe(true)
-    expect(rejected.content).toContainEqual(expect.objectContaining({ text: expect.stringContaining('Use an exact Jira card ID') }))
-    expect(f.requests).toHaveLength(before)
-  }
-  expect(await call('create_work', { provider: 'jira', operation_id, name: 'TSW fixture' }))
-    .toMatchObject({ outcome: 'saved', card: { id: tswId } })
-  expect(await call('update_work', { ...nativeWrites[0][1], card_id: tswId, operation_id: 'tsw-note' }))
-    .toMatchObject({ outcome: 'saved' })
-  expect(await call('get_work', { card_id: tswId })).toMatchObject({
-    card: { id: tswId },
-    comments: expect.arrayContaining([expect.objectContaining({ body: expect.stringContaining('TSW fixture note') })]),
-  })
-})
-
-it('keeps native Jira create and read available for another configured project', async () => {
-  const f = await fixture({ url: 'https://sample.atlassian.net', projectId: '10001' })
-  const { client, call } = await f.connect()
-  const card_id = 'jira:sample.atlassian.net:10001:60001'
-  const operation_id = 'private-project'
-  expect(await call('create_work', { provider: 'jira', operation_id, name: 'Private fixture' }))
-    .toMatchObject({ outcome: 'saved', card: { id: card_id } })
-  expect(await call('get_work', { card_id })).toMatchObject({ outcome: 'available', card: { id: card_id } })
-  const before = f.requests.length
-  for (const [name, fields] of [
-    ['update_work', { kind: 'jira_edit', note: 'Fixture' }],
-    ['transition_work', { verb: 'Prioritize' }],
-    ['link_work', { action: 'remove', link_id: '123' }],
-  ] as const) {
-    expect(await client.callTool({ name, arguments: { ...fields, card_id, operation_id } }))
-      .toMatchObject({ isError: true })
-  }
-  expect(f.requests).toHaveLength(before)
 })
 
 it('uses the existing MCP tools for native ticket edits, decision history, blockers, links and disposition', async () => {
@@ -423,7 +351,7 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   expect(read.comments.find((comment: { id: string }) => comment.id === 'restricted')).toEqual({ id: 'restricted' })
   expect(JSON.stringify(read)).not.toContain('Private note')
   const before = f.requests.length
-  const denied = await call('get_work', { card_id: card_id.replace('10639', '10638') })
+  const denied = await call('get_work', { card_id: card_id.replace('10001', '10002') })
   expect(denied).toMatchObject({ outcome: 'unavailable' })
   expect(f.requests).toHaveLength(before)
 }, 30_000)

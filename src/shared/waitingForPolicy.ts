@@ -1,5 +1,5 @@
 import { checkInTime } from './checkIn'
-import { isJiraPilotCard } from './workIdentity'
+import { isJiraCard } from './workIdentity'
 
 /** One Waiting For policy for writes and read-side diagnostics.
  * Waiting For is an independent blocker. Queue position and a missing worker stay Queued. */
@@ -64,7 +64,7 @@ const SCHEDULE_WORD = /\b(next|check-?in|check|in|on|at|date|the|a|an|waiting|wa
 export const DISPATCH_WAIT_REASON = 'Waiting For must name an independent blocker: a person, team, vendor, an event that happens on its own, or another unfinished card. Waiting for a worker to be assigned, started, or attached, for First Mate to pick up, for a place in the queue, or for a check-in date alone does not qualify.'
 
 export function canonicalWorkId(id: string): string | null {
-  if (isJiraPilotCard(id)) return id
+  if (isJiraCard(id)) return id
   return NOTION_ID.test(id) ? id.replaceAll('-', '').toLowerCase() : null
 }
 
@@ -241,7 +241,7 @@ const comparableWaitId = (type: string, id: string) => type === 'Work' ? canonic
 
 export function workIdShape(cardId: string, workId: string): WaitIssue | null {
   const canonical = canonicalWorkId(workId)
-  if (!canonical) return { code: 'invalid-work-id', field: 'id', message: 'Work needs a card ID. Use the exact Notion or synthetic Jira pilot card ID, or use Type=Event for a non-card reference.' }
+  if (!canonical) return { code: 'invalid-work-id', field: 'id', message: 'Work needs a card ID. Use the exact Notion or Jira card ID, or use Type=Event for a non-card reference.' }
   if (canonical === canonicalWorkId(cardId)) return { code: 'work-self', field: 'id', message: 'Choose the exact ID of the other card that blocks this work.' }
   return null
 }
