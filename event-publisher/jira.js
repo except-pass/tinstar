@@ -272,7 +272,7 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
   }
   const token = typeof readToken === 'string' ? readToken.trim() : ''
   if (!token) {
-    console.error('Jira issue-link events need EVENTS_JIRA_READ_TOKEN; issuelink_created and issuelink_deleted deliveries will be dropped')
+    console.error('Jira issue-link events need EVENTS_JIRA_READ_TOKEN; new issue-link deliveries that require lookups will receive HTTP 503 until the token is configured')
   }
   const key = Buffer.from(secret, 'utf8')
   const redact = value => {
@@ -364,10 +364,10 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     if (style === 'jira_subtask' || style === 'jira_gh_epic_story') return { status: 204 }
     const link = parseLink(body)
     if (!link) return { status: 400 }
-    if (!token) return { status: 204 }
     const action = body.webhookEvent === 'issuelink_deleted' ? 'deleted' : 'created'
     const native = `issuelink:${action}:${link.id}`
     if (journal.hasJiraDelivery(config.source.source_id, delivery, native)) return { status: 204 }
+    if (!token) return { status: 503 }
     const [sourceSide, destinationSide] = await Promise.all([readIssue(link.sourceId), readIssue(link.destinationId)])
     if (sourceSide.kind === 'transient' || destinationSide.kind === 'transient') return { status: 503 }
     const participants = []

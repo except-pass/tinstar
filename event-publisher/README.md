@@ -125,9 +125,9 @@ update the registration before removing or replacing the Clavis value.
 Inject the Tin Star Jira service account into `EVENTS_JIRA_READ_TOKEN` the same
 way. The publisher sends that token only as a Bearer credential on GET requests
 for an issue's project and key. It is not written to the configuration, the
-journal, or logs. Without it, issue-link deliveries are dropped after a startup
-warning, and issue and comment deliveries still work. The token is not required
-for those deliveries. The publisher does not write to Jira.
+journal, or logs. Without it, the publisher warns at startup and returns
+HTTP 503 for new issue-link deliveries that require lookups so Jira can retry.
+Issue and comment deliveries still work. The publisher does not write to Jira.
 [Atlassian admin webhook registration and signing](https://developer.atlassian.com/cloud/jira/platform/webhooks/#secure-admin-webhooks)
 
 The receiver verifies SHA-256 HMAC over the raw body before JSON decoding. A

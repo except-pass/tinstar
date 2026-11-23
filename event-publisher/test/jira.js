@@ -109,7 +109,7 @@ Server.prototype.listen = function (port, host) {
     return publisher
   }
   let publisher = await serve()
-  match(publisher.logs.stderr, /Jira issue-link events need EVENTS_JIRA_READ_TOKEN/)
+  match(publisher.logs.stderr, /Jira issue-link events need EVENTS_JIRA_READ_TOKEN.*HTTP 503/)
   await until(() => existsSync(envCheck) && readFileSync(envCheck, 'utf8').endsWith('\n'))
   equal(readFileSync(envCheck, 'utf8'), 'clear\n')
 
@@ -147,8 +147,24 @@ Server.prototype.listen = function (port, host) {
   equal((await post('unsigned-link', tswLink, { signed: false })).status, 401)
   equal((await post(null, tswLink)).status, 400)
   equal((await post('link-malformed', { timestamp: occurred, webhookEvent: 'issuelink_created' })).status, 400)
-  equal((await post('link-before-token', tswLink)).status, 204)
-  equal((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout, '')
+  const jiraJournalState = () => {
+    const db = new DatabaseSync(dbPath, { readOnly: true })
+    try {
+      const jiraSource = "source_id IN (SELECT source_id FROM sources WHERE json_extract(description, '$.provider') = 'jira')"
+      return {
+        sources: db.prepare(`SELECT * FROM sources WHERE ${jiraSource} ORDER BY source_id`).all(),
+        receipts: db.prepare(`SELECT * FROM jira_deliveries WHERE ${jiraSource} ORDER BY source_id, delivery_id`).all(),
+        events: db.prepare(`SELECT * FROM events WHERE ${jiraSource} ORDER BY sequence`).all(),
+      }
+    } finally {
+      db.close()
+    }
+  }
+  const deletedLink = linkDelivery('issuelink_deleted', 77001, 98765, 98766)
+  const beforeMissingToken = jiraJournalState()
+  equal((await post('link-before-token', tswLink)).status, 503)
+  equal((await post('link-delete', deletedLink)).status, 503)
+  deepEqual(jiraJournalState(), beforeMissingToken)
 
   const watcher = start(t, ['watch', '--source', 'jira', '--type', 'ticket', '--db', dbPath, '--json'])
   await until(() => watcher.logs.stderr.includes('Watching from sequence 0'))
@@ -411,7 +427,6 @@ globalThis.fetch = async (url, options = {}) => {
     { key: 'WORK-3', id: '98768', link: '77002', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98768`, change: { field: 'links', before: null, after: 'is blocked by WORK-1' } },
   ])
   const deleteCursor = await afterSequence()
-  const deletedLink = linkDelivery('issuelink_deleted', 77001, 98765, 98766)
   equal((await post('link-delete', deletedLink)).status, 204)
   const deleted = await since(deleteCursor)
   for (const event of [...created, ...deleted]) {
@@ -450,19 +465,6 @@ globalThis.fetch = async (url, options = {}) => {
     ].map(text => ({
       field: 'links', before: action === 'deleted' ? text : null, after: action === 'created' ? text : null,
     })))
-  }
-  const jiraJournalState = () => {
-    const db = new DatabaseSync(dbPath, { readOnly: true })
-    try {
-      const jiraSource = "source_id IN (SELECT source_id FROM sources WHERE json_extract(description, '$.provider') = 'jira')"
-      return {
-        sources: db.prepare(`SELECT * FROM sources WHERE ${jiraSource} ORDER BY source_id`).all(),
-        receipts: db.prepare(`SELECT * FROM jira_deliveries WHERE ${jiraSource} ORDER BY source_id, delivery_id`).all(),
-        events: db.prepare(`SELECT * FROM events WHERE ${jiraSource} ORDER BY sequence`).all(),
-      }
-    } finally {
-      db.close()
-    }
   }
   const beforeForeign = jiraJournalState()
   const beforeHierarchyReads = readFileSync(fetchLog, 'utf8')
