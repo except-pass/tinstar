@@ -149,12 +149,12 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
         const { operation_id: operationId } = repair.input
         const result = await (async () => {
           const card = await jira.readTswCard(key)
-          if (card.id !== checkpoint.cardId || card.id !== repair.input.card_id) return { outcome: 'issue-identity-changed' }
-          return await jira.repairTransitionAudit(repair.input, repair.actor) as { outcome?: string }
+          if (card.id !== checkpoint.cardId || card.id !== repair.input.card_id) return { outcome: 'issue-identity-changed', dispatched: false }
+          return jira.repairTransitionAudit(repair.input, repair.actor)
         })().catch(() => undefined)
         const repaired = result?.outcome === 'saved'
         const identityChanged = result?.outcome === 'issue-identity-changed'
-        const attempts = repair.attempts + Number(result?.outcome === 'repair-rejected')
+        const attempts = repair.attempts + Number(result?.dispatched === true)
         const abandoned = identityChanged || attempts >= noteRepairLimit
         if (!repaired && !abandoned && attempts === repair.attempts) {
           await audit(key, 'note-repair-pending', { operationId })

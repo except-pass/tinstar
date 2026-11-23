@@ -22,7 +22,6 @@ function text(value: unknown, unsupported: true | 'omit' = true) {
 class JiraWorkUnconfirmed extends Error {}
 class JiraCreateContradiction extends JiraWorkUnconfirmed {}
 class JiraAuditRejected extends JiraWorkUnconfirmed {}
-class JiraRepairRejected extends JiraWorkUnconfirmed {}
 const isWriteRejection = (error: unknown): error is JiraWriteError =>
   error instanceof JiraWriteError && error.method !== 'GET' && error.status >= 400 && error.status < 500 && error.status !== 408
 type Link = { id: string; type_id: string; type: string; label: string; direction: 'inward' | 'outward'; target_key: string; target_id: string }
@@ -535,12 +534,14 @@ export class JiraWork extends JiraClient {
     })
   }
 
-  private async postTransitionAudit(id: string, note: string, deferAudit: boolean) {
+  private async postTransitionAudit(id: string, note: string, deferAudit: boolean, onDispatch?: () => void) {
     const baseline = await this.commentBaseline(id).catch(() => undefined)
     await this.checkProject(id)
-    const posted = await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) }).catch(error => {
+    const body = jiraText(note)
+    onDispatch?.()
+    const posted = await this.request(`issue/${id}/comment`, 'POST', { body }).catch(error => {
       if (isWriteRejection(error)) {
-        const Rejected = deferAudit ? JiraRepairRejected : JiraAuditRejected
+        const Rejected = deferAudit ? JiraWorkUnconfirmed : JiraAuditRejected
         throw new Rejected(`Jira confirmed the destination status but rejected the audit comment (HTTP ${error.status}).`)
       }
       return undefined
@@ -551,7 +552,8 @@ export class JiraWork extends JiraClient {
   }
 
   async repairTransitionAudit(input: JiraTransition, actor: string) {
-    return this.mutate('transition', input, actor, async attempt => {
+    let dispatched = false
+    const result = await this.mutate('transition', input, actor, async attempt => {
       const note = this.transitionAudit(input, actor)
       if (!attempt.dispatched || !note) throw new JiraWorkInputError('No dispatched transition audit to repair')
       const id = this.id(input.card_id)
@@ -559,15 +561,11 @@ export class JiraWork extends JiraClient {
         await this.checkComment(id, note)
       } catch (error) {
         if (!(error instanceof JiraWorkUnconfirmed)) throw error
-        try {
-          await this.postTransitionAudit(id, note, true)
-        } catch (error) {
-          if (error instanceof JiraRepairRejected) return { outcome: 'repair-rejected' }
-          throw error
-        }
+        await this.postTransitionAudit(id, note, true, () => { dispatched = true })
       }
       return attempt.confirm(await this.read(id))
-    })
+    }) as { outcome: string }
+    return { outcome: result.outcome, dispatched }
   }
 
   transition(input: JiraTransition, actor: string, beforeWrite?: BeforeWrite, deferAudit = false) {

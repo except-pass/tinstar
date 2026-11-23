@@ -106,8 +106,9 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
       if (typeof id !== 'string' || !id) continue
       const dispatch = dispatchForTask(task?.[tswEvidence] ?? {}, row?.[tswEvidence])
       if (dispatch.status !== 'card') {
-        const tagged = [task?.[tswEvidence]?.dispatchProvenance, row?.[tswEvidence]?.dispatchProvenance].find(p => p?.status === 'card')
-        if (tagged?.status === 'card') findings.push({ home, key: tagged.cardId, task: id, reason: 'conflicting-card-declarations' })
+        const conflictingKeys = new Set([task?.[tswEvidence]?.dispatchProvenance, row?.[tswEvidence]?.dispatchProvenance]
+          .flatMap(provenance => provenance?.status === 'card' ? [provenance.cardId] : []))
+        for (const key of conflictingKeys) findings.push({ home, key, task: id, reason: 'conflicting-card-declarations' })
         continue
       }
       const key = dispatch.cardId

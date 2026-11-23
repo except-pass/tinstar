@@ -75,7 +75,7 @@ async function fixture(projectId = config.projectId) {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   const history = new Map<string, Array<{ id: string; created: string; author: { accountId: string }; items: unknown[] }>>()
@@ -193,6 +193,7 @@ async function fixture(projectId = config.projectId) {
     }
     if (part === 'comment' && method === 'POST') {
       if (controls.commentResponse === 'rejected') return response({}, 403)
+      if (controls.commentResponse === 'unavailable') return response({}, 503)
       const created = jiraNow()
       if (!controls.omitComment) {
         issue.comments.push({ id: String(issue.comments.length + 1), body: jiraStoredBody(body.body), created, updated: created, author: { accountId: 'fixture-service' } })
@@ -350,6 +351,27 @@ const tswTask = (key: string, detail = '', yolo = 'off', overrides: Record<strin
   current_state: { state: detail ? 'done' : 'working', detail, freshness: 'fresh' },
   backlog: { id: 'task-' + key, body_lines: [`card: ${key}`] },
   pr: { url: detail ? fixturePull : null }, ...overrides,
+})
+
+it('blocks both card keys in conflicting dispatch copies even with separate live candidates', async () => {
+  const f = await tswFixture()
+  await f.create('first')
+  await f.create('second')
+  const candidates = [tswTask('TSW-1'), tswTask('TSW-2')]
+  const conflicting = tswTask('TSW-1', '', 'off', {
+    id: 'conflict', backlog: { id: 'conflict', body_lines: ['card: TSW-1'] },
+  })
+  await f.publish([...candidates, conflicting], [{ id: 'conflict', body_lines: ['card: TSW-2'] }])
+  const blocked = await f.run(true)
+  expect(blocked.plans).toEqual([])
+  expect(blocked.audits.filter(entry => entry.result === 'conflicting-card-declarations').map(entry => entry.cardId))
+    .toEqual(['TSW-1', 'TSW-2'])
+  expect(f.issues.get('60001')!.fields.status.name).toBe('Backlog')
+  expect(f.issues.get('60002')!.fields.status.name).toBe('Backlog')
+  await f.publish(candidates)
+  expect(await f.run(true)).toMatchObject({ stopped: false })
+  expect(f.issues.get('60001')!.fields.status.name).toBe('In Progress')
+  expect(f.issues.get('60002')!.fields.status.name).toBe('In Progress')
 })
 
 it('walks TSW from Backlog through review and merge, preserves idempotence and skips another project', async () => {
@@ -584,11 +606,11 @@ it.each(['issue/60001', 'issue/60001/comment'])('preserves a repair through repe
   expect(writes()).toBe(previousWrites + 1)
 })
 
-it('abandons each rejected note after three repair passes without blocking Start', async () => {
+it.each(['rejected', 'unavailable'] as const)('bounds repair POSTs when the comment service is %s', async commentResponse => {
   const f = await tswFixture()
   await f.create('abandon unavailable note')
   await f.publish([tswTask('TSW-1')])
-  f.controls.commentResponse = 'rejected'
+  f.controls.commentResponse = commentResponse
   await f.run(true)
   const issue = f.issues.get('60001')!
   expect(issue.fields.status.name).toBe('In Progress')
