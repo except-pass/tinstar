@@ -26,6 +26,8 @@ async function body(req: IncomingMessage) {
 }
 
 const base = '/api/reconciliation/decision-desk/'
+const pendingWriteHint = `Source write unresolved. Find the card and reservation operation in GET ${base}source-writes. `
+  + `Once the earlier request has settled, send POST ${base}reconcile-source-write with card_id, operation, earlier_request_settled: true, and a reason.`
 const paths = new Set(['snapshot', 'submit', 'submission-state', 'metrics', 'sessions', 'claim', 'release', 'close-session',
   'source-writes', 'reconcile-source-write'])
 
@@ -84,7 +86,10 @@ export class DecisionDeskApi {
       }
       return fail(res, 'BAD_REQUEST', 'Method unavailable for this resource', { headers, status: 405 })
     } catch (error) {
-      if (error instanceof CardLeaseError) return respond(leaseFailure(error))
+      if (error instanceof CardLeaseError) {
+        const refusal = leaseFailure(error)
+        return respond(refusal.code === 'source-write-pending' ? { ...refusal, message: pendingWriteHint } : refusal)
+      }
       if (error instanceof DecisionDeskConflict) return fail(res, 'CONFLICT', error.message, { headers })
       if (error instanceof z.ZodError) return fail(res, 'BAD_REQUEST', error.issues.map(issue => `${issue.path.join('.') || 'request'}: ${issue.message}`).join('; '), { headers })
       if (error instanceof SyntaxError) return fail(res, 'BAD_REQUEST', 'Invalid JSON request', { headers })

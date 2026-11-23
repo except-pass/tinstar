@@ -675,6 +675,38 @@ describe('prepared-card loop', () => {
     expect(sources.leases.status(card.id)).toBeNull()
   })
 
+  it.each(['Desk', 'MCP'] as const)('explains the existing pending-write claim refusal through %s', async surface => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
+    const { sources, tool, web } = await setup([card], true, 'lost')
+    await sources.preparation.replenish()
+    const review = surface === 'Desk'
+      ? (await web('sessions', { operation_id: 'open-review', label: 'Fixture owner' })).data.review_session_token
+      : undefined
+    const claim = { operation_id: 'claim-before-lost-write', card_id: card.id, review_session_token: review }
+    const callClaim = async () => surface === 'Desk' ? (await web('claim', claim)).data : tool('claim_card', claim)
+    const held = await callClaim()
+    const answer = { operation_id: 'lost-write', lease_token: held.lease_token, review_session_token: review, option_id: '1', answer: 'Proceed.' }
+    const submitted = surface === 'Desk' ? (await web('submit', answer)).data : await tool('submit_prepared_decision', answer)
+    expect(submitted.outcome).toBe('save-unconfirmed')
+    const [{ operation }] = sources.leases.pendingWrites()
+    now += 61 * 60_000
+
+    const refusal = await callClaim()
+    expect(refusal).toEqual({
+      outcome: 'not-saved', code: 'source-write-pending', message: expect.any(String), operation_id: '', saved_fields: [], lease: null,
+    })
+    expect(refusal.message).not.toContain(operation)
+    if (surface === 'Desk') {
+      expect(refusal.message).toContain('GET /api/reconciliation/decision-desk/source-writes')
+      expect(refusal.message).toContain('POST /api/reconciliation/decision-desk/reconcile-source-write')
+      expect(refusal.message).toContain('card_id, operation, earlier_request_settled: true, and a reason')
+    } else {
+      expect(refusal.message).toContain('The owner can recover it from the Decision Desk.')
+    }
+  })
+
   it('resumes an uncertain answer on the same lease after timeout without duplicating the comment or PATCH', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)

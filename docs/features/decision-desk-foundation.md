@@ -129,6 +129,17 @@ writes renew the lease. Background preparation never owns a review lease.
 Source mutations acquire per-card reservations. An interrupted write is
 checked against the card before any retry, and ambiguous provider writes can
 be inspected and reconciled through the existing audited source-write API.
+
+For a `source-write-pending` refusal, the owner can use
+`GET /api/reconciliation/decision-desk/source-writes` to find the reservation.
+Once the earlier request has settled, send
+`POST /api/reconciliation/decision-desk/reconcile-source-write` with the
+reservation's exact `card_id` (listed as `card`) and `operation`, set
+`earlier_request_settled` to `true`, and supply a nonempty `reason`.
+Automatic recovery checks reservations on startup and every minute after the
+five-minute settlement window. A reservation clears only after complete source
+readback.
+
 If the answer comment saves before the property handoff completes, retrying
 the same operation or the next refill pass completes the handoff while the
 same decision revision remains, including its owner, Will action tags, and
