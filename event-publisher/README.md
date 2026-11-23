@@ -122,8 +122,8 @@ other projects, so the publisher checks project scope before writing to the
 journal. [Atlassian webhook filtering](https://developer.atlassian.com/cloud/jira/platform/webhooks/#available-webhook-events)
 Use a distinct secret for this registration. To retire or rotate it, disable or
 update the registration before removing or replacing the Clavis value.
-Inject the Tin Star Jira service account into `EVENTS_JIRA_READ_TOKEN` the same
-way. The publisher sends that token only as a Bearer credential on GET requests
+Inject the Tin Star Jira service account's read token into
+`EVENTS_JIRA_READ_TOKEN` the same way. The publisher sends that token only as a Bearer credential on GET requests
 for an issue's project and key. It is not written to the configuration, the
 journal, or logs. Without it, the publisher warns at startup and returns
 HTTP 503 for new issue-link deliveries that require lookups so Jira can retry.
@@ -131,8 +131,9 @@ Issue and comment deliveries still work. The publisher does not write to Jira.
 [Atlassian admin webhook registration and signing](https://developer.atlassian.com/cloud/jira/platform/webhooks/#secure-admin-webhooks)
 
 The receiver verifies SHA-256 HMAC over the raw body before JSON decoding. A
-delivery must identify a ticket in the configured project. In issue and comment webhooks, an issue self URL,
-when supplied, must use the configured site. Jira retries use the same delivery
+delivery must identify a ticket in the configured project. For issue and comment
+webhooks, the payload supplies the project and any issue self URL must use the
+configured site. Jira retries use the same delivery
 ID. The journal commits the delivery receipt and its event group together, with
 additional deduplication for native creation, changelog, comment and issue-link
 identities when available. A native creation notice is the sole source for
@@ -143,12 +144,15 @@ Ticket change previews are redacted and bounded. The journal preserves the
 immutable Jira issue ID, display key, source delivery ID, source timestamp when
 supplied, and the available before and after values. Dedicated issue-link
 webhooks are the sole source of link activity. The publisher ignores link
-entries in issue update changelogs. For
-both `issuelink_created` and `issuelink_deleted`, the publisher skips the
+entries in issue update changelogs. For both link event types, the publisher skips the
 `jira_subtask` and `jira_gh_epic_story` hierarchy styles without looking up
 issues or writing to the journal. For a new ordinary link delivery with a
-configured token, it GETs both issues with `fields=project,key`. It journals `ticket.links.changed`
-on each side whose project id is the configured project. The other side is
+configured token, it fetches both issues over HTTPS from the configured Jira
+cloud with `fields=project,key` and rejects redirects. It journals
+`ticket.links.changed` for each issue whose returned ID matches the request,
+whose key is usable, and whose project ID matches the configured project.
+The link text is the after value for creation and the before value for removal.
+The other side is
 `blocks WORK-2` style text when that side is in the same project, using the
 link type's outward name on the source issue and inward name on the destination
 issue. When the other side belongs to another project, returns HTTP 404, or
@@ -156,7 +160,7 @@ provides unusable issue data, the text uses the literal `[redacted]` and the
 journal and logs omit that issue's key, summary, and id. When neither side can
 be verified in the configured project, the publisher acknowledges the delivery
 without writing to the journal. If either lookup fails with HTTP 401, 403, 408, 429,
-5xx, or a network error or timeout, the publisher returns HTTP 503 without
+5xx, a redirect, or a network error or timeout, the publisher returns HTTP 503 without
 writing to the journal. Link removals caused by deleting a TSW issue are
 outside the scope of link activity coverage.
 A missing changelog is reported as partial coverage. Custom field changes are identified by their configured Jira field IDs. Hulk journal readers inherit the owner's TSW visibility and may receive restricted comment IDs, times, actions and author account IDs. Restricted comment bodies are omitted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
