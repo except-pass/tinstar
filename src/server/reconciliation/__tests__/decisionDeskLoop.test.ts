@@ -706,7 +706,8 @@ describe('prepared-card loop', () => {
     if (surface === 'Desk') {
       expect(refusal.message).toContain('GET /api/reconciliation/decision-desk/source-writes')
       expect(refusal.message).toContain('POST /api/reconciliation/decision-desk/reconcile-source-write')
-      expect(refusal.message).toContain('card_id, operation, earlier_request_settled: true, and a reason')
+      expect(refusal.message).toContain('a JSON body containing card_id, operation, earlier_request_settled: true, and a reason')
+      expect(refusal.message).toContain('Include the Content-Type: application/json header on the POST.')
       expect(refusal.message).toContain('Include the X-Tinstar-UI: 1 header on both requests.')
     } else {
       expect(refusal.message).toContain('through the Decision Desk API')

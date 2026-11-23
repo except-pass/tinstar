@@ -135,10 +135,11 @@ the pending write may belong to the card already bound to the review session.
 The owner can find the reserved card and operation in the Decision Desk
 pending-writes list at `GET /api/reconciliation/decision-desk/source-writes`.
 Once the earlier request has settled, send
-`POST /api/reconciliation/decision-desk/reconcile-source-write` with the
-reservation's exact `card_id` (listed as `card`) and `operation`, set
-`earlier_request_settled` to `true`, and supply a nonempty `reason`. Include
-the `X-Tinstar-UI: 1` header on both requests.
+`POST /api/reconciliation/decision-desk/reconcile-source-write` with
+`Content-Type: application/json` and a JSON body containing the reservation's
+exact `card_id` (listed as `card`) and `operation`,
+`earlier_request_settled` set to `true`, and a nonempty `reason`. Include the
+`X-Tinstar-UI: 1` header on both requests.
 Automatic recovery checks reservations on startup and every minute after the
 five-minute settlement window. Reconciling an unresolved reservation requires
 complete source readback.
