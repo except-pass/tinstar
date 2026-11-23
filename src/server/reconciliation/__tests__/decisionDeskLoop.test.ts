@@ -1,3 +1,4 @@
+import { ok } from 'node:assert/strict'
 import { createServer, type RequestListener } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -692,14 +693,15 @@ describe('prepared-card loop', () => {
     const submitted = surface === 'Desk' ? (await web('submit', answer)).data : await tool('submit_prepared_decision', answer)
     expect(submitted.outcome).toBe('save-unconfirmed')
     expect(sources.leases.pendingWrites()).toEqual([expect.objectContaining({ card: card.id })])
-    const [{ operation }] = sources.leases.pendingWrites()
+    const [pendingWrite] = sources.leases.pendingWrites()
+    ok(pendingWrite)
     now += 61 * 60_000
 
     const refusal = await callClaim()
     expect(refusal).toEqual({
       outcome: 'not-saved', code: 'source-write-pending', message: expect.any(String), operation_id: '', saved_fields: [], lease: null,
     })
-    expect(refusal.message).not.toContain(operation)
+    expect(refusal.message).not.toContain(pendingWrite.operation)
     expect(refusal.message).toContain('The pending write may belong to the card already bound to this review session.')
     expect(refusal.message).toContain('pending-writes list')
     expect(await callClaim({ ...claim, operation_id: 'claim-other-card', card_id: otherCard.id })).toEqual(refusal)
