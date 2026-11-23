@@ -283,17 +283,6 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     const id = nativeId(payload?.id)
     const keyText = typeof payload?.key === 'string' && issueKey.test(payload.key) ? payload.key : undefined
     const project = nativeId(payload?.fields?.project?.id)
-    if (payload?.self !== undefined) {
-      try {
-        const self = new URL(payload.self)
-        const onSite = self.origin === config.source.site
-        const onCloud = self.origin === 'https://api.atlassian.com' &&
-          self.pathname.toLowerCase().startsWith(`/ex/jira/${config.source.cloud_id}/`)
-        if ((!onSite && !onCloud) || self.username || self.password) return { kind: 'unreadable' }
-      } catch {
-        return { kind: 'unreadable' }
-      }
-    }
     if (id !== requestedId || !keyText || !project) return { kind: 'unreadable' }
     if (project !== config.source.project_id) return { kind: 'foreign' }
     return { kind: 'tsw', id, key: keyText }

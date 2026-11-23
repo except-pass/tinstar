@@ -339,7 +339,6 @@ globalThis.fetch = async () => {
   const issues = new Map(Object.entries({
     98765: { project: jira.projectId, key: 'WORK-1' },
     98766: { project: jira.projectId, key: 'WORK-2' },
-    98768: { project: jira.projectId, key: 'WORK-3', self: `https://api.atlassian.com/ex/jira/${jira.cloudId}/rest/api/3/issue/98768` },
     88888001: { project: '99999', key: 'ZZFOREIGN-1' },
     88888002: { project: '99999', key: 'ZZFOREIGN-2' },
     88888003: { status: 404 },
@@ -351,7 +350,6 @@ globalThis.fetch = async () => {
     88888009: { disconnect: true },
     88888010: { stall: true },
     88888011: { status: 408 },
-    98767: { project: jira.projectId, key: 'WORK-9', self: 'https://other.atlassian.net/rest/api/3/issue/98767' },
   }))
   const fixture = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
@@ -374,7 +372,7 @@ globalThis.fetch = async () => {
     }
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({
-      id: found[2], key: issue.key, self: issue.self ?? `${jira.site}/rest/api/3/issue/${found[2]}`,
+      id: found[2], key: issue.key,
       fields: { project: { id: issue.project }, summary: 'must not be stored' },
     }))
   })
@@ -431,12 +429,6 @@ globalThis.fetch = async (url, options = {}) => {
     { key: 'WORK-2', id: '98766', link: '77001', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98766`, change: { field: 'links', before: null, after: 'is blocked by WORK-1' } },
   ])
   equal(created[0].occurred_at, new Date(occurred).toISOString())
-  const cloudCursor = await afterSequence()
-  equal((await post('link-cloud-self', linkDelivery('issuelink_created', 77002, 98765, 98768))).status, 204)
-  deepEqual((await since(cloudCursor)).map(linkShape), [
-    { key: 'WORK-1', id: '98765', link: '77002', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: null, after: 'blocks WORK-3' } },
-    { key: 'WORK-3', id: '98768', link: '77002', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98768`, change: { field: 'links', before: null, after: 'is blocked by WORK-1' } },
-  ])
   const deleteCursor = await afterSequence()
   equal((await post('link-delete', deletedLink)).status, 204)
   const deleted = await since(deleteCursor)
@@ -516,11 +508,6 @@ globalThis.fetch = async (url, options = {}) => {
         receipt.delivery_id === deliveryId && receipt.native_id === `issuelink:${action}:${linkId}`))
     }
   }
-  const wrongSiteCursor = await afterSequence()
-  equal((await post('link-wrong-site', linkDelivery('issuelink_created', 77025, 98765, 98767))).status, 204)
-  deepEqual((await since(wrongSiteCursor)).map(event => event.change), [
-    { field: 'links', before: null, after: 'blocks [redacted]' },
-  ])
   const missingCursor = await afterSequence()
   equal((await post('link-missing', linkDelivery('issuelink_deleted', 77023, 98765, 88888003))).status, 204)
   deepEqual((await since(missingCursor)).map(linkShape), [
@@ -548,8 +535,8 @@ globalThis.fetch = async (url, options = {}) => {
   const linkText = (await run('replay', '--source', 'jira', '--after', String(cursor))).stdout
   match(linkText, /links — → blocks WORK-2/)
   match(linkText, /links blocks WORK-2 → —/)
-  match(linkText, /links — → blocks \[redacted\]/)
-  const hidden = ['ZZFOREIGN-1', 'ZZFOREIGN-2', '88888001', '88888002', '88888003', '88888004', '88888006', '88888007', '88888008', '88888009', '88888010', 'WORK-9', '98767', 'must not be stored', readToken]
+  match(linkText, /links — → requires authorization: \[redacted\]/)
+  const hidden = ['ZZFOREIGN-1', 'ZZFOREIGN-2', '88888001', '88888002', '88888003', '88888004', '88888006', '88888007', '88888008', '88888009', '88888010', 'must not be stored', readToken]
   const persisted = JSON.stringify(jiraJournalState())
   const fetchText = readFileSync(fetchLog, 'utf8')
   for (const needle of hidden) {

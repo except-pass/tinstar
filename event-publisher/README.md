@@ -131,7 +131,7 @@ Issue and comment deliveries still work. The publisher does not write to Jira.
 [Atlassian admin webhook registration and signing](https://developer.atlassian.com/cloud/jira/platform/webhooks/#secure-admin-webhooks)
 
 The receiver verifies SHA-256 HMAC over the raw body before JSON decoding. A
-delivery must identify a ticket in the configured project. An issue self URL,
+delivery must identify a ticket in the configured project. In issue and comment webhooks, an issue self URL,
 when supplied, must use the configured site. Jira retries use the same delivery
 ID. The journal commits the delivery receipt and its event group together, with
 additional deduplication for native creation, changelog, comment and issue-link
