@@ -111,8 +111,7 @@ the three Waiting For fields.
 
 Inject the admin webhook secret into `EVENTS_JIRA_WEBHOOK_SECRET` at process
 start from Clavis. Run `events serve` to open the fixed loopback listener at
-`http://127.0.0.1:18573/webhooks/jira`. Set `EVENTS_JIRA_WEBHOOK_PORT` only
-when another process must listen beside the publisher that already owns 18573.
+`http://127.0.0.1:18573/webhooks/jira`.
 Give Jira the approved public HTTPS URL
 that proxies only this pathname, with the request bytes and Jira headers preserved.
 The listener ignores query parameters such as Jira's `triggeredByUser`.
@@ -148,12 +147,15 @@ GETs both issues with `fields=project,key`. It journals `ticket.links.changed`
 on each side whose project id is the configured project. The other side is
 `blocks WORK-2` style text when that side is in the same project, using the
 link type's outward name on the source issue and inward name on the destination
-issue. When the other side is in a different project, or the read is missing,
-forbidden, or otherwise unusable, the text uses the literal `[redacted]` and
-the journal and logs omit that issue's key, summary, and id. A link whose
-sides are both outside the project, or both unreadable, is acknowledged and
-stores no issue identity. A deleted or forbidden issue does not fail the
-delivery. A missing changelog is reported as partial coverage. Custom field changes are identified by their configured Jira field IDs. Hulk journal readers inherit the owner's TSW visibility and may receive restricted comment IDs, times, actions and author account IDs. Restricted comment bodies are omitted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
+issue. When the other side belongs to another project, returns HTTP 404, or
+provides unusable issue data, the text uses the literal `[redacted]` and the
+journal and logs omit that issue's key, summary, and id. When neither side can
+be verified in the configured project, the publisher acknowledges the delivery
+without writing to the journal. If either lookup fails with HTTP 401, 403, 429,
+5xx, or a network error or timeout, the publisher returns HTTP 503 without
+writing to the journal. Link removals caused by deleting a TSW issue are
+outside the scope of link activity coverage.
+A missing changelog is reported as partial coverage. Custom field changes are identified by their configured Jira field IDs. Hulk journal readers inherit the owner's TSW visibility and may receive restricted comment IDs, times, actions and author account IDs. Restricted comment bodies are omitted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
 MCP and UI proof must be correlated with the actual ticket changes.
 
 ```sh

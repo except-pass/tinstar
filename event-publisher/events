@@ -122,7 +122,7 @@ async function collect(journal, { homes, jira }, interval, secret, readToken) {
     const taskCaches = new Map(homes.map(home => [home.id, {}]))
     journal.registerSources(sources, { reconcile: true })
     if (jira && interval) {
-      listener = await startJiraWebhook(journal, jira, secret, readToken, process.env.EVENTS_JIRA_WEBHOOK_PORT)
+      listener = await startJiraWebhook(journal, jira, secret, readToken)
       console.error(`Jira webhook listening on ${listener.url}`)
     }
     if (interval && homes.length) console.error(`Observing ${homes.length} configured home(s) every ${interval} seconds`)

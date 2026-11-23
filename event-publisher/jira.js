@@ -5,16 +5,6 @@ import { createServer } from 'node:http'
 const host = '127.0.0.1'
 const port = 18573
 
-function listenPort(value) {
-  if (value == null || value === '') return port
-  // A second listener, such as this package's tests, cannot take the port the
-  // running publisher already owns. An invalid value fails here instead of
-  // binding an unexpected port.
-  if (!/^[1-9]\d{0,4}$/.test(String(value)) || Number(value) > 65535) {
-    throw new JiraWebhookConfigurationError('EVENTS_JIRA_WEBHOOK_PORT must be a TCP port from 1 to 65535')
-  }
-  return Number(value)
-}
 const webhookPath = '/webhooks/jira'
 const bodyLimit = 1024 * 1024
 const previewLimit = 4096
@@ -270,7 +260,7 @@ function parseLink(body) {
   }
 }
 
-export async function startJiraWebhook(journal, config, secret, readToken, requestedPort) {
+export async function startJiraWebhook(journal, config, secret, readToken) {
   if (typeof secret !== 'string' || !secret.trim()) {
     throw new JiraWebhookConfigurationError('set EVENTS_JIRA_WEBHOOK_SECRET from the Jira admin webhook secret')
   }
@@ -279,8 +269,6 @@ export async function startJiraWebhook(journal, config, secret, readToken, reque
     console.error('Jira issue-link events need EVENTS_JIRA_READ_TOKEN; issuelink_created and issuelink_deleted deliveries will be dropped')
   }
   const key = Buffer.from(secret, 'utf8')
-  const boundPort = listenPort(requestedPort)
-  let readRejected = false
   const redact = value => {
     const hidden = projector(secret)(value)
     return token.length >= 12 && typeof hidden === 'string' ? projector(token)(hidden) : hidden
@@ -342,17 +330,10 @@ export async function startJiraWebhook(journal, config, secret, readToken, reque
     } catch {
       return { kind: 'transient' }
     }
-    if (response.status === 401) {
-      await response.body?.cancel()
-      return { kind: 'unauthorized' }
-    }
-    if (response.status === 429 || response.status >= 500) {
-      await response.body?.cancel()
-      return { kind: 'transient' }
-    }
     if (response.status !== 200) {
       await response.body?.cancel()
-      return { kind: 'unreadable' }
+      const retryable = [401, 403, 429].includes(response.status) || response.status >= 500
+      return { kind: retryable ? 'transient' : 'unreadable' }
     }
     const declared = Number(response.headers.get('content-length'))
     if (Number.isFinite(declared) && declared > bodyLimit) {
@@ -384,18 +365,8 @@ export async function startJiraWebhook(journal, config, secret, readToken, reque
     if (destinationSide.kind === 'tsw' && destinationSide.id !== sourceSide.id) {
       participants.push({ subject: destinationSide, other: sourceSide, name: link.inward })
     }
+    if (!participants.length) return { status: 204 }
     const observedAt = new Date().toISOString()
-    const notice = events => ({ native: `issuelink:${action}:${link.id}`, observedAt, events })
-    if (!participants.length) {
-      if (sourceSide.kind === 'unauthorized' || destinationSide.kind === 'unauthorized') {
-        if (!readRejected) {
-          readRejected = true
-          console.error('Jira issue reads were rejected; issue-link deliveries will be dropped until EVENTS_JIRA_READ_TOKEN is accepted')
-        }
-        return { status: 204 }
-      }
-      return { status: 204, notice: notice([]) }
-    }
     const phrase = (name, other) => {
       const label = typeof name === 'string' && name.trim() ? name.trim().replace(/\s+/g, ' ') : 'linked'
       const target = other.kind === 'tsw' ? other.key : '[redacted]'
@@ -428,7 +399,7 @@ export async function startJiraWebhook(journal, config, secret, readToken, reque
         },
       }
     })
-    return { status: 204, notice: notice(events) }
+    return { status: 204, notice: { native: `issuelink:${action}:${link.id}`, observedAt, events } }
   }
   const respond = (res, status) => {
     res.writeHead(status, status >= 400 ? { Connection: 'close' } : {})
@@ -484,15 +455,15 @@ export async function startJiraWebhook(journal, config, secret, readToken, reque
   // Bound concurrent input buffers when the loopback endpoint is proxied.
   server.maxConnections = 32
   server.setTimeout(10000, socket => socket.destroy())
-  server.listen(boundPort, host)
+  server.listen(port, host)
   try {
     await once(server, 'listening')
   } catch (error) {
-    if (error.code === 'EADDRINUSE') throw new JiraWebhookConfigurationError(`Jira webhook port ${boundPort} is already in use`)
+    if (error.code === 'EADDRINUSE') throw new JiraWebhookConfigurationError(`Jira webhook port ${port} is already in use`)
     throw error
   }
   return {
-    url: `http://${host}:${boundPort}${webhookPath}`,
+    url: `http://${host}:${server.address().port}${webhookPath}`,
     close: () => new Promise(resolve => {
       server.close(resolve)
       server.closeAllConnections()
