@@ -112,7 +112,7 @@ async function pause(ms, signal) {
   }
 }
 
-async function collect(journal, { homes, jira }, interval, secret) {
+async function collect(journal, { homes, jira }, interval, secret, readToken) {
   const controller = signalController()
   let scratch, listener
   try {
@@ -122,7 +122,7 @@ async function collect(journal, { homes, jira }, interval, secret) {
     const taskCaches = new Map(homes.map(home => [home.id, {}]))
     journal.registerSources(sources, { reconcile: true })
     if (jira && interval) {
-      listener = await startJiraWebhook(journal, jira, secret)
+      listener = await startJiraWebhook(journal, jira, secret, readToken)
       console.error(`Jira webhook listening on ${listener.url}`)
     }
     if (interval && homes.length) console.error(`Observing ${homes.length} configured home(s) every ${interval} seconds`)
@@ -291,8 +291,10 @@ async function main() {
   if (interval > 3600) throw new UsageError('--interval must be at most 3600 seconds')
   const config = writer ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
   const secret = process.env.EVENTS_JIRA_WEBHOOK_SECRET
-  // First Mate polling starts subprocesses. Keep Jira signing material in this process.
+  const readToken = process.env.EVENTS_JIRA_READ_TOKEN
+  // First Mate polling starts subprocesses. Keep Jira credentials in this process.
   delete process.env.EVENTS_JIRA_WEBHOOK_SECRET
+  delete process.env.EVENTS_JIRA_READ_TOKEN
   if (config?.jira && command === 'serve' && !secret?.trim()) {
     throw new UsageError('set EVENTS_JIRA_WEBHOOK_SECRET from the Jira admin webhook secret')
   }
@@ -300,7 +302,7 @@ async function main() {
   const journal = new Journal(path, { readOnly: !writer })
   try {
     if (writer) {
-      const healthy = await collect(journal, config, interval, secret)
+      const healthy = await collect(journal, config, interval, secret, readToken)
       if (command === 'observe' && !healthy) process.exitCode = 1
     } else if (command === 'watch') {
       await watch(journal, after, filters, values.json)
