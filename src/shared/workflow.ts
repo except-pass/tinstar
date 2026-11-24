@@ -89,7 +89,6 @@ export const updateWorkSchema = z.discriminatedUnion('kind', [
 ])
 export type UpdateWorkInput = z.infer<typeof updateWorkSchema>
 export const createWorkSchema = z.object({ operation_id: z.string().min(1).max(128), name: label, owner: label, area: label,
-  provider: z.literal('jira').optional(),
   status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'),
   properties: ordinaryPropertiesSchema.omit({ Name: true, Area: true }).optional(), content: contentSchema.optional(),
 }).strict()

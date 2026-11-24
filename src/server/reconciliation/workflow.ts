@@ -506,12 +506,6 @@ export class WorkflowOperations {
     return reconcileDecision(card, notes, fleet ?? await this.fleet(), this.decisionDelivery,
       async (text, marker) => { await this.content.note(cardId, text, marker); this.onRecordedChange?.(cardId) }, await this.proposals?.read(cardId, notes), census)
   }
-  create(input: CreateWorkInput, actor: string): Promise<StartWorkResult> {
-    const parsed = createWorkSchema.safeParse(input)
-    if (!parsed.success) return Promise.resolve({ outcome: 'not-saved', code: 'invalid-input', message: parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '), operation_id: input?.operation_id ?? '', saved_fields: [] })
-    if (parsed.data.provider !== 'jira') return Promise.resolve({ outcome: 'not-saved', code: 'invalid-input', message: 'Jira is the only creation target', operation_id: input.operation_id, saved_fields: [] })
-    return this.serialize('create:jira', parsed.data, actor, () => this.performCreate(parsed.data, actor))
-  }
   /** Owner-only PR handoff for the existing Clawson Notion pickup. */
   createClawsonMerge(input: ClawsonMergeInput, actor: string, prepare: () => Promise<ClawsonMergePlan>): Promise<StartWorkResult> {
     const signature = JSON.stringify({ kind: 'clawson-merge', ...input })
@@ -1104,16 +1098,7 @@ export class WorkflowOperations {
       return partial
     }
   }
-  private async findCreation(actor: string, operationId: string, name: string, provider?: CreateWorkInput['provider']): Promise<WorkCard | undefined> {
-    if (provider === 'jira') {
-      if (!this.reader.jira) throw new Error('Jira is not configured')
-      const result = await this.reader.jira.list()
-      if (result.hasMore) throw new WorkflowError('create-scope-incomplete', 'Jira creation search is incomplete')
-      const matches: WorkCard[] = []
-      for (const card of result.cards) if ((await this.content.sections(card.id)).some(section => workflowNoteHasMarker(section, receiptMarker(actor, operationId)))) matches.push(card)
-      if (matches.length > 1) throw new WorkflowError('create-conflict', 'Multiple Jira issues have this creation receipt; inspect them before continuing')
-      return matches[0]
-    }
+  private async findCreation(actor: string, operationId: string, name: string): Promise<WorkCard | undefined> {
     const config = this.reader.config
     if (!config) throw new Error('Not configured')
     const marker = receiptMarker(actor, operationId)
@@ -1133,53 +1118,40 @@ export class WorkflowOperations {
       cursors.add(nextCursor)
     }
   }
-  private async jiraCreationReadback(card: WorkCard, input: CreateWorkInput, actor: string, handoff?: { properties: Record<string, unknown>; children?: WorkflowCreateBlock[] }): Promise<StartWorkResult> {
-    const values = { ...input.properties, Name: input.name, Owner: input.owner, Area: input.area, Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor, ...handoff?.properties }
-    const fields = Object.entries(values).filter(([name, value]) => this.matches(card, name, this.normalized(card, name, value))).map(([name]) => name)
-    const sections = await this.content.sections(card.id, true)
-    const children = handoff?.children ?? Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value)))
-    const complete = fields.length === Object.keys(values).length && children.every(child => sections.some(section => section.text === createBlockText(child)))
-    return { outcome: complete ? 'saved' : 'partially-saved', code: complete ? 'already-saved' : 'readback-mismatch', message: complete ? 'Existing Jira creation and content confirmed' : 'Existing Jira issue found; only listed fields confirmed. Correct this same issue explicitly; creation was not replayed.', operation_id: input.operation_id, saved_fields: ['card', ...fields], card }
-  }
-  private async performCreate(input: CreateWorkInput, actor: string, handoff?: { signature: string; properties: Record<string, unknown>; children?: WorkflowCreateBlock[] }): Promise<StartWorkResult> {
+  private async performCreate(input: CreateWorkInput, actor: string, handoff: { signature: string; properties: Record<string, unknown>; children: WorkflowCreateBlock[] }): Promise<StartWorkResult> {
     let attempted = false, card: WorkCard | undefined
     const saved: string[] = []
-    const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify(input.provider === 'jira' ? [actor, 'jira', input.operation_id] : [actor, input.operation_id]), signature = handoff?.signature ?? JSON.stringify(input)
+    const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify([actor, input.operation_id]), signature = handoff.signature
     const result = (outcome: StartWorkResult['outcome'], code: string, message: string, saved_fields: string[] = saved): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields, ...(card ? { card } : {}) })
     try {
       const config = this.reader.config
-      if (input.provider === 'jira' ? !this.reader.jira : !config) throw new Error('Requested provider is not configured')
+      if (!config) throw new Error('Requested provider is not configured')
       const previous = await this.creations.get(key)
       if (previous && previous.input !== signature) throw new WorkflowError('operation-conflict', 'operation_id was used with different creation input')
       if (previous?.cardId) {
         saved.push('card'); card = await this.reader.card(previous.cardId, true); this.reader.confirm(card)
-        if (input.provider === 'jira') return this.jiraCreationReadback(card, input, actor, handoff)
         return result('saved', 'already-saved', 'Card creation previously confirmed; current card returned', ['card'])
       }
-      const candidate = await this.findCreation(actor, input.operation_id, input.name, input.provider)
+      const candidate = await this.findCreation(actor, input.operation_id, input.name)
       if (candidate) {
         card = candidate; saved.push('card')
         await this.creations.put(key, signature, card.id)
         card = await this.reader.card(candidate.id, true); this.reader.confirm(card)
         await this.changed({ card, actor, operationId: input.operation_id, properties: {} })
-        if (input.provider === 'jira') return this.jiraCreationReadback(card, input, actor, handoff)
         return result('saved', 'already-saved', 'Card creation already saved', ['card'])
       }
       if (previous) return result('partially-saved', 'create-unconfirmed', 'An earlier creation is unconfirmed and its receipt is not visible in the current name search. Reconcile that card before using a new operation_id; this retry will not create a duplicate.')
-      const schema = input.provider === 'jira' ? this.reader.jira!.schema() : await this.content.request(`data_sources/${config!.dataSourceId}`)
+      const schema = await this.content.request(`data_sources/${config.dataSourceId}`)
       const template = { properties: Object.fromEntries(Object.entries(schema.properties ?? {}).map(([name, value]) => [name, { type: (value as { type: string }).type }])) } as WorkCard
       const values = { ...input.properties, Name: input.name, Owner: input.owner, Area: input.area,
-        Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor, ...handoff?.properties }
+        Status: input.status, 'Last touched by': actor, ...handoff.properties }
       const properties = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, this.property(template, name, value)]))
-      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...(handoff?.children ?? Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value))))]
-      const beforeWrite = async () => {
-        await this.creations.put(key, signature)
-        attempted = true
-      }
-      if (input.provider !== 'jira') await beforeWrite()
+      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...handoff.children]
+      await this.creations.put(key, signature)
+      attempted = true
       let created: Awaited<ReturnType<WorkflowContent['request']>>
       try {
-        created = input.provider === 'jira' ? await this.reader.jira!.create(properties, children.map(child => ({ type: child.type, text: createBlockText(child) })), beforeWrite) : await this.content.request('pages', 'POST', { parent: { type: 'data_source_id', data_source_id: config!.dataSourceId }, properties, children })
+        created = await this.content.request('pages', 'POST', { parent: { type: 'data_source_id', data_source_id: config.dataSourceId }, properties, children })
       } catch (error) {
         if (error instanceof NotionWriteError && error.status < 500) {
           await this.creations.remove(key)
@@ -1187,7 +1159,7 @@ export class WorkflowOperations {
         }
         throw error
       }
-      card = input.provider === 'jira' ? created as WorkCard : notionCard(created)
+      card = notionCard(created)
       saved.push('card')
       await this.creations.put(key, signature, card.id)
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
@@ -1200,7 +1172,6 @@ export class WorkflowOperations {
     } catch (error) {
       if (error instanceof CardLeaseError) return result(saved.length ? 'partially-saved' : 'not-saved', error.lease ? 'card-held' : 'claim-lost', error.message, saved)
       if (error instanceof WorkflowError) return result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message)
-      if (error instanceof JiraMappingError && !attempted) return result('not-saved', 'jira-incompatible', error.message)
       return result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'create-unconfirmed' : 'source-unavailable', saved.length ? 'Card created; only listed steps confirmed saved. Current verification failed; retry identical input to retrieve the existing card.' : attempted ? 'Creation submitted but unconfirmed; retry identical input to find its receipt before creating again' : 'Current source unavailable; card not created')
     }
   }

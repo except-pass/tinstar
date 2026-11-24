@@ -168,7 +168,6 @@ export class JiraAdapter extends JiraClient {
     if (!task || !Array.isArray(task.statuses)) throw new Error('TSSPIKE Task workflow unavailable')
     return task.statuses.map((status: any) => ({ id: String(status.id), name: logicalStatus(String(status.name), status.id) })) as Array<{ id: string; name: string }>
   }
-  schema() { return { properties: Object.fromEntries(Object.entries(fieldTypes).map(([name, type]) => [name, { type }])) } }
   card(raw: Record<string, any>): WorkCard {
     this.assertIssue(raw)
     if (typeof raw.fields.updated !== 'string' || typeof raw.fields.status?.name !== 'string') throw new Error('Incomplete Jira card read')
@@ -244,18 +243,6 @@ export class JiraAdapter extends JiraClient {
     const candidates = body.transitions.filter((t: any) => t.to?.name === name && t.isAvailable !== false && (name !== 'Review' || String(t.to?.id) === readyForReviewStatusId))
     if (candidates.length !== 1) throw new JiraMappingError(`Jira status ${name} has no unique available native transition`)
     return String(candidates[0].id)
-  }
-  async create(properties: Record<string, unknown>, sections: Array<{ type: string; text: string }>, beforeWrite?: () => Promise<void>) {
-    const payload = this.payload(properties)
-    if (payload.status && !(await this.statuses()).some(status => status.name === payload.status)) throw new JiraMappingError(`TSSPIKE Task lacks native status ${payload.status}`)
-    await this.project() // exact scope evidence immediately before issue creation
-    await beforeWrite?.()
-    const created = await this.request('issue', 'POST', { fields: { ...payload.fields, project: { id: '10638' }, issuetype: { id: '10582' },
-      labels: [JIRA_SYNTHETIC_LABEL], description: { type: 'doc', version: 1, content: sections.map(section => this.sectionNode(section)) } }, properties: payload.properties })
-    const id = jiraCardPrefix + created.id
-    await this.issue(id)
-    if (payload.status) await this.patch(id, { Status: { status: { name: payload.status } } })
-    return this.read(id)
   }
   async list(background = false) {
     const fetcher = background ? this.backgroundFetcher : this.parallelFetcher
