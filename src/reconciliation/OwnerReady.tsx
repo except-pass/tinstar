@@ -11,11 +11,11 @@ const mergeLabel = (merge: OwnerMergeAsk) => {
   return 'Needs verification'
 }
 
-function Sources({ sources }: { sources: OwnerRequestSource[] }) {
+function Sources({ sources }: { sources: Array<OwnerRequestSource & { requestedHead?: string | null }> }) {
   return <ul className="owner-ready-sources">{sources.map(source =>
     <li key={`${source.kind}:${source.id}`}>{source.url
       ? <a href={source.url} target="_blank" rel="noreferrer">{source.label}</a>
-      : source.label}</li>)}</ul>
+      : source.label}{source.requestedHead && <> · Requested <code>{source.requestedHead}</code></>}</li>)}</ul>
 }
 
 export function OwnerReady({ read }: { read: OwnerReadyRead }) {
@@ -50,7 +50,6 @@ export function OwnerReady({ read }: { read: OwnerReadyRead }) {
       <ul>{group.merges.map(merge => <li key={merge.url ?? merge.sources[0]?.id}>
         {merge.url ? <a href={merge.url} target="_blank" rel="noreferrer">{merge.url}</a> : 'Merge request · PR URL unverified'}
         <div>{mergeLabel(merge)}</div>
-        {merge.requestedHeads.map(head => <div key={head}>Requested <code>{head}</code></div>)}
         {merge.live?.head && <div>Live <code>{merge.live.head}</code></div>}
         <Sources sources={merge.sources} />
       </li>)}

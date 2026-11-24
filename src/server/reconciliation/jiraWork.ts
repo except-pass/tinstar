@@ -24,7 +24,7 @@ type OwnerIssue = {
   id: string; key: string; url: string; repository: string | null
   decisions: ReturnType<typeof readJiraDecisions>
   reviewAssigned: boolean
-  merges: Array<NonNullable<ReturnType<typeof mergePublication>> & { comment: string; createdAt: number; unverified?: boolean }>
+  merges: Array<NonNullable<ReturnType<typeof mergePublication>> & { comment: string; createdAt: number }>
   notesUnavailable?: boolean
   reviewAfter?: number
   readComments?: Set<string>
@@ -74,7 +74,7 @@ export class JiraWork extends JiraClient {
       if (!issue.notesUnavailable) return issue
       const retained = (known.get(issue.id)?.merges ?? []).filter(merge =>
         merge.createdAt > (issue.reviewAfter ?? -Infinity) && !issue.readComments?.has(merge.comment))
-      return { ...issue, merges: [...issue.merges, ...retained.map(merge => ({ ...merge, unverified: true }))] }
+      return { ...issue, merges: [...issue.merges, ...retained] }
     })
   })
   constructor(private readonly config: JiraWorkConfig, private readonly root: string, fetcher?: (input: string, init?: RequestInit) => Promise<Response>) {
@@ -243,12 +243,21 @@ export class JiraWork extends JiraClient {
           issue.reviewAfter = after
           const seen = issue.readComments = new Set<string>()
           let startAt = 0
+          let total: number | undefined
+          let boundary: Awaited<ReturnType<JiraWork['notes']>>['comments'][number] | undefined
           for (let page = 0; page < 5; page++) {
             const notes = await this.notes(id, startAt, signal)
+            const overlaps = total !== undefined && isDeepStrictEqual(notes.comments[0], boundary)
+            let shifted = total !== undefined && (notes.total !== total || !overlaps)
+            const comments = overlaps ? notes.comments.slice(1) : notes.comments
+            total = notes.total
             let reachedPreviousCycle = false
-            for (const note of notes.comments) {
+            for (const note of comments) {
               const createdAt = Date.parse(note.created_at)
-              if (!nativeId(note.id) || !Number.isFinite(createdAt) || seen.has(note.id)) throw new Error('Incomplete Jira comment history')
+              if (!nativeId(note.id) || !Number.isFinite(createdAt) || seen.has(note.id)) {
+                shifted = true
+                continue
+              }
               seen.add(note.id)
               if (createdAt <= after) reachedPreviousCycle = true
               if (!note.body || createdAt <= after) continue
@@ -257,8 +266,12 @@ export class JiraWork extends JiraClient {
                 if (pull) issue.merges.push({ ...pull, comment: note.id, createdAt })
               }
             }
-            startAt += notes.comments.length
-            if (startAt >= notes.total || reachedPreviousCycle) return
+            if (shifted) throw new Error('Jira comment history shifted between pages')
+            const end = startAt + notes.comments.length
+            if (end >= total || reachedPreviousCycle) return
+            if (!comments.length) throw new Error('Incomplete Jira comment history')
+            boundary = notes.comments.at(-1)
+            startAt = end - 1
           }
           throw new Error('Jira comment history exceeds the read budget')
         } catch {
