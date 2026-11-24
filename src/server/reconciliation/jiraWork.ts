@@ -537,11 +537,8 @@ export class JiraWork extends JiraClient {
   private async postTransitionAudit(id: string, note: string, deferAudit: boolean, onDispatch?: () => void) {
     const baseline = await this.commentBaseline(id).catch(() => undefined)
     const body = jiraText(note)
-    if (deferAudit) {
-      if ((await this.read(id)).status === 'Canceled') return false
-    } else {
-      await this.checkProject(id)
-    }
+    await this.checkProject(id)
+    if (deferAudit && (await this.read(id)).status === 'Canceled') return false
     onDispatch?.()
     const posted = await this.request(`issue/${id}/comment`, 'POST', { body }).catch(error => {
       if (isWriteRejection(error)) {
