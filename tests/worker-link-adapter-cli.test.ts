@@ -38,6 +38,17 @@ describe('coordinator adapter CLI', () => {
     const { stdout } = await cli([...args, '--card', 'TSW-1'])
     expect(JSON.parse(stdout)).toMatchObject({ mode: 'apply', stopped: false, tsw: [] })
   })
+  it('rejects mixed-board apply before opening the audit file', async () => {
+    const dir = await mkdtemp(resolve('.tinstar-adapter-cli-')); dirs.push(dir)
+    const audit = join(dir, 'audit.jsonl')
+    await expect(cli([
+      '--config-home', dir, '--audit-file', audit, '--apply', '--max-cards', '1',
+      '--card', '40f50ce6d42281b08375d793820e2e40', '--card', 'TSW-1',
+    ])).rejects.toMatchObject({
+      code: 1, stderr: '--apply cannot mix Notion page IDs and TSW keys in --card. Run each board separately.\n',
+    })
+    await expect(readFile(audit, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
   it('exposes usage through the executable interface', async () => {
     const { stdout } = await cli(['--help'])
     expect(stdout).toContain('--apply --max-cards 1..5 --write-token-file FILE')

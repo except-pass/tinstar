@@ -29,6 +29,11 @@ async function main() {
   if (values.card?.some(key => !tswKey(key) && !notionPageId(key))) throw new Error('Invalid --card id')
   const notionCards = values.card?.filter(card => !tswKey(card))
   const tswCards = values.card?.filter(card => !!tswKey(card))
+  if (values.apply && notionCards?.length && tswCards?.length) {
+    console.error('--apply cannot mix Notion page IDs and TSW keys in --card. Run each board separately.')
+    process.exitCode = 1
+    return
+  }
   const root = values['config-home'] ?? getConfigRoot()
   const config = loadReconciliationConfig(root)
   const sources = new ReconciliationSources(config, fetch, undefined, root)
