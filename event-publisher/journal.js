@@ -200,9 +200,7 @@ export class Journal {
       INSERT INTO sources (source_id, description) VALUES (?, ?)
       ON CONFLICT(source_id) DO UPDATE SET description = excluded.description
       WHERE json_extract(sources.description, '$.mode') IS json_extract(excluded.description, '$.mode')
-        OR (sources.source_id = ? AND json_extract(sources.description, '$.mode') IS NULL
-            AND json_extract(excluded.description, '$.mode') = 'live')
-    `).run(source.source_id, JSON.stringify(source), migrationSourceId)
+    `).run(source.source_id, JSON.stringify(source))
     // Otherwise fixture state could generate a fabricated live transition.
     if (!result.changes) throw new JournalConfigurationError('use a separate journal for live and fixture baselines')
   }
@@ -237,7 +235,7 @@ export class Journal {
     const rows = this.db.prepare(`
       SELECT sequence, envelope FROM events JOIN sources USING (source_id)
       WHERE source_id = ?
-        AND json_extract(envelope, '$.source.mode') = COALESCE(json_extract(description, '$.mode'), 'live')
+        AND json_extract(envelope, '$.source.mode') = json_extract(description, '$.mode')
       ORDER BY sequence
     `)
     for (const row of rows.iterate(migrationSourceId)) yield readEvent(row)
