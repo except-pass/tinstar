@@ -116,7 +116,7 @@ export function fleetObservation(source: FleetSource) {
       last_event: fields(record(record(task.paths).status_log).last_event, ['state', 'note', 'raw', 'age_seconds']),
       lastEventText: text(record(task.hints).last_event_text),
       pr: fields(task.pr, ['url', 'source', 'head']),
-      ...tswSnapshot(record(task.backlog), 'task.backlog.body_lines'),
+      ...tswSnapshot(record(task.backlog), 'task.backlog.body_lines', task.yolo),
       backlog: { ...fields(task.backlog, ['id', 'title', 'state', 'hold_reason', 'blocked_by', 'hold_until']), ...readinessFields(task.backlog) },
     }))
     const backlog = snapshot.backlog?.records

@@ -363,7 +363,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     Object.defineProperty(req.socket, 'remoteAddress', { value: '127.0.0.1' })
     req.headers['tailscale-user-login'] = author
     schedule.mockClear()
-    const queue = await sources.queue(req, undefined, true, 'read', true)
+    const queue = await sources.queue(req, undefined, true, 'read', 'full')
     expect(queue.items).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'merge',
       evidence: expect.arrayContaining([expect.objectContaining({ kind: 'pull-request', url: moving })]) })]))
     expect(merge(queue.ownerReady!, moving)?.unverifiedRequest).toBe(true)
@@ -518,12 +518,12 @@ it('rotates five owner histories beyond the ordinary twenty without displacing q
     expect(ordinary).toHaveLength(20)
     const remaining = board.cards.map(card => card.id).filter(id => !ordinary.includes(id))
     expect(remaining).toHaveLength(6)
-    const first = await sources.queue(undefined, undefined, true, 'read', true)
+    const first = await sources.queue(undefined, undefined, true, 'read', 'full')
     expect(historyReads.splice(0)).toEqual([...ordinary, ...remaining.slice(0, 5)])
     const lastQuestion = `Review ${remaining[5]}?`
     const questions = (result: typeof first) => result.ownerReady?.repositories.flatMap(group => group.decisions.map(decision => decision.question))
     expect(questions(first)).not.toContain(lastQuestion)
-    const next = await sources.queue(undefined, undefined, true, 'read', true)
+    const next = await sources.queue(undefined, undefined, true, 'read', 'full')
     expect(historyReads).toEqual([...ordinary, remaining[5], ...remaining.slice(0, 4)])
     expect(questions(next)).toContain(lastQuestion)
   } finally { await rm(root, { recursive: true, force: true }) }
