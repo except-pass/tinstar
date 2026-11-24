@@ -19,7 +19,7 @@ export async function readRelayConfig(path) {
   } catch {
     throw new RelayConfigurationError('cannot read the JetStream relay configuration as JSON')
   }
-  const { name, server, stream, eventTypes, startAfter = 0 } = config ?? {}
+  const { name, server, stream, eventTypes } = config ?? {}
   const endpoint = typeof server === 'string' && URL.parse(server)
   if (typeof name !== 'string' || !namePattern.test(name) || typeof stream !== 'string' || !namePattern.test(stream)) {
     throw new RelayConfigurationError('name and stream must use letters, digits, hyphens or underscores')
@@ -33,10 +33,7 @@ export async function readRelayConfig(path) {
       eventTypes.some(type => typeof type !== 'string' || !eventTypePattern.test(type))) {
     throw new RelayConfigurationError('eventTypes must list exact journal event types')
   }
-  if (!Number.isSafeInteger(startAfter) || startAfter < 0) {
-    throw new RelayConfigurationError('startAfter must be a nonnegative journal sequence')
-  }
-  return { name, server, stream, eventTypes: new Set(eventTypes), startAfter }
+  return { name, server, stream, eventTypes: new Set(eventTypes) }
 }
 
 export function factTopic(event) {

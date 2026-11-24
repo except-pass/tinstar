@@ -9,7 +9,7 @@ import { Journal, RelayCheckpointError } from '../journal.js'
 const observedAt = '2026-11-24T20:00:00.000Z'
 const source = { provider: 'jira', source_id: 'jira:cloud:test:project:123' }
 const subject = { type: 'ticket', id: 'jira:ticket:test:456' }
-const config = { name: 'test-relay', stream: 'TEST_FACTS', startAfter: 0,
+const config = { name: 'test-relay', stream: 'TEST_FACTS',
   eventTypes: new Set(['ticket.status.changed', 'mate.migration.recorded']) }
 const signal = new AbortController().signal
 
@@ -47,6 +47,7 @@ test('lost publish acknowledgment preserves the journal ID and cannot skip a fac
   }
   try {
     const cursor = journal.registerRelay(config)
+    equal(cursor, 0)
     await rejects(publishPage(journal, config, { publish }, cursor, signal), /journal #2/)
     equal(journal.relayStatus()[0].sequence, 1)
     journal.close()

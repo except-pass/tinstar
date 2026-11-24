@@ -73,12 +73,10 @@ publisher change that covers the event type and its audience. Fixture events
 always stay local. The relay name also sets the reply prefix
 `_INBOX.tinstar_relay.<name>` and must agree with the broker permission.
 
-`startAfter` is the exclusive sequence for a new relay, defaulting to zero.
-Record the current journal tip before rollout and set it explicitly if the
-approved cutover starts there. An existing named relay continues from its
-saved cursor. It skips events excluded by the selection. When changing event
-coverage, select an intentional historical cursor with a new relay name and
-provision its reply permission if earlier matching events should be sent.
+A new relay replays eligible events from sequence zero. An existing named
+relay continues from its saved cursor. It skips events excluded by the
+selection. To replay earlier matching events after expanding coverage, use
+a new relay name and provision its reply permission.
 
 ### Verify the permanent cutover
 
@@ -157,7 +155,7 @@ replay and recovery within the stream's 30-day and 256 MiB limits. Use the
 journal for replay beyond that window.
 
 When replacing the broker or stream, stop the named relay, provision the
-replacement stream and update the relay config with `startAfter` set to `0`.
+replacement stream and update the relay config for the replacement destination.
 As the journal owner on Hulk, remove only that relay's checkpoint from the
 live journal, then restart the relay to replay eligible facts from zero.
 For the shipped `hulk-jira` relay, run:

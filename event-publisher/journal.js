@@ -826,15 +826,12 @@ export class Journal {
     return this.db.prepare('SELECT COALESCE(MAX(sequence), 0) AS n FROM events').get().n
   }
 
-  registerRelay({ name, stream, startAfter }) {
+  registerRelay({ name, stream }) {
     try {
-      if (startAfter > this.tail()) {
-        throw new JournalConfigurationError('startAfter exceeds the current journal tip')
-      }
       this.db.prepare(`
-        INSERT INTO jetstream_relays (name, stream, sequence) VALUES (?, ?, ?)
+        INSERT INTO jetstream_relays (name, stream, sequence) VALUES (?, ?, 0)
         ON CONFLICT(name) DO NOTHING
-      `).run(name, stream, startAfter)
+      `).run(name, stream)
       const row = this.db.prepare('SELECT stream, sequence FROM jetstream_relays WHERE name = ?').get(name)
       if (row.stream !== stream) {
         throw new JournalConfigurationError('use a distinct relay name when changing the destination stream')
