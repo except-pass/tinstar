@@ -54,7 +54,7 @@ describe('Decisions', () => {
     expect(witness).toHaveAttribute('href', ticket + '?focusedCommentId=21')
     expect(witness.closest('li')).toHaveTextContent(requested)
     expect(screen.getByText(current)).toBeVisible()
-    expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/api/reconciliation/owner-ready?recheck=1'), expect.anything())
+    expect(fetcher).toHaveBeenCalledWith(expect.stringMatching(/\/api\/reconciliation\/owner-ready$/), expect.anything())
   })
 
   it('retains the exact shared-card request across reload while the queue loads', async () => {
