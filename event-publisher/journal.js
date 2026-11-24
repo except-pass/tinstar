@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS release_tag_evidence (
   next_attempt_at TEXT NOT NULL,
   detail TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS jetstream_relays (
+  name TEXT PRIMARY KEY,
+  stream TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  health TEXT NOT NULL DEFAULT 'pending',
+  reason TEXT,
+  last_ack_at TEXT,
+  updated_at TEXT
+);
 `
 
 function freshFleet(read, window, previousGeneration, allowSameRead = false) {
@@ -178,6 +187,7 @@ function releaseTagEvent(subject, tag, sha, observed_at, event_type, label, chan
 }
 
 export class JournalConfigurationError extends Error {}
+export class RelayCheckpointError extends Error {}
 
 export class Journal {
   constructor(path, { readOnly = false } = {}) {
@@ -814,6 +824,41 @@ export class Journal {
 
   tail() {
     return this.db.prepare('SELECT COALESCE(MAX(sequence), 0) AS n FROM events').get().n
+  }
+
+  registerRelay({ name, stream }) {
+    try {
+      this.db.prepare(`
+        INSERT INTO jetstream_relays (name, stream, sequence) VALUES (?, ?, 0)
+        ON CONFLICT(name) DO NOTHING
+      `).run(name, stream)
+      const row = this.db.prepare('SELECT stream, sequence FROM jetstream_relays WHERE name = ?').get(name)
+      if (row.stream !== stream) {
+        throw new JournalConfigurationError('use a distinct relay name when changing the destination stream')
+      }
+      return row.sequence
+    } catch (error) {
+      if (error instanceof JournalConfigurationError) throw error
+      throw new RelayCheckpointError(`JetStream relay ${name} could not initialize or reload checkpoint`)
+    }
+  }
+
+  updateRelay(name, sequence, health, reason = null, ackAt = null) {
+    try {
+      this.db.prepare(`
+        UPDATE jetstream_relays
+        SET sequence = MAX(sequence, ?), health = ?, reason = ?,
+            last_ack_at = COALESCE(?, last_ack_at), updated_at = ?
+        WHERE name = ?
+      `).run(sequence, health, reason, ackAt, new Date().toISOString(), name)
+    } catch {
+      throw new RelayCheckpointError(`JetStream relay ${name} could not save checkpoint at journal #${sequence} (state ${health})`)
+    }
+  }
+
+  relayStatus() {
+    const present = this.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'jetstream_relays'").get()
+    return present ? this.db.prepare('SELECT * FROM jetstream_relays ORDER BY name').all() : []
   }
 
   inspect(id) {

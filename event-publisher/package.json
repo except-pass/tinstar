@@ -3,7 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13.0" },
-  "scripts": { "test": "node --test" },
-  "dependencies": { "@toon-format/toon": "^2.3.1" }
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@nats-io/jetstream": "^3.5.0",
+    "@nats-io/transport-node": "^3.5.0",
+    "@toon-format/toon": "^2.3.1"
+  }
 }

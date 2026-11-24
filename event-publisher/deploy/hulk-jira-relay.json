@@ -1,0 +1,6 @@
+{
+  "name": "hulk-jira",
+  "server": "nats://127.0.0.1:14222",
+  "stream": "TINSTAR_FACTS",
+  "eventTypes": ["ticket.status.changed"]
+}
