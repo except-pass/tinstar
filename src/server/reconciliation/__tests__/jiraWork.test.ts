@@ -78,6 +78,8 @@ async function fixture(projectId = config.projectId) {
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
+  const attachments = new Map<string, unknown>()
+  let dropCompletionAfterRead = false
   const history = new Map<string, Array<{ id: string; created: string; author: { accountId: string }; items: unknown[] }>>()
   const appendHistory = (id: string, items: unknown[], accountId = 'fixture-service') => {
     const entries = history.get(id) ?? []
@@ -92,7 +94,7 @@ async function fixture(projectId = config.projectId) {
   let nextIssue = 60001, nextLink = 8001
   const make = (id: string, key: string, project: string, fields: Record<string, any> = {}) => ({
     id, key, fields: { summary: 'Fixture', status: { name: 'Backlog' }, updated: '2026-01-01T12:00:00Z',
-      issuetype: { id: config.issueTypes.Task }, description: null, project: { id: project }, assignee: null,
+      issuetype: { id: config.issueTypes.Task }, description: null, attachment: [], project: { id: project }, assignee: null,
       ...Object.fromEntries(Object.values(config.fields).map(field => [field, null])), ...fields },
     properties: Object.create(null) as Record<string, unknown>, comments: [] as any[],
   })
@@ -106,7 +108,7 @@ async function fixture(projectId = config.projectId) {
     const statusName = (name: string) => english ? name : localizedStatuses.get(name) ?? name
     const path = url.pathname.replace(`/ex/jira/${cloudId}/rest/api/3/`, '')
     const method = init?.method ?? 'GET'
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    const body = init?.body && !(init.body instanceof FormData) ? JSON.parse(String(init.body)) : undefined
     requests.push({ method, path, fields: url.searchParams.get('fields') })
     if (controls.beforeWrite === `${method} ${path}`) {
       controls.beforeWrite = ''
@@ -136,6 +138,15 @@ async function fixture(projectId = config.projectId) {
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
       if (controls.loseCreate) { controls.loseCreate = false; throw new Error('Dropped response containing fixture-scoped-service-token') }
       return response({ id, key: issue.key }, 201)
+    }
+    if (path.startsWith('attachment/content/')) {
+      const id = path.split('/')[2]!
+      const body = attachments.get(id) as { sections: Array<{ text: string }> }
+      if (dropCompletionAfterRead && body.sections.some(section => section.text.startsWith('Tin Star contract complete: '))) {
+        dropCompletionAfterRead = false
+        for (const issue of issues.values()) issue.fields.attachment = issue.fields.attachment.filter((file: { id: string }) => file.id !== id)
+      }
+      return response(body)
     }
     if (path === 'issueLinkType') return response({ issueLinkTypes: types })
     if (path === 'issueLink' && method === 'POST') {
@@ -170,6 +181,13 @@ async function fixture(projectId = config.projectId) {
       })
       const status = { ...issue.fields.status, name: statusName(issue.fields.status.name) }
       return response({ ...issue, fields: { ...issue.fields, status, issuelinks } })
+    }
+    if (part === 'attachments' && method === 'POST') {
+      const file = (init?.body as FormData).get('file') as File
+      const id = String(attachments.size + 1)
+      attachments.set(id, JSON.parse(await file.text()))
+      issue.fields.attachment.push({ id, filename: file.name })
+      return response([{ id }], 201)
     }
     if (part?.startsWith('properties/') && method === 'GET') {
       const key = part.slice('properties/'.length)
@@ -262,7 +280,8 @@ async function fixture(projectId = config.projectId) {
     return { client, call }
   }
   const jira = () => new JiraWork(parsed.jiraWork!, root, fetcher)
-  return { root, connect, requests, controls, issues, links, historicalKeys, appendHistory, assignees, jira }
+  return { root, connect, requests, controls, issues, links, historicalKeys, appendHistory, assignees, jira,
+    dropCompletionOnRead: () => { dropCompletionAfterRead = true } }
 }
 
 it('publishes update_work schemas that accept Notion IDs for shared updates', async () => {
@@ -788,6 +807,107 @@ it('starts a completed Backlog issue before completing it with its published pul
   expect((await f.jira().readTswCard('TSW-1')).status).toBe('Done')
 })
 
+it('creates Jira work by default through the advertised MCP tool', async () => {
+  const f = await fixture()
+  const { client, call } = await f.connect()
+  const creation = (await client.listTools()).tools.find(tool => tool.name === 'create_work')!
+  expect(creation.description).toContain('Jira TSW')
+  expect(creation.description).not.toContain('Notion')
+  expect(await call('create_work', { operation_id: 'default-provider', name: 'Review fixture coverage' }))
+    .toMatchObject({ outcome: 'saved', card: { status: 'Backlog', name: 'Review fixture coverage' } })
+  expect(f.requests.filter(({ method, path }) => method === 'POST' && path === 'issue')).toHaveLength(1)
+})
+
+it.each([false, true])('records and queues a verified Jira handoff after create (lost reply: %s)', async loseCreate => {
+  const f = await fixture()
+  f.controls.loseCreate = loseCreate
+  const first = await f.connect()
+  const input = {
+    submission_id: 'approval', target: { external_ref: 'fixture:approval' }, title: 'Verify handoff', area: 'Engineering', owner: 'Avery',
+    objective: 'Verify native handoff', spec_markdown: '## Exact approved text\n\n| Words | Spacing |\n| A |   B |\n🧪'.repeat(200),
+    acceptance_criteria: ['Read back every chunk'], decisions: [], forbidden_approaches: [], references: [],
+  }
+  const handoff = (await first.client.listTools()).tools.find(tool => tool.name === 'submit_handoff')!
+  expect(handoff.description).toContain('create a Jira TSW ticket')
+  expect(handoff.description).not.toContain('Notion')
+  const validate = addFormats(new Ajv({ strict: false })).compile(handoff.inputSchema)
+  expect(validate(input)).toBe(true)
+  const nativeCandidate = { ...input, target: { ...input.target, candidate_ids: ['jira:sample.atlassian.net:10001:60001'] } }
+  expect(validate(nativeCandidate)).toBe(false)
+  expect(await first.client.callTool({ name: 'submit_handoff', arguments: nativeCandidate })).toMatchObject({ isError: true })
+  const nativeId = nativeCandidate.target.candidate_ids[0]
+  const existingTarget = { ...input, target: { card_id: nativeId } }
+  expect(validate(existingTarget)).toBe(true)
+  const nativeParent = { ...input, target: { card_id: 'a'.repeat(32) }, parent_card_id: nativeId }
+  expect(validate(nativeParent)).toBe(false)
+  expect(await first.client.callTool({ name: 'submit_handoff', arguments: nativeParent })).toMatchObject({ isError: true })
+  for (const provider of ['jira', 'notion']) {
+    const argumentsWithProvider = { ...input, target: { ...input.target, provider } }
+    expect(validate(argumentsWithProvider)).toBe(false)
+    const badTarget = await first.client.callTool({ name: 'submit_handoff', arguments: argumentsWithProvider })
+    expect(badTarget).toMatchObject({ isError: true })
+  }
+  expect(f.requests.filter(({ method, path }) => method === 'POST' && path === 'issue')).toHaveLength(0)
+  const firstAttempt = await first.call('submit_handoff', input)
+  if (loseCreate) expect(firstAttempt).toMatchObject({ outcome: 'partially-saved' })
+  else {
+    expect(firstAttempt).toMatchObject({ outcome: 'saved', record: { state: 'created' } })
+    expect(f.requests.filter(({ path }) => path.startsWith('attachment/content/'))).toHaveLength(
+      f.requests.filter(({ method, path }) => method === 'POST' && path.endsWith('/attachments')).length)
+  }
+  const { call } = await f.connect()
+  const result = await call('submit_handoff', input)
+  expect(result).toMatchObject({ outcome: 'saved', record: { full_spec_readback: 'verified' }, assignment: { status: 'Queued', owner: 'Avery' } })
+  const read = await call('get_work', { card_id: result.record.card_id, implementation_contract: { limit: 20 } })
+  expect(read.card.description).toBe('Read the verified implementation contract through Tin Star before starting work.')
+  expect(read.implementation_contract).toMatchObject({ verified: true, manifest: { hash: result.record.spec_hash } })
+  const exact = read.implementation_contract.chunks.map((chunk: { text: string }) => chunk.text).join('')
+  expect(exact).toContain(`# Objective\n${input.objective}`)
+  expect(exact).toContain(input.spec_markdown)
+  expect(exact).toContain(input.area)
+  expect(f.requests.filter(({ method, path }) => method === 'POST' && path === 'issue')).toHaveLength(1)
+  const completion = f.requests.map(({ method, path }) => method === 'POST' && path.endsWith('/attachments')).lastIndexOf(true)
+  const queue = f.requests.findIndex(({ method, path }) => method === 'POST' && path.endsWith('/transitions'))
+  expect(completion).toBeGreaterThan(0)
+  expect(queue).toBeGreaterThan(completion)
+})
+
+it('keeps the external reference claimed after a contradictory Jira creation readback', async () => {
+  const f = await fixture()
+  f.controls.wrongCreate = true
+  const first = await f.connect()
+  const input = {
+    submission_id: 'approval', target: { external_ref: 'fixture:approval' }, title: 'Verify handoff', area: 'Engineering', owner: 'Avery',
+    objective: 'Verify native handoff', spec_markdown: 'Approved spec',
+    acceptance_criteria: ['Read back the contract'], decisions: [], forbidden_approaches: [], references: [],
+  }
+  expect(await first.call('submit_handoff', input)).toMatchObject({ outcome: 'partially-saved' })
+  f.controls.wrongCreate = false
+  const second = await f.connect('Other agent')
+  expect(await second.call('submit_handoff', input)).toMatchObject({ recovery: { code: 'create-unconfirmed' } })
+  expect(f.requests.filter(({ method, path }) => method === 'POST' && path === 'issue')).toHaveLength(1)
+})
+
+it('keeps the handoff in Backlog when the completion marker disappears before verification', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const input = {
+    submission_id: 'approval', target: { external_ref: 'fixture:approval' }, title: 'Verify handoff', area: 'Engineering', owner: 'Avery',
+    objective: 'Verify native handoff', spec_markdown: 'Approved spec',
+    acceptance_criteria: ['Read back the contract'], decisions: [], forbidden_approaches: [], references: [],
+  }
+  f.dropCompletionOnRead()
+  expect(await call('submit_handoff', input)).toMatchObject({
+    outcome: 'partially-saved', recovery: { code: 'contract-incomplete' },
+    record: { full_spec_readback: 'incomplete' }, assignment: { status: 'Backlog' },
+  })
+  expect(f.requests.filter(({ method, path }) => method === 'POST' && path.endsWith('/transitions'))).toHaveLength(0)
+  expect(await call('submit_handoff', input)).toMatchObject({
+    outcome: 'saved', record: { full_spec_readback: 'verified' }, assignment: { status: 'Queued' },
+  })
+  expect(f.requests.filter(({ method, path }) => method === 'POST' && path === 'issue')).toHaveLength(1)
+})
+
 it('uses the existing MCP tools for native ticket edits, decision history, blockers, links and disposition', async () => {
   const f = await fixture()
   const { client, call } = await f.connect()
@@ -799,8 +919,10 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   const validate = addFormats(new Ajv({ strict: false })).compile(schema)
   expect(validate({ provider: 'jira', operation_id: 'schema', name: 'Jira' })).toBe(true)
   expect(validate({ provider: 'jira', operation_id: 'schema', name: 'Jira', owner: 'Avery', area: 'CI', status: 'Queued' })).toBe(false)
-  expect(validate({ operation_id: 'schema', name: 'Notion' })).toBe(false)
-  expect(validate({ operation_id: 'schema', name: 'Notion', owner: 'Avery', area: 'CI' })).toBe(true)
+  expect(validate({ operation_id: 'schema', name: 'Consolidate fixtures' })).toBe(true)
+  expect(validate({ provider: 'notion', operation_id: 'schema', name: 'Consolidate fixtures' })).toBe(false)
+  const rejected = await client.callTool({ name: 'create_work', arguments: { provider: 'notion', operation_id: 'legacy', name: 'Consolidate fixtures' } })
+  expect(rejected).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('Jira is the only creation target') }] })
   const card_id = created.card.id
   const issue = f.issues.get('60001')!
   expect(issue.fields.assignee).toBeNull()
@@ -1079,7 +1201,7 @@ it('checks the live project before fetching moved ticket content or comments', a
   const schema = (await client.listTools()).tools.find(tool => tool.name === 'get_work')!.inputSchema
   const validate = addFormats(new Ajv({ strict: false })).compile(schema)
   expect(validate({ card_id, details: false })).toBe(true)
-  for (const options of [{ lease_token: 'lease' }, { refresh: false }, { implementation_contract: {} }]) {
+  for (const options of [{ lease_token: 'lease' }, { refresh: false }]) {
     expect(validate({ card_id, ...options })).toBe(false)
     const before = f.requests.length
     const result = await client.callTool({ name: 'get_work', arguments: { card_id, ...options } })
@@ -1089,7 +1211,7 @@ it('checks the live project before fetching moved ticket content or comments', a
   expect(validate({ card_id: 'a'.repeat(32), refresh: true, implementation_contract: {} })).toBe(true)
   f.issues.get('60001')!.fields.project = { id: '10002' }
   const before = f.requests.length
-  expect(await call('get_work', { card_id })).toMatchObject({ outcome: 'unavailable' })
+  expect(await call('get_work', { card_id, implementation_contract: {} })).toMatchObject({ outcome: 'unavailable' })
   expect(await call('update_work', { card_id, kind: 'jira_edit', operation_id: 'edit', note: 'Note' })).toMatchObject({ outcome: 'not-saved' })
   expect(await call('transition_work', { card_id, operation_id: 'move', verb: 'Prioritize' })).toMatchObject({ outcome: 'not-saved' })
   expect(await call('link_work', { card_id, operation_id: 'link', action: 'remove', link_id: '8001' })).toMatchObject({ outcome: 'not-saved' })

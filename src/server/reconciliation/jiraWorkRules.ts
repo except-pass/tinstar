@@ -1,10 +1,7 @@
 import { z } from 'zod'
-const jiraIdentity = /^jira:([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net):([1-9]\d*):([1-9]\d*)$/
-export const jiraWorkIdentity = (id: string) => {
-  const match = jiraIdentity.exec(id)
-  return match ? { site: match[1]!, projectId: match[2]!, issueId: match[3]! } : undefined
-}
-export const jiraWorkIdSchema = z.string().regex(jiraIdentity, 'Use an exact Jira card ID')
+import { jiraWorkIdSchema } from '../../shared/workIdentity'
+import { jiraCreationProvider } from '../../shared/workflow'
+export { jiraWorkIdentity, jiraWorkIdSchema } from '../../shared/workIdentity'
 
 export const jiraStatuses = ['Backlog', 'To Do', 'Queued', 'In Progress', 'Decision', 'Waiting For', 'Ready for Review', 'Waiting for Prod Release', 'Verify in Prod', 'Done', 'Canceled'] as const
 const status = z.enum(jiraStatuses)
@@ -68,7 +65,7 @@ const externalBlocker = z.object({
 export type JiraExternalBlocker = z.infer<typeof externalBlocker>
 
 export const jiraCreateSchema = z.object({
-  provider: z.literal('jira'), operation_id: operation, name: singleLine.max(255), owner: singleLine.optional(),
+  provider: jiraCreationProvider.default('jira'), operation_id: operation, name: singleLine.max(255), owner: singleLine.optional(),
   description: multiline.optional(), issue_type: issueType.optional(),
 }).strict()
 export const jiraEditSchema = z.object({

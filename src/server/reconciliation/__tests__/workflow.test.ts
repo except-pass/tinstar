@@ -18,7 +18,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { NotionApi } from '../notionApi'
 import { WorkReader } from '../workReader'
 import { WorkflowOperations } from '../workflow'
-import { NotionWriteError, receiptMarker, WorkflowContent, plainText } from '../workflowContent'
+import { receiptMarker, WorkflowContent, plainText } from '../workflowContent'
 import { FirstmateUpdates } from '../firstmateUpdates'
 import { inboxRequestId } from '../../../shared/ask'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
@@ -179,36 +179,21 @@ describe('one-call approved implementation handoff', () => {
     }
     return { ...f, root, make, workflow: make() }
   }
-  it('creates one fully verified Queued card, records metadata and never invents execution', async () => {
-    const f = await setup(), input = handoffInput()
-    const result = await f.workflow.submitHandoff(input, 'ChatGPT')
-    expect(result).toMatchObject({ outcome: 'saved', record: { state: 'created', full_spec_readback: 'verified' }, assignment: { owner: 'Firstmate', status: 'Queued' }, execution: { state: 'queued', worker: null }, delivery: { state: 'unknown' } })
-    const cardId = (result.record as any).card_id
-    expect((await f.reader.card(cardId)).properties).toMatchObject({ Initiative: { value: 'Tin Star' }, Epic: { value: 'Workflow' }, Area: { value: 'Engineering' } })
-    expect((await f.reader.card(cardId)).properties['First Mate tasks']?.value ?? '').toBe('')
-    const before = { blocks: f.blocks.length, notes: f.comments.length, writes: f.requests.filter(row => row.method !== 'GET').length }
-    expect(await f.make().submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'saved', record: { state: 'already-recorded', card_id: cardId } })
-    expect(f.blocks.length).toBe(before.blocks); expect(f.comments.length).toBe(before.notes)
-    expect(f.requests.filter(row => row.method !== 'GET')).toHaveLength(before.writes)
-    expect(f.requests.filter(row => row.url.endsWith('/pages') && row.method === 'POST')).toHaveLength(1)
-  })
-  it.each(['handoff-external', 'handoff-target'])('retains creation state after publishing %s fails', async binding => {
-    const f = await setup(), input = handoffInput()
-    const put = CreationReceipts.prototype.put
-    let interrupted = false
-    const spy = vi.spyOn(CreationReceipts.prototype, 'put').mockImplementation(async function (this: CreationReceipts, ...args) {
-      await put.apply(this, args)
-      if (!interrupted && JSON.parse(args[0])[0] === binding && args[2]) {
-        interrupted = true
-        throw new Error('process interrupted after binding publication')
-      }
+  it('does not use Notion as a fallback when Jira creation is unavailable', async () => {
+    const f = await setup()
+    expect(await f.workflow.submitHandoff(handoffInput(), 'ChatGPT')).toMatchObject({
+      outcome: 'not-saved', recovery: { code: 'unavailable', message: expect.stringContaining('Jira is the only creation target') },
     })
-    try {
-      expect(await f.workflow.submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'partially-saved' })
-    } finally { spy.mockRestore() }
-    expect(interrupted).toBe(true)
-    expect(await f.make().submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'saved', record: { state: 'created' }, assignment: { status: 'Queued' } })
-    expect(f.requests.filter(row => row.url.endsWith('/pages') && row.method === 'POST')).toHaveLength(1)
+    expect(f.requests.some(row => row.url.endsWith('/pages') && row.method === 'POST')).toBe(false)
+  })
+  it('recovers a legacy external-ref receipt without creating a new ticket', async () => {
+    const f = await setup(), input = handoffInput()
+    f.raw.properties.Status.status.name = 'Backlog'
+    const externalRef = (input.target as { external_ref: string }).external_ref
+    await new CreationReceipts(f.root).put(JSON.stringify(['handoff-external', externalRef]), externalRef, id)
+    const result = await f.workflow.submitHandoff(input, 'ChatGPT')
+    expect(result).toMatchObject({ outcome: 'saved', record: { card_id: id, full_spec_readback: 'verified' } })
+    expect(f.requests.some(row => row.url.endsWith('/pages') && row.method === 'POST')).toBe(false)
   })
   it.each(['Backlog', 'Todo'])('truthfully reports preserved %s assignment separately from contextual delivery', async status => {
     const f = await setup()
@@ -222,7 +207,7 @@ describe('one-call approved implementation handoff', () => {
     expect(f.raw.properties.Status.status.name).toBe(status)
   })
   it('roundtrips a large multipart Markdown/Unicode contract through every paginated reader page', async () => {
-    const f = await setup(), input = handoffInput({ spec_markdown: handoffInput().spec_markdown.repeat(3000) })
+    const f = await setup(), input = handoffInput({ target: { card_id: id }, spec_markdown: handoffInput().spec_markdown.repeat(3000) })
     f.controls.blockPageSize(40)
     const result = await f.workflow.submitHandoff(input, 'ChatGPT')
     expect(result).toMatchObject({ outcome: 'saved', record: { full_spec_readback: 'verified' } })
@@ -281,15 +266,6 @@ describe('one-call approved implementation handoff', () => {
     expect(await f.workflow.submitHandoff(handoffInput({ target: { external_ref: 'ambiguous', candidate_ids: [id] } }), 'ChatGPT')).toMatchObject({ outcome: 'not-saved', recovery: { code: 'needs-target' }, candidates: [{ card_id: id }] })
     expect(f.requests.some(row => row.method === 'PATCH' || row.url.endsWith('/pages') && row.method === 'POST')).toBe(false)
   })
-  it('serializes concurrent retries and reuses a stable external reference under a new submission', async () => {
-    const f = await setup(), input = handoffInput()
-    const results = await Promise.all([f.workflow.submitHandoff(input, 'ChatGPT'), f.workflow.submitHandoff(input, 'ChatGPT')])
-    expect(results.every(result => result.outcome === 'saved')).toBe(true)
-    expect((results[0]!.record as any).card_id).toBe((results[1]!.record as any).card_id)
-    const amendment = { ...input, submission_id: 'another-approved-submission', revision_id: 'second-approval', expected_contract_hash: (results[0]!.record as any).spec_hash, spec_markdown: 'A later full approved contract' }
-    expect(await f.make().submitHandoff(amendment, 'ChatGPT')).toMatchObject({ outcome: 'saved', record: { card_id: (results[0]!.record as any).card_id } })
-    expect(f.requests.filter(row => row.url.endsWith('/pages') && row.method === 'POST')).toHaveLength(1)
-  })
   it.each([true, false])('preserves concurrent direct Notion edits (requested field=%s)', async requested => {
     const f = await setup(), input = handoffInput({ target: { card_id: id } }); let changed = false
     f.controls.onRead(() => {
@@ -315,24 +291,6 @@ describe('one-call approved implementation handoff', () => {
     expect(await f.workflow.submitHandoff({ ...reopened, submission_id: 'explicit-reopen' }, 'ChatGPT')).toMatchObject({ outcome: 'saved', assignment: { status: 'Queued' } })
     expect(f.raw.properties['Waiting For'].rich_text[0].plain_text).toBe('Preserve another request')
   })
-  it('reconciles a lost page creation across restart and rejects changed content under the uncertain submission', async () => {
-    const f = await setup(), input = handoffInput(); f.controls.lostCreate()
-    expect(await f.workflow.submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'partially-saved', recovery: { code: 'create-unconfirmed' } })
-    expect(await f.make().submitHandoff({ ...input, spec_markdown: 'Different' }, 'ChatGPT')).toMatchObject({ recovery: { code: 'submission-conflict' } })
-    expect(await f.make().submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'saved', assignment: { status: 'Queued' } })
-    expect(f.requests.filter(row => row.url.endsWith('/pages') && row.method === 'POST')).toHaveLength(1)
-  })
-  it('does not overwrite or queue a newly created card when its declared fields no longer read back', async () => {
-    const f = await setup(), input = handoffInput(); let changed = false
-    f.controls.onRead(() => {
-      const created = f.pages.get('c'.repeat(32))
-      if (created && !changed) { changed = true; created.properties.Name.title = [{ plain_text: 'Human correction during create' }] }
-    })
-    expect(await f.workflow.submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'partially-saved' })
-    expect(await f.make().submitHandoff(input, 'ChatGPT')).toMatchObject({ recovery: { code: 'creation-readback-mismatch' }, assignment: { status: 'Backlog' } })
-    expect(f.pages.get('c'.repeat(32)).properties.Name.title[0].plain_text).toBe('Human correction during create')
-    expect(f.requests.filter(row => row.url.endsWith('/pages') && row.method === 'POST')).toHaveLength(1)
-  })
   it('reconciles an entirely saved lost append and continues only never-submitted batches after restart', async () => {
     const f = await setup(), input = handoffInput({ target: { card_id: id }, spec_markdown: handoffInput().spec_markdown.repeat(2500) }); f.controls.append('lost')
     expect(await f.workflow.submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'partially-saved', record: { full_spec_readback: 'incomplete' } })
@@ -341,7 +299,10 @@ describe('one-call approved implementation handoff', () => {
     expect(new Set(markers).size).toBe(markers.length)
   })
   it.each(['partial', 'offline'] as const)('never replays an uncertain %s append, and reports confirmed chunks/recovery identities', async failure => {
-    const f = await setup(), input = handoffInput(); f.controls.append(failure)
+    const f = await setup()
+    f.raw.properties.Status.status.name = 'Backlog'
+    const input = handoffInput({ target: { card_id: id }, assignment: { owner: 'Firstmate', status: 'Queued', expected_owner: 'Firstmate', expected_status: 'Backlog' } })
+    f.controls.append(failure)
     const first: any = await f.workflow.submitHandoff(input, 'ChatGPT')
     expect(first).toMatchObject({ outcome: 'partially-saved', record: { full_spec_readback: 'incomplete' } })
     const appendCount = f.requests.filter(row => row.method === 'PATCH' && row.url.includes('/children')).length
@@ -422,7 +383,7 @@ describe('one-call approved implementation handoff', () => {
   it('uses the authenticated MCP facade and exactly one test-bridge pickup, separating delivery from real tracked execution', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
     const f = await setup(), sources = f.sources(f.root)
-    f.pages.delete(id) // Keep the periodic census scoped to this handoff's card.
+    f.raw.properties.Status.status.name = 'Backlog'
     const feed = new FirstmateUpdates(noticeSources(sources), f.root, async () => ({ deliveryEnabled: true }))
     f.workflow.onChange = change => feed.confirmed(change)
     f.workflow.deliveryStatus = (cardId, operationId) => feed.deliveryStatus(cardId, operationId)
@@ -438,7 +399,8 @@ describe('one-call approved implementation handoff', () => {
     const client = new Client({ name: 'handoff-fixture-consumer', version: '1' }); clients.push(client)
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { Authorization: 'Bearer isolated-handoff-fixture-credential-00000' } } }))
     expect((await client.listTools()).tools.some(tool => tool.name === 'submit_handoff')).toBe(true)
-    const input = handoffInput({ spec_markdown: handoffInput().spec_markdown.repeat(2500) })
+    const input = handoffInput({ target: { card_id: id }, spec_markdown: handoffInput().spec_markdown.repeat(2500),
+      assignment: { owner: 'Firstmate', status: 'Queued', expected_owner: f.raw.properties.Owner.select.name, expected_status: 'Backlog' } })
     const call = async (value = input) => {
       const result: any = await client.callTool({ name: 'submit_handoff', arguments: value })
       return JSON.parse(result.content[0].text)
@@ -458,7 +420,8 @@ describe('one-call approved implementation handoff', () => {
     // Model the empty property that Notion includes by default on a real page.
     f.pages.get(cardId).properties['First Mate tasks'] = { type: 'rich_text', rich_text: [] }
     expect(await f.workflow.start({ ...f.native, card_id: cardId }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
-    const revision = { ...input, revision_id: 'r2', expected_contract_hash: first.record.spec_hash, spec_markdown: input.spec_markdown + '\nApproved amendment' }
+    const { assignment: _assignment, ...sameCard } = input
+    const revision = { ...sameCard, revision_id: 'r2', expected_contract_hash: first.record.spec_hash, spec_markdown: input.spec_markdown + '\nApproved amendment' }
     expect(await call(revision)).toMatchObject({ outcome: 'saved', assignment: { status: 'In Progress' }, execution: { state: 'running', worker: { task_id: 'native-task' } } })
     vi.setSystemTime(new Date(Date.now() + 10_001))
     await feed.sweep(true)
@@ -812,6 +775,15 @@ it('uses one policy through authenticated UI, MCP and the existing tunnel, witho
   expect((await remote.listTools()).tools.map(tool => tool.name)).toContain('start_work')
   expect((await remote.listTools()).tools.map(tool => tool.name)).not.toContain('present_view')
   expect(parse(await remote.callTool({ name: 'start_work', arguments: { ...f.external, operation_id: 'tunnel-start' } })).outcome).toBe('saved')
+  f.raw.properties.Owner.select.name = 'Clawson'
+  const pickup = parse(await remote.callTool({ name: 'search_work', arguments: { owner: 'Clawson', statuses: ['In Progress'], refresh: true } }))
+  expect(pickup).toMatchObject({
+    scope: { owner: 'Clawson', statuses: ['In Progress'] },
+    coverage: { intentions: { status: 'fresh', coverage: 'complete' } },
+    records: [{ card: { id } }],
+  })
+  expect(parse(await remote.callTool({ name: 'search_work', arguments: { owner: 'Clawson', statuses: ['Queued'], refresh: true } })).records).toEqual([])
+  f.raw.properties.Owner.select.name = 'Firstmate'
   expect(f.raw.properties['Last touched by'].rich_text[0].text.content).toBe('owner-chatgpt')
   f.raw.properties['Waiting For'].rich_text = []
   for (const update of [
@@ -830,10 +802,10 @@ it('uses one policy through authenticated UI, MCP and the existing tunnel, witho
     expect(ui, JSON.stringify(input)).toMatchObject({ outcome: 'saved' })
     expect(parse(await client.callTool({ name: 'update_work', arguments: input }))).toEqual(ui)
   }
-  const create = { operation_id: 'parity-create', name: 'Created across UI/MCP', owner: 'Firstmate', area: 'Engineering', content: { brief: 'Created with a fixture source' } }
+  const create = { operation_id: 'parity-create', name: 'Fixture work item' }
   const created = parse(await client.callTool({ name: 'create_work', arguments: create }))
-  expect(created).toMatchObject({ outcome: 'saved' })
-  expect(parse(await client.callTool({ name: 'create_work', arguments: create }))).toEqual(created)
+  expect(created).toMatchObject({ outcome: 'not-saved', code: 'unavailable' })
+  expect(f.requests.some(row => row.method === 'POST' && row.url.endsWith('/pages'))).toBe(false)
   expect((await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'X-Tinstar-UI': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'create', input: create }) })).status).toBe(400)
   expect((await remote.listTools()).tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['create_work', 'update_work']))
   const noAuth = await fetch(`${base}/api/reconciliation/mcp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'tools/call', params: { name: 'update_work', arguments: { card_id: id, operation_id: 'unauthorized', kind: 'complete', disposition: 'x', evidence: 'x' } } }) })
@@ -1186,40 +1158,7 @@ describe('remaining shared workflow operations', () => {
     expect(await f.workflow.update(input('park', { disposition: 'Owner deferred further work', status: 'Archived' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
     expect((await f.reader.card(id, true)).properties.Status!.value).toBe('Archived')
   })
-  it('preserves confirmed creation and its receipt after body verification rejection', async () => {
-    for (const status of [403, 429]) {
-      const f = fixture()
-      const root = await mkdtemp(join(tmpdir(), 'workflow-create-readback-')); roots.push(root)
-      const workflow = new WorkflowOperations(f.reader, async () => [], root)
-      const create = { operation_id: `create-readback-${status}`, name: 'Created before read failure', owner: 'Firstmate', area: 'Engineering', status: 'Queued' as const, content: { brief: 'Preserve this card' } }
-      const request = WorkflowContent.prototype.request
-      const spy = vi.spyOn(WorkflowContent.prototype, 'request').mockImplementation(function (this: WorkflowContent, path, method, body) {
-        if (path.startsWith(`blocks/${'c'.repeat(32)}/children?`)) return Promise.reject(new NotionWriteError(status))
-        return request.call(this, path, method, body)
-      })
-      try {
-        expect(await workflow.create(create, 'Owner')).toMatchObject({
-          outcome: 'partially-saved', code: 'create-unconfirmed', card: { id: 'c'.repeat(32) },
-          saved_fields: expect.arrayContaining(['card', 'Name', 'Owner', 'Status', 'Area', 'Last touched by']),
-        })
-      } finally { spy.mockRestore() }
-      f.pages.get('c'.repeat(32)).properties.Name.title = [{ plain_text: 'Human renamed the saved card' }]
-      const restarted = new WorkflowOperations(f.reader, async () => [], root)
-      expect(await restarted.create(create, 'Owner')).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: 'c'.repeat(32) } })
-      expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
-      expect(f.pages.size).toBe(2)
-    }
-  })
-  it('creates a real card with required classification/content and recovers a lost create response across restart', async () => {
-    const f = fixture(); f.controls.lostCreate()
-    const create = { operation_id: 'create-once', name: 'New fixture card', owner: 'Firstmate', area: 'Engineering', status: 'Todo' as const, content: { brief: 'Implement the supported workflow', acceptance_criteria: 'Changes are visible in both interfaces' } }
-    expect(await f.workflow.create(create, 'Owner')).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed' })
-    const restarted = new WorkflowOperations(f.reader, async () => [])
-    expect(await restarted.create(create, 'Owner')).toMatchObject({ outcome: 'saved', card: { id: 'c'.repeat(32), properties: { Status: { value: 'Queued' }, Area: { value: 'Engineering' } } } })
-    expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
-    expect(f.pages.size).toBe(2)
-    expect(await restarted.create({ ...create, owner: '' }, 'Owner')).toMatchObject({ code: 'invalid-input' })
-  })
+
 })
 
 it('rejects partial wait cleanup and removes only the complete selected entry', async () => {

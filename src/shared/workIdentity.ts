@@ -10,3 +10,10 @@ export const isJiraCard = (id: string) => id.startsWith(jiraCardPrefix) && cardI
 export const cardSourceUrl = (id: string) => isJiraCard(id)
   ? `https://fortresspower-jira.atlassian.net/secure/IssueNavigator.jspa?jql=${encodeURIComponent(`id = ${id.slice(jiraCardPrefix.length)}`)}`
   : `https://www.notion.so/${id}`
+
+const jiraIdentity = /^jira:([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net):([1-9]\d*):([1-9]\d*)$/
+export const jiraWorkIdentity = (id: string) => {
+  const match = jiraIdentity.exec(id)
+  return match ? { site: match[1]!, projectId: match[2]!, issueId: match[3]! } : undefined
+}
+export const jiraWorkIdSchema = z.string().regex(jiraIdentity, 'Use an exact Jira card ID')

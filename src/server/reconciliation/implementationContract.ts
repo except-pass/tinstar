@@ -3,6 +3,7 @@ import { CardLeaseError, withSourceOperation } from './cardLeases'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import type { SubmitHandoffInput } from '../../shared/workflow'
 import { heading, paragraph, WorkflowContent, NotionWriteError, type WorkflowCreateBlock, createBlockText } from './workflowContent'
+import { JiraAttachmentPreflightError, JiraWriteError } from './jira'
 import type { HandoffReceiptState } from './workflowReceipts'
 
 export const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
@@ -21,15 +22,16 @@ export interface ContractManifest {
 export class ContractError extends Error {
   constructor(readonly code: string, message: string) { super(message) }
 }
-export function implementationContract(input: SubmitHandoffInput, actor: string) {
+export function implementationContract(input: SubmitHandoffInput, actor: string, jira = false) {
   const revision = input.revision_id ?? 'initial'
   const prefix = `# Objective\n${input.objective}\n\n# Approved specification\n`
   const list = (items: string[]) => items.map((item, index) => `${index + 1}. ${item}`).join('\n')
+  const classification = jira ? `\n# Handoff classification\n${JSON.stringify({ area: input.area, initiative: input.initiative, epic: input.epic, priority: input.priority }, null, 2)}\n` : ''
   const text = prefix + input.spec_markdown + `\n\n# Acceptance criteria\n${list(input.acceptance_criteria)}\n\n# Approved decisions\n${list(input.decisions)}\n\n# Forbidden approaches\n${list(input.forbidden_approaches)}\n\n# Durable references\n${input.references.map(ref => `${ref.description}: ${ref.url}`).join('\n')}\n` +
-    (input.source_conversation ? `\nSource conversation: ${input.source_conversation}\n` : '') +
+    classification + (input.source_conversation ? `\nSource conversation: ${input.source_conversation}\n` : '') +
     (input.parent_card_id ? `\nParent card: ${cardSourceUrl(input.parent_card_id)}\n` : '') +
     (input.ui_prototype ? `\nApproved prototype: ${input.ui_prototype}\nBinding UI acceptance: the approved prototype is the implementation contract. A real screenshot of the first implemented pass must be compared with this prototype before claiming done.\n` : '')
-  // This bound keeps each Notion write and on-demand read finite, without truncation.
+  // Bound contract storage and on-demand reads for both providers without truncating the approved text.
   if (Buffer.byteLength(text, 'utf8') > 1500000) throw new ContractError('contract-too-large', 'Contract exceeds 1,500,000 UTF-8 bytes; submit a smaller explicit revision. Nothing was truncated.')
   const chunks: string[] = []; let part = ''
   for (const char of text) {
@@ -72,7 +74,9 @@ export class ImplementationContracts {
     return { sections, versions, current: approved.at(-1) }
   }
   async read(id: string, options: { revision?: string; offset: number; limit: number }) {
-    const inventory = await this.inventory(id)
+    return this.readInventory(await this.inventory(id), options)
+  }
+  readInventory(inventory: Awaited<ReturnType<ImplementationContracts['inventory']>>, options: { revision?: string; offset: number; limit: number }) {
     const manifest = options.revision ? inventory.versions.find(row => row.version === options.revision) : inventory.current
     if (!manifest) return { outcome: 'unavailable', reason: 'No completed contract with that version', versions: inventory.versions }
     if (inventory.sections.filter(block => block.text === completeText(manifest)).length !== 1)
@@ -110,7 +114,7 @@ export class ImplementationContracts {
     // An uncertain append is never repeated. A retry first locates every block
     // in that batch; only then can subsequent, never-submitted batches continue.
     if (state.pending?.length) {
-      if (!state.pending.every(hash => inventory.sections.filter(block => digest(block.text) === hash).length === 1)) throw new ContractError('append-unconfirmed', 'An earlier append remains uncertain. Inspect confirmed block IDs and the pending batch; retry the same ID after Notion settles. Do not create another task or automatically repeat that append.')
+      if (!state.pending.every(hash => inventory.sections.filter(block => digest(block.text) === hash).length === 1)) throw new ContractError('append-unconfirmed', 'An earlier append remains uncertain. Inspect confirmed block IDs and the pending batch; retry the same ID after the source settles. Do not create another task or automatically repeat that append.')
       delete state.pending; await save()
     }
     for (let offset = 0; offset < desired.length;) {
@@ -147,7 +151,11 @@ export class ImplementationContracts {
     state.pending = children.map(block => digest(createBlockText(block))); await save()
     try { await this.content.appendBlocks(id, children, atStart, true) }
     catch (error) {
-      if (error instanceof CardLeaseError || error instanceof NotionWriteError && error.status < 500) { delete state.pending; await save() }
+      if (error instanceof CardLeaseError || error instanceof JiraAttachmentPreflightError || error instanceof NotionWriteError && error.status < 500 ||
+        error instanceof JiraWriteError && error.method === 'POST' && error.status >= 400 && error.status < 500 && error.status !== 408) {
+        delete state.pending
+        await save()
+      }
       throw error
     }
   }

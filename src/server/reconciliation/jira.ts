@@ -27,6 +27,7 @@ const nativeStatus = (name: string) => name === 'Todo' ? 'To Do' : name === 'In 
 export class JiraWriteError extends Error {
   constructor(readonly status: number, readonly method: string, public partial = false) { super(`Jira HTTP ${status}`) }
 }
+export class JiraAttachmentPreflightError extends Error {}
 export class JiraMappingError extends Error {}
 export class JiraConflictError extends Error {}
 export interface JiraSection { id: string; type: string; text: string }
@@ -85,6 +86,35 @@ export class JiraClient {
     const response = await this.response(path, { method, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, fetcher)
     return response.status === 204 ? {} : this.json(response)
   }
+  protected async contractSections(cardId: string, attachments: unknown, signal?: AbortSignal, fetcher = this.fetcher, cache?: Map<string, JiraSection[]>) {
+    if (!Array.isArray(attachments)) throw new Error('Jira attachment inventory unavailable')
+    const sections: JiraSection[] = []
+    const contracts = attachments.filter(attachment => /^[1-9][0-9]*$/.test(attachment.id) &&
+      /^tinstar-contract-[a-f0-9-]+\.json$/.test(attachment.filename))
+      .sort((a, b) => Number(a.id) - Number(b.id))
+    for (const attachment of contracts) {
+      const cacheKey = `${cardId}:attachment:${attachment.id}`
+      const cached = cache?.get(cacheKey)
+      if (cached) { sections.push(...cached); continue }
+      const batch: JiraSection[] = []
+      const body = await this.json(await this.response(`attachment/content/${attachment.id}?redirect=false`, { signal }, fetcher))
+      if (body.schema !== 'tinstar.contract-sections.v1' || !Array.isArray(body.sections)) throw new Error('Invalid Jira contract attachment')
+      for (const [index, section] of body.sections.entries()) {
+        if (typeof section.text !== 'string' || !['paragraph', 'heading_2', 'code'].includes(section.type)) throw new Error('Malformed Jira contract section')
+        batch.push({ id: `${cacheKey}:${index}`, type: section.type, text: section.text })
+      }
+      cache?.set(cacheKey, batch)
+      sections.push(...batch)
+    }
+    return sections
+  }
+  protected async uploadContract(issueId: string, sections: Array<{ type: string; text: string }>) {
+    const form = new FormData()
+    form.append('file', new Blob([JSON.stringify({ schema: 'tinstar.contract-sections.v1', sections })], { type: 'application/json' }), `tinstar-contract-${randomUUID()}.json`)
+    sourceWriteDispatched()
+    const response = await this.response(`issue/${issueId}/attachments`, { method: 'POST', headers: { 'X-Atlassian-Token': 'no-check' }, body: form })
+    await response.body?.cancel()
+  }
   protected async json(response: Response): Promise<Record<string, any>> {
     const reader = response.body?.getReader()
     if (!reader) throw new Error('Jira response missing')
@@ -138,7 +168,6 @@ export class JiraAdapter extends JiraClient {
     if (!task || !Array.isArray(task.statuses)) throw new Error('TSSPIKE Task workflow unavailable')
     return task.statuses.map((status: any) => ({ id: String(status.id), name: logicalStatus(String(status.name), status.id) })) as Array<{ id: string; name: string }>
   }
-  schema() { return { properties: Object.fromEntries(Object.entries(fieldTypes).map(([name, type]) => [name, { type }])) } }
   card(raw: Record<string, any>): WorkCard {
     this.assertIssue(raw)
     if (typeof raw.fields.updated !== 'string' || typeof raw.fields.status?.name !== 'string') throw new Error('Incomplete Jira card read')
@@ -215,18 +244,6 @@ export class JiraAdapter extends JiraClient {
     if (candidates.length !== 1) throw new JiraMappingError(`Jira status ${name} has no unique available native transition`)
     return String(candidates[0].id)
   }
-  async create(properties: Record<string, unknown>, sections: Array<{ type: string; text: string }>, beforeWrite?: () => Promise<void>) {
-    const payload = this.payload(properties)
-    if (payload.status && !(await this.statuses()).some(status => status.name === payload.status)) throw new JiraMappingError(`TSSPIKE Task lacks native status ${payload.status}`)
-    await this.project() // exact scope evidence immediately before issue creation
-    await beforeWrite?.()
-    const created = await this.request('issue', 'POST', { fields: { ...payload.fields, project: { id: '10638' }, issuetype: { id: '10582' },
-      labels: [JIRA_SYNTHETIC_LABEL], description: { type: 'doc', version: 1, content: sections.map(section => this.sectionNode(section)) } }, properties: payload.properties })
-    const id = jiraCardPrefix + created.id
-    await this.issue(id)
-    if (payload.status) await this.patch(id, { Status: { status: { name: payload.status } } })
-    return this.read(id)
-  }
   async list(background = false) {
     const fetcher = background ? this.backgroundFetcher : this.parallelFetcher
     const cards: WorkCard[] = []; let next: string | undefined
@@ -287,16 +304,7 @@ export class JiraAdapter extends JiraClient {
     const issue = await this.issue(id, signal, fetcher), doc = record(issue.fields.description)
     const sections: JiraSection[] = (Array.isArray(doc.content) ? doc.content : []).map((node, index) => ({ id: `${id}:description:${index}`, type: record(node).type === 'heading' ? 'heading_2' : 'paragraph', text: adfText(node) }))
     if (contracts) {
-      const attachments = issue.fields.attachment
-      if (!Array.isArray(attachments)) throw new Error('Jira attachment inventory unavailable')
-      for (const attachment of attachments.filter((a: any) => /^tinstar-contract-[a-f0-9-]+\.json$/.test(a.filename)).sort((a: any, b: any) => Number(a.id) - Number(b.id))) {
-        const body = await this.json(await this.response(`attachment/content/${encodeURIComponent(attachment.id)}?redirect=false`, { signal }, fetcher))
-        if (body.schema !== 'tinstar.contract-sections.v1' || !Array.isArray(body.sections)) throw new Error('Invalid Jira contract attachment')
-        for (const [index, section] of body.sections.entries()) {
-          if (typeof section.text !== 'string' || !['paragraph', 'heading_2', 'code'].includes(section.type)) throw new Error('Malformed Jira contract section')
-          sections.push({ id: `${id}:attachment:${attachment.id}:${index}`, type: section.type, text: section.text })
-        }
-      }
+      sections.push(...await this.contractSections(id, issue.fields.attachment, signal, fetcher))
     }
     return sections
   }
@@ -319,9 +327,6 @@ export class JiraAdapter extends JiraClient {
     // Native immutable attachment batches reuse the existing contract manifests,
     // pending-batch latch and exact chunk/hash readback. No shadow body store.
     await this.issue(id)
-    const form = new FormData()
-    form.append('file', new Blob([JSON.stringify({ schema: 'tinstar.contract-sections.v1', sections })], { type: 'application/json' }), `tinstar-contract-${randomUUID()}.json`)
-    const response = await this.response(`issue/${this.issueId(id)}/attachments`, { method: 'POST', headers: { 'X-Atlassian-Token': 'no-check' }, body: form })
-    await response.body?.cancel()
+    await this.uploadContract(this.issueId(id), sections)
   }
 }

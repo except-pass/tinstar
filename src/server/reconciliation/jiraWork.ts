@@ -1,16 +1,18 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { acquireLock } from '../infra/lock'
 import type { JiraWorkConfig } from './config'
-import { adfText, JiraClient, JiraWriteError, jiraText } from './jira'
+import { adfText, JiraAttachmentPreflightError, JiraClient, JiraWriteError, jiraText, type JiraSection } from './jira'
 import {
   checkJiraTransition, editJiraDecisions, formatJiraDecisions, jiraTransitionDestination, jiraWorkIdentity, JiraWorkInputError, readJiraDecisions,
   type JiraCreate, type JiraEdit, type JiraExternalBlocker, type JiraLink, type JiraTransition,
 } from './jiraWorkRules'
 import { CreationReceipts } from './workflowReceipts'
 import { tswKey, tswProjectId } from './tswSnapshot'
+import type { WorkCard } from './workReader'
 
 const createProperty = 'tinstar.work.create'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -208,6 +210,42 @@ export class JiraWork extends JiraClient {
     }
   }
 
+  owns(cardId: string) {
+    const identity = jiraWorkIdentity(cardId)
+    return identity?.site === this.site && identity.projectId === this.config.projectId
+  }
+
+  async handoffCard(cardId: string): Promise<WorkCard> {
+    const card = await this.read(this.id(cardId))
+    const field = (type: string, value: unknown) => ({ id: null, type, value, hasMore: false })
+    return { id: card.id, url: card.url, last_edited_time: card.updated_at, archived: false, in_trash: false,
+      properties: { Name: field('title', card.name), Owner: field('select', card.owner), Status: field('status', card.status) } }
+  }
+
+  private readonly handoffAttachments = new AsyncLocalStorage<Map<string, JiraSection[]>>()
+
+  withHandoffAttachments<T>(perform: () => T) {
+    return this.handoffAttachments.run(new Map(), perform)
+  }
+
+  async handoffSections(cardId: string) {
+    const id = this.id(cardId)
+    const issue = await this.request(`issue/${id}?fields=project,attachment`)
+    if (issue.id !== id || issue.fields?.project?.id !== this.config.projectId) {
+      throw new JiraWorkInputError('Ticket is outside the configured Jira project')
+    }
+    const sections = await this.contractSections(cardId, issue.fields.attachment, undefined, this.fetcher, this.handoffAttachments.getStore())
+    await this.checkProject(id)
+    return sections
+  }
+
+  async appendHandoffSections(cardId: string, sections: Array<{ type: string; text: string }>) {
+    const id = this.id(cardId)
+    try { await this.checkProject(id) }
+    catch (error) { throw new JiraAttachmentPreflightError(this.message(error), { cause: error }) }
+    await this.uploadContract(id, sections)
+  }
+
   private message(error: unknown) {
     if (error instanceof JiraWorkInputError || error instanceof JiraWorkUnconfirmed) return error.message
     if (error instanceof JiraWriteError) return `Jira returned HTTP ${error.status}`
@@ -215,11 +253,21 @@ export class JiraWork extends JiraClient {
   }
 
   private saved(issue: Issue, already = false) {
-    return { outcome: 'saved', code: already ? 'already-saved' : 'confirmed', card: this.view(issue) }
+    return { outcome: 'saved' as const, code: already ? 'already-saved' : 'confirmed', card: this.view(issue) }
   }
 
-  private async mutate(verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<unknown>) {
-    const key = JSON.stringify(['jira-work', this.config.cloudId, this.config.projectId, actor, input.operation_id])
+  private receiptKey(actor: string, operationId: string) {
+    return JSON.stringify(['jira-work', this.config.cloudId, this.config.projectId, actor, operationId])
+  }
+
+  async writeDispatched(actor: string, operationId: string) {
+    return (await this.receipts.get(this.receiptKey(actor, operationId)))?.jiraWork?.dispatched === true
+  }
+
+  private async mutate<T extends (ReturnType<JiraWork['saved']> & { message?: string }) | { outcome: 'card-canceled' }>(
+    verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<T>,
+  ) {
+    const key = this.receiptKey(actor, input.operation_id)
     const marker = `tinstar.work.${digest(key)}`
     let pending = false
     let sent = false
@@ -566,7 +614,7 @@ export class JiraWork extends JiraClient {
         if (!await this.postTransitionAudit(id, note, true, () => { dispatched = true })) return { outcome: 'card-canceled' }
       }
       return attempt.confirm(await this.read(id))
-    }) as { outcome: string }
+    })
     return { outcome: result.outcome, dispatched }
   }
 

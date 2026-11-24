@@ -3,7 +3,7 @@ import { reviewEvidenceSchema, reviewResponseSchema } from './reviews'
 import { z } from 'zod'
 import { decisionProposalSchema } from './decisionProposal'
 import { firstMateRequestSchema } from './deskSource'
-import { cardIdSchema } from './workIdentity'
+import { cardIdSchema, jiraWorkIdSchema } from './workIdentity'
 import { waitingForTypes } from './waitingForPolicy'
 export { cardIdSchema } from './workIdentity'
 export const leaseTokenSchema = z.string().min(1).max(256).optional()
@@ -89,17 +89,18 @@ export const updateWorkSchema = z.discriminatedUnion('kind', [
 ])
 export type UpdateWorkInput = z.infer<typeof updateWorkSchema>
 export const createWorkSchema = z.object({ operation_id: z.string().min(1).max(128), name: label, owner: label, area: label,
-  provider: z.enum(['notion', 'jira']).optional(),
   status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'),
   properties: ordinaryPropertiesSchema.omit({ Name: true, Area: true }).optional(), content: contentSchema.optional(),
 }).strict()
 export type CreateWorkInput = z.infer<typeof createWorkSchema>
+const jiraCreationTargetMessage = 'Jira is the only creation target. Use provider "jira".'
+export const jiraCreationProvider = z.literal('jira', { errorMap: () => ({ message: jiraCreationTargetMessage }) })
 const reference = z.string().url().max(2048).refine(value => /^https?:/.test(value), 'Use a durable HTTP reference')
 export const submitHandoffSchema = z.object({
   lease_token: leaseTokenSchema,
   submission_id: identity.refine(value => value.length <= 128, 'Maximum 128 characters'),
   target: z.union([
-    z.object({ card_id: cardIdSchema }).strict(),
+    z.object({ card_id: z.union([cardIdSchema, jiraWorkIdSchema]) }).strict(),
     z.object({ external_ref: identity.refine(value => value.length <= 512, 'Maximum 512 characters'), candidate_ids: z.array(cardIdSchema).max(20).default([]) }).strict(),
   ]),
   title: label, area: label, owner: label,
@@ -120,7 +121,7 @@ export type SubmitHandoffInput = z.infer<typeof submitHandoffSchema>
 export const workflowRules = {
   pr_authorization: 'PR details require owner authorization through the existing trusted Tailscale ask.ownerLogins check. MCP work views retain asks with an explicit authorization placeholder.',
   version: 'tinstar.workflow.s4', enforced: [
-    'Create requires a declared Owner, Status and Area. Assignment to Firstmate is Queued until real execution.',
+    'New board work goes to Jira TSW. Direct creation starts in Backlog. An implementation handoff verifies the contract before queuing work.',
     'Start work requires Owner and Area and current tracked execution evidence.',
     'First Mate workers retain exact home, task and spawn-generation identities. External runs retain their system, run reference, card and authenticated reporter; their evidence is consumer-reported, not independently verified.',
     'Unknown, stale or historical worker evidence does not authorize a new start. Existing worker state is never silently repaired; unrelated notes/corrections remain possible.',
@@ -133,7 +134,7 @@ export const workflowRules = {
   ],
   operations: {
     read: ['search_work: current assigned cards, independent of UI filters; history is explicit', 'get_work: exact card, properties/worker evidence and optional bounded body/comments', 'get_work_views: shared Needs Will/PR evidence and advisory execution warnings; no window required'],
-    write: ['submit_handoff: stable submission_id, exact target card_id or external_ref, declared title/area/owner, objective, entire spec_markdown, explicit acceptance_criteria/decisions/forbidden_approaches/references. Revisions require revision_id and expected_contract_hash. Exact full contract is paginated by get_work implementation_contract; read every chunk and verify hash. Same-ID retries reconcile durable receipts; uncertain appends are never replayed. Separate record/assignment/delivery/execution outcomes; inbox delivery is not worker acceptance.', 'create_work: operation_id, name, owner, area, optional ordinary properties and content {brief,acceptance_criteria}', 'start_work: card_id, operation_id, worker (firstmate exact home/task/spawn generation, or external system/run_id/reference/card_id/observed_at/state/evidence)', 'update_work: card_id, operation_id, kind (not_for_me,submit_for_review,accept_review,request_review_changes,close_worker,release_wait,edit,assign,checkpoint,wait,request_decision,withdraw_decision,supersede_decision,answer_decision,complete,park); use tool schema for coupled fields'],
+    write: ['submit_handoff: stable submission_id, exact existing card_id or external_ref to create a Jira TSW ticket, declared title/area/owner, objective, entire spec_markdown, explicit acceptance_criteria/decisions/forbidden_approaches/references. Revisions require revision_id and expected_contract_hash. Exact full contract is paginated by get_work implementation_contract; read every chunk and verify hash. Same-ID retries reconcile durable receipts; uncertain appends are never replayed. Separate record/assignment/delivery/execution outcomes; inbox delivery is not worker acceptance.', 'create_work: Jira TSW ticket with operation_id and name; optional owner, description and issue_type', 'start_work: card_id, operation_id, worker (firstmate exact home/task/spawn generation, or external system/run_id/reference/card_id/observed_at/state/evidence)', 'update_work: card_id, operation_id, kind (not_for_me,submit_for_review,accept_review,request_review_changes,close_worker,release_wait,edit,assign,checkpoint,wait,request_decision,withdraw_decision,supersede_decision,answer_decision,complete,park); use tool schema for coupled fields'],
     reviews: 'submit_for_review binds canonical card/deliverable/SHA, explicit PR heads, guarded deployment and smoke receipt, live URL, acceptance scope and UI screenshots (or non-UI proof). accept_review/request_review_changes record explicit owner feedback. Full-scope acceptance checks current waits/children before Done; unfinished work returns to Firstmate Queued. Durable same-identity recovery preserves existing feedback. Never infer owner acceptance from CI or deployment.',
     returns: 'not_for_me requires a held lease and a one-line reason. It records the owner return, clears Will action, replaces the owner wait with the declared mate blocker, queues an existing Firstmate bridge notice, then releases the lease. Unknown mate or unconfirmed note/notice retains the lease. Read get_work after a lost final response.',
     decisions: 'request_decision records request_id, question, requested_from and action; optional options [{id,label}] publishes up to five choices. Optional proposal captures tinstar.decision-proposal.v1 advisory data (proposal_id, exact queue request_key, optional card_id, question, rationale, recommended_action_id, actions [{id,label,instruction,merge?}], HTTPS references, source {kind:firstmate-request,id,revision}, published_at, supersedes) at publication time; bind First Mate work/hold proposals with source_request. A selection uses the existing Ask receipt path and never closes a card. answer_decision option_id must name an existing published choice; answer preserves verbatim owner wording and can qualify that choice. answer_decision requires that request_id, answer and next {owner,status}; In Progress also requires worker, Waiting For requires the full wait (type, id, dependency, unblock, follow-up, future Next check-in), Done/Archived requires disposition/evidence. legacy_action and resolve_wait clear only explicitly identified legacy asks/waits. A resolved wait leaves Waiting For in place while another wait remains.',

@@ -11,9 +11,9 @@ import { digest } from '../src/server/reconciliation/implementationContract'
 
 async function main() {
   const { values } = parseArgs({ options: { server: { type: 'string' }, 'config-home': { type: 'string' }, output: { type: 'string' },
-    'operation-prefix': { type: 'string' }, prepare: { type: 'boolean' }, preflight: { type: 'boolean' }, help: { type: 'boolean' } } })
+    'operation-prefix': { type: 'string' }, 'card-id': { type: 'string' }, prepare: { type: 'boolean' }, preflight: { type: 'boolean' }, help: { type: 'boolean' } } })
   if (values.help) {
-    console.log('Usage: tsx scripts/jira-workflow-proof.ts --config-home DIR --prepare\nThen start an isolated Tin Star preview with that config and runtime Jira env credentials.\ntsx scripts/jira-workflow-proof.ts --config-home DIR --server http://127.0.0.1:5293 --output FILE --operation-prefix UNIQUE [--preflight]\n--preflight reads native project/status metadata only. The full run creates ONE synthetic Jira issue and exercises shared MCP/UI workflow paths. Never use a live config root.')
+    console.log('Usage: tsx scripts/jira-workflow-proof.ts --config-home DIR --prepare\nThen start an isolated Tin Star preview with that config and runtime Jira env credentials.\ntsx scripts/jira-workflow-proof.ts --config-home DIR --server http://127.0.0.1:5293 --output FILE --operation-prefix UNIQUE --card-id SYNTHETIC-CARD-ID [--preflight]\n--preflight reads native project/status metadata only. The full run uses one existing synthetic Jira issue and exercises shared MCP/UI workflow paths. Never use a live config root.')
     return
   }
   if (!values['config-home']) throw new Error('Explicit isolated --config-home required')
@@ -47,7 +47,12 @@ async function main() {
   const missing = required.filter(name => !statuses.some(status => status.name === name))
   if (missing.length) throw new Error(`Native TSSPIKE Task statuses missing: ${missing.join(', ')}. No Jira writes submitted.`)
   if (values.preflight) { console.log(JSON.stringify({ project: { id: project.id, key: project.key }, statuses, writes: 0 }, null, 2)); return }
-  if (!values.server || !values.output) throw new Error('Full proof needs --server and --output')
+  if (!values.server || !values.output || !values['card-id']) throw new Error('Full proof needs --server, --output and an existing synthetic --card-id')
+  const id = values['card-id']
+  const existing = await adapter.read(id)
+  if (existing.properties.Status?.value !== 'Queued' || existing.properties.Owner?.value !== 'Firstmate' || !existing.properties.Area?.value) {
+    throw new Error('Prepare a synthetic fixture with Owner Firstmate, Status Queued and an Area before running the proof')
+  }
   const server = new URL(values.server)
   if (!['127.0.0.1', 'localhost'].includes(server.hostname) || server.protocol !== 'http:' || !['5293', '5294', '5295', '5296'].includes(server.port)) throw new Error('Use an authorized local preview on 5293–5296')
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
@@ -68,13 +73,11 @@ async function main() {
       const result = await client.callTool({ name, arguments: input }) as { content: Array<{ type: string; text?: string }> }
       const value = JSON.parse(result.content.find(content => content.type === 'text')?.text ?? '{}')
       await record(name, value)
-      if (name === 'create_work' || name === 'start_work' || name === 'update_work' || name === 'submit_handoff') {
+      if (name === 'start_work' || name === 'update_work' || name === 'submit_handoff') {
         if (value.outcome !== 'saved') throw new Error(`${name} was not confirmed saved; inspect the proof receipt before any retry`)
       }
       return value
     }
-    const created = await call('create_work', { provider: 'jira', operation_id: `${prefix}-create`, name: `SYNTHETIC Jira adapter proof ${prefix}`, owner: 'Firstmate', area: 'Engineering', status: 'Queued', content: { brief: 'Synthetic fixture only. No real dispatch.', acceptance_criteria: 'UI/MCP state and native Jira readback agree.' } })
-    const id = created.card.id
     const update = (kind: string, step: string, input: Record<string, unknown>) => call('update_work', { card_id: id, operation_id: `${prefix}-${step}`, kind, ...input })
     const read = await call('get_work', { card_id: id, refresh: true, details: true })
     const editResponse = await fetch(new URL('/api/reconciliation/workflow', server), { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation: 'update', input: { card_id: id, kind: 'edit', operation_id: `${prefix}-ui-comment`, properties: { Attention: 'Normal' }, note: 'Synthetic UI endpoint comment; this is not a decision.' } }) })
@@ -88,7 +91,7 @@ async function main() {
     const waits = String(waiting.card.source.properties['Waiting For'].value).split('\n')
     for (const [index, request] of ['a', 'b'].entries()) await update('answer_decision', `answer-${request}`, { request_id: `${prefix}-${request}`, answer: 'Proceed with synthetic proof', option_id: 'yes', resolve_wait: waits[index], next: { owner: 'Firstmate', status: 'Queued' } })
     const spec = '# SYNTHETIC approved contract\n\n| Exact | Unicode |\n|---|---|\n|  spaces\t | 日本語 🚀 |\n```ts\nconst sample = `literal ${value}`\n```\n'.repeat(400)
-    const handoff = await call('submit_handoff', { submission_id: `${prefix}-contract`, target: { card_id: id }, title: created.card.properties.Name.value, owner: 'Firstmate', area: 'Engineering', objective: 'Retain synthetic contract bytes and versions', spec_markdown: spec, acceptance_criteria: ['Exact full source text retained; no dispatch'], decisions: [], forbidden_approaches: ['No real work or dispatch'], references: [] })
+    const handoff = await call('submit_handoff', { submission_id: `${prefix}-contract`, target: { card_id: id }, title: existing.properties.Name?.value, owner: 'Firstmate', area: 'Engineering', objective: 'Retain synthetic contract bytes and versions', spec_markdown: spec, acceptance_criteria: ['Exact full source text retained; no dispatch'], decisions: [], forbidden_approaches: ['No real work or dispatch'], references: [] })
     const chunks: string[] = []; let offset: number | null = 0
     while (offset !== null) {
       const result = await call('get_work', { card_id: id, details: false, implementation_contract: { revision: handoff.record.spec_version, offset, limit: 20 } })

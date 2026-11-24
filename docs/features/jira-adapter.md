@@ -22,15 +22,14 @@ Supply `TINSTAR_JIRA_EMAIL` and `TINSTAR_JIRA_TOKEN` in the server environment a
 runtime, or the `email`/`token` settings in its private config. Never commit those
 values. Credentials are server-side only. Existing `reconciliation.notion`
 configuration is unchanged and can coexist; each card routes by its own identity.
-Omitting `create_work.provider` still means Notion. Creating in Jira requires
-`"provider":"jira"`; an unconfigured provider fails without falling back.
+See [native Jira work](jira-work.md#mcp-calls) for MCP creation.
 
 The fixed site/project boundary prevents this authorized pilot from writing real
 work elsewhere. The adapter has only project reads and issue-level operations;
 it has no configuration mutation APIs. Every issue write is preceded by a fresh
-read confirming project ID/key and the `tinstar-synthetic` label. Creation reads
-the exact project and Task status metadata first. Removing the label stops further
-Tin Star writes; it does not delete the issue. No generic comment is a decision.
+read confirming project ID/key and the `tinstar-synthetic` label. Removing the
+label leaves the issue in Jira and stops further Tin Star writes. Decision
+history requires structured markers.
 
 ## Field mapping
 
@@ -70,10 +69,7 @@ share validation, serialization, decision scope and confirmed readback. Jira
 metadata editing and native transition are separate writes: a failure reports
 partial state and exact confirmed fields, never transactional success. A failed
 post-write read, including HTTP 429, remains partial/unconfirmed and retains
-independently confirmed fields. There is no write retry loop. Creation validates
-property limits, native date mappings and status availability before recording
-an attempted creation. A creation receipt prevents duplicates after ambiguous
-responses; a found incomplete creation remains partial on retry.
+independently confirmed fields. There is no write retry loop.
 
 Synthetic Jira cards suppress Firstmate pickup/update notifications and source
 request delivery. They can retain a worker identity from an explicitly configured
@@ -101,8 +97,9 @@ npx vitest run src/server/reconciliation/__tests__/jira.test.ts src/server/recon
 ```
 
 The Jira fixtures use the real shared UI HTTP and authenticated MCP transports,
-including create/edit, assignment, native transitions, comments, request/answer,
-multiple waits, worker provenance, failures and exact contract attachments.
+including creation rejection, edits, assignment, native transitions, comments,
+request/answer, multiple waits, worker provenance, failures and exact contract
+attachments.
 They complement the existing Notion suite; they are not a claimed live proof.
 
 For the live proof, build this branch and run an isolated preview on 5293–5296.
@@ -114,14 +111,15 @@ telemetry listeners or any First Mate lifecycle services:
 npx tsx scripts/jira-workflow-proof.ts --config-home /absolute/private/proof-config --prepare
 # Supply the runtime Jira credential environment through the approved secret route.
 TINSTAR_CONFIG_HOME=/absolute/private/proof-config npx tsx scripts/jira-workflow-preview.ts --port 5293
-npx tsx scripts/jira-workflow-proof.ts --config-home /absolute/private/proof-config --server http://127.0.0.1:5293 --output /absolute/private/proof.json --operation-prefix UNIQUE
+npx tsx scripts/jira-workflow-proof.ts --config-home /absolute/private/proof-config --server http://127.0.0.1:5293 --output /absolute/private/proof.json --operation-prefix UNIQUE --card-id SYNTHETIC-CARD-ID
 ```
 
 Use a private config root and a synthetic snapshot file; never configure a real
-First Mate home or enable inbox delivery. After native status setup is confirmed,
-run `scripts/jira-workflow-proof.ts` against that preview, then use the existing
-Inspector to inspect/edit the returned card and capture it with the task's named
-`chrome-devtools-axi` session. Keep receipts/screenshots outside the repository.
+First Mate home or enable inbox delivery. After confirming native status setup,
+prepare one synthetic Task labeled `tinstar-synthetic` with Owner **Firstmate**,
+Status **Queued** and an Area. Pass its canonical card ID to the proof script,
+then use the existing Inspector to inspect and edit the returned card. Capture
+it with the task's named `chrome-devtools-axi` session. Keep receipts/screenshots outside the repository.
 Stop the browser session immediately after capture. Keep the one synthetic issue
 as review evidence. Do not deploy or expand the pilot after the first proof.
 

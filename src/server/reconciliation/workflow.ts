@@ -26,6 +26,8 @@ import { checkInTime, checkInCeiling } from '../../shared/checkIn'
 import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, heading, codeBlock, createBlockText, type WorkflowCreateBlock, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
 import { CreationReceipts } from './workflowReceipts'
 import { notionCard } from './notion'
+import type { JiraWork, JiraWorkCard } from './jiraWork'
+import { jiraCreateSchema, JiraWorkInputError, type JiraTransition } from './jiraWorkRules'
 import { JiraWriteError, JiraMappingError, JiraConflictError } from './jira'
 import type { SourceSnapshot } from './index'
 import type { WorkReader, WorkCard } from './workReader'
@@ -65,7 +67,7 @@ export class WorkflowOperations {
   private decisionRefreshes = new Map<string, { until: number; revision: string; result: Promise<Awaited<ReturnType<WorkflowOperations['performDecisionReconcile']>>> }>()
   private locks = new Map<string, Promise<unknown>>()
   private receipts = new Map<string, { input: string; until: number; result: Promise<StartWorkResult> }>()
-  constructor(private reader: WorkReader, private fleet: () => Promise<SourceSnapshot['fleet']>, receiptRoot?: string, private proposals?: import('./proposalSource').ProposalSource) { if (receiptRoot) reader.leases ??= new CardLeases(receiptRoot); this.content = new WorkflowContent(reader); this.creations = new CreationReceipts(receiptRoot) }
+  constructor(private reader: WorkReader, private fleet: () => Promise<SourceSnapshot['fleet']>, receiptRoot?: string, private proposals?: import('./proposalSource').ProposalSource, private jiraWork?: JiraWork) { if (receiptRoot) reader.leases ??= new CardLeases(receiptRoot); this.content = new WorkflowContent(reader, jiraWork); this.creations = new CreationReceipts(receiptRoot) }
   exclusive<T>(key: string, perform: () => Promise<T>): Promise<T> {
     const result = (this.locks.get(key) ?? Promise.resolve()).catch(() => {}).then(perform)
     this.locks.set(key, result)
@@ -184,14 +186,17 @@ export class WorkflowOperations {
     })
   }
   private performHandoff(input: SubmitHandoffInput, actor: string) {
-    return new HandoffOperations({ reader: this.reader, receipts: this.creations, contracts: new ImplementationContracts(this.content),
+    const handoff = new HandoffOperations({ reader: this.reader,
+      readCard: id => this.jiraWork?.owns(id) ? this.jiraWork.handoffCard(id) : this.reader.card(id, true),
+      native: id => this.jiraWork?.owns(id) ?? false,
+      receipts: this.creations, contracts: new ImplementationContracts(this.content),
       exclusive: (id, perform) => this.exclusive(id, perform),
-      create: (create, caller) => this.serialize('create', create, caller, () => this.performCreate(create, caller, { signature: JSON.stringify(create), properties: { Status: 'Backlog' } })),
-      update: (update, caller) => this.performUpdate(update, caller),
+      create: (create, caller, validateNative) => this.createHandoffTicket(create, caller, validateNative),
+      update: (update, caller) => this.jiraWork?.owns(update.card_id) ? this.updateHandoffTicket(update, caller, this.jiraWork) : this.performUpdate(update, caller),
       hasNote: async (id, caller, operationId) => (await this.content.notes(id)).some(note => note.text.split('\n').includes(receiptMarker(caller, operationId))),
       matches: (card, desired) => Object.entries(desired).every(([name, value]) => this.matches(card, name, this.normalized(card, name, value))),
-      notify: async change => { if (change.card.source?.synthetic) return; if (!this.onChange) throw new Error('Firstmate bridge unavailable'); await this.onChange(change) },
-      delivery: (id, operationId) => this.reader.jira && id.startsWith('jira:') ? Promise.resolve({ state: 'disabled', reason: 'Synthetic Jira pilot; no live pickup or inbox delivery' }) : this.deliveryStatus?.(id, operationId) ?? Promise.resolve({ state: 'unknown', reason: 'Firstmate bridge observation unavailable' }),
+      notify: async change => { if (change.card.source?.synthetic || this.jiraWork?.owns(change.card.id)) return; if (!this.onChange) throw new Error('Firstmate bridge unavailable'); await this.onChange(change) },
+      delivery: (id, operationId) => this.jiraWork?.owns(id) ? Promise.resolve({ state: 'unknown', reason: 'Jira assignment confirmed separately from worker delivery' }) : this.reader.jira && id.startsWith('jira:') ? Promise.resolve({ state: 'disabled', reason: 'Synthetic Jira pilot; no live pickup or inbox delivery' }) : this.deliveryStatus?.(id, operationId) ?? Promise.resolve({ state: 'unknown', reason: 'Firstmate bridge observation unavailable' }),
       execution: async card => {
         if (card.properties.Status?.value === 'Queued') return { state: 'queued', worker: null }
         if (card.properties.Status?.value === 'In Progress') {
@@ -205,8 +210,90 @@ export class WorkflowOperations {
         }
         return { state: 'unknown', worker: null }
       },
-    }).submit(input, actor)
+    })
+    const submit = () => handoff.submit(input, actor)
+    return this.jiraWork ? this.jiraWork.withHandoffAttachments(submit) : submit()
   }
+  private async createHandoffTicket(input: CreateWorkInput, actor: string, validateNative: () => void): Promise<StartWorkResult> {
+    const operation_id = input.operation_id
+    const prior = await this.creations.get(JSON.stringify([actor, operation_id]))
+    if (prior) {
+      // Recover a legacy in-flight creation before considering a Jira write.
+      // An uncertain old Notion POST must never become a duplicate Jira ticket.
+      const card = prior.cardId ? await this.reader.card(prior.cardId, true) : await this.findCreation(actor, operation_id, input.name)
+      return card ? { outcome: 'saved', code: 'already-saved', message: 'Existing handoff card recovered', operation_id, saved_fields: ['card'], card }
+        : { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier handoff creation remains unconfirmed', operation_id, saved_fields: [] }
+    }
+    if (!this.jiraWork) return { outcome: 'not-saved', code: 'unavailable', message: 'Jira is the only creation target and Jira work is not configured', operation_id, saved_fields: [] }
+    const create = jiraCreateSchema.safeParse({ operation_id, name: input.name, owner: input.owner,
+      description: 'Read the verified implementation contract through Tin Star before starting work.' })
+    if (!create.success) return { outcome: 'not-saved', code: 'invalid-input', operation_id, saved_fields: [],
+      message: create.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') }
+    try { validateNative() }
+    catch (error) {
+      if (!(error instanceof ContractError)) throw error
+      return { outcome: 'not-saved', code: error.code, message: error.message, operation_id, saved_fields: [] }
+    }
+    const response = await this.jiraWork.create(create.data, actor)
+    return { outcome: 'card' in response ? 'saved' : response.outcome, code: response.code,
+      message: 'card' in response ? 'Jira ticket created and confirmed' : response.message,
+      operation_id, saved_fields: 'card' in response ? ['card'] : [], ...('card' in response ? { card: response.card } : {}) }
+  }
+
+  private async updateHandoffTicket(input: UpdateWorkInput, actor: string, jira: JiraWork): Promise<StartWorkResult> {
+    const { card_id, operation_id } = input
+    const result = (outcome: StartWorkResult['outcome'], code: string, message: string, saved_fields: string[] = []): StartWorkResult =>
+      ({ outcome, code, message, operation_id, saved_fields })
+    const current = await jira.handoffCard(card_id)
+    const base = { card_id, operation_id }
+    if (input.kind === 'edit') {
+      const name = input.properties?.Name
+      if (current.properties.Name?.value === name) return result('saved', 'already-saved', 'Jira title confirmed', ['Name'])
+      if (current.properties.Name?.value !== input.expected?.Name) return result('not-saved', 'conflict', 'Jira title changed during handoff')
+      const edited = await jira.edit({ ...base, kind: 'jira_edit', name }, actor, card => {
+        if (card.name !== input.expected?.Name && card.name !== name) throw new JiraWorkInputError('Jira title changed during handoff')
+      })
+      return 'card' in edited ? result('saved', 'confirmed', 'Jira title confirmed', ['Name']) : result(edited.outcome, edited.code, edited.message)
+    }
+    if (input.kind !== 'assign') return result('not-saved', 'invalid-input', 'Use a Jira edit or transition for this ticket')
+    const from = current.properties.Status?.value
+    const to = input.status === 'Todo' ? 'To Do' : input.status
+    const owner = current.properties.Owner?.value
+    const ownerOperation = `${operation_id}-owner`
+    const ownerMatches = owner === input.expected?.Owner || owner === input.owner && await jira.writeDispatched(actor, ownerOperation)
+    const expectedStatus = input.expected?.Status === 'Todo' ? 'To Do' : input.expected?.Status
+    const transitionDispatched = from === to && from !== expectedStatus && await jira.writeDispatched(actor, operation_id)
+    const statusMatches = from === expectedStatus || transitionDispatched
+    if (!statusMatches || !ownerMatches) {
+      return result('not-saved', 'conflict', 'Jira Owner or Status changed during handoff')
+    }
+    const moves: Partial<Record<string, JiraTransition['verb']>> = {
+      'Backlog:Queued': 'Fast-track', 'Backlog:To Do': 'Prioritize', 'To Do:Queued': 'Queue',
+      'Queued:To Do': 'Dequeue', 'To Do:Backlog': 'Deprioritize', 'Queued:Backlog': 'Park',
+    }
+    const verb = moves[`${expectedStatus}:${to}`]
+    if (from !== to && !verb) return result('not-saved', 'assignment-conflict', 'Use an applicable native Jira transition before assigning this handoff')
+    const requireFields = (card: JiraWorkCard, status: unknown, expectedOwner: unknown) => {
+      if (card.status !== status || card.owner !== expectedOwner) throw new JiraWorkInputError('Jira Owner or Status changed during handoff')
+    }
+    if (owner !== input.owner) {
+      const edited = await jira.edit({ ...base, operation_id: ownerOperation, kind: 'jira_edit', owner: input.owner }, actor,
+        card => requireFields(card, from, owner))
+      if (!('card' in edited)) return result(edited.outcome, edited.code, edited.message)
+    }
+    if (verb) {
+      const transition = { ...base, verb, ...(verb === 'Park' ? { disposition: input.note } : {}) } as JiraTransition
+      const moved = await jira.transition(transition, actor, card => requireFields(card, expectedStatus, input.owner))
+      if (!('card' in moved)) return result(owner !== input.owner ? 'partially-saved' : moved.outcome, moved.code, moved.message, owner !== input.owner ? ['Owner'] : [])
+      if ('message' in moved && moved.message) return result('partially-saved', 'audit-unconfirmed', moved.message)
+    }
+    const saved = await jira.handoffCard(card_id)
+    if (saved.properties.Owner?.value !== input.owner || saved.properties.Status?.value !== to) {
+      return result('partially-saved', 'assignment-conflict', 'Jira did not confirm Owner and Status together')
+    }
+    return result('saved', 'confirmed', 'Jira assignment confirmed', ['Owner', 'Status'])
+  }
+
   private serialize(cardId: string, input: { operation_id: string }, actor: string, perform: () => Promise<StartWorkResult>) {
     const failed = (code: string, message: string): StartWorkResult => ({ outcome: 'not-saved', code, message, operation_id: input.operation_id, saved_fields: [] })
     if (!actor.trim()) return Promise.resolve(failed('unauthenticated', 'Authenticated caller identity required'))
@@ -419,12 +506,7 @@ export class WorkflowOperations {
     return reconcileDecision(card, notes, fleet ?? await this.fleet(), this.decisionDelivery,
       async (text, marker) => { await this.content.note(cardId, text, marker); this.onRecordedChange?.(cardId) }, await this.proposals?.read(cardId, notes), census)
   }
-  create(input: CreateWorkInput, actor: string): Promise<StartWorkResult> {
-    const parsed = createWorkSchema.safeParse(input)
-    if (!parsed.success) return Promise.resolve({ outcome: 'not-saved', code: 'invalid-input', message: parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '), operation_id: input?.operation_id ?? '', saved_fields: [] })
-    return this.serialize(parsed.data.provider === 'jira' ? 'create:jira' : 'create', parsed.data, actor, () => this.performCreate(parsed.data, actor))
-  }
-  /** Owner-only PR handoff; shares create_work's Notion writer and durable receipts. */
+  /** Owner-only PR handoff for the existing Clawson Notion pickup. */
   createClawsonMerge(input: ClawsonMergeInput, actor: string, prepare: () => Promise<ClawsonMergePlan>): Promise<StartWorkResult> {
     const signature = JSON.stringify({ kind: 'clawson-merge', ...input })
     return this.serialize('create', input, actor, async () => {
@@ -1016,16 +1098,7 @@ export class WorkflowOperations {
       return partial
     }
   }
-  private async findCreation(actor: string, operationId: string, name: string, provider?: CreateWorkInput['provider']): Promise<WorkCard | undefined> {
-    if (provider === 'jira') {
-      if (!this.reader.jira) throw new Error('Jira is not configured')
-      const result = await this.reader.jira.list()
-      if (result.hasMore) throw new WorkflowError('create-scope-incomplete', 'Jira creation search is incomplete')
-      const matches: WorkCard[] = []
-      for (const card of result.cards) if ((await this.content.sections(card.id)).some(section => workflowNoteHasMarker(section, receiptMarker(actor, operationId)))) matches.push(card)
-      if (matches.length > 1) throw new WorkflowError('create-conflict', 'Multiple Jira issues have this creation receipt; inspect them before continuing')
-      return matches[0]
-    }
+  private async findCreation(actor: string, operationId: string, name: string): Promise<WorkCard | undefined> {
     const config = this.reader.config
     if (!config) throw new Error('Not configured')
     const marker = receiptMarker(actor, operationId)
@@ -1045,53 +1118,40 @@ export class WorkflowOperations {
       cursors.add(nextCursor)
     }
   }
-  private async jiraCreationReadback(card: WorkCard, input: CreateWorkInput, actor: string, handoff?: { properties: Record<string, unknown>; children?: WorkflowCreateBlock[] }): Promise<StartWorkResult> {
-    const values = { ...input.properties, Name: input.name, Owner: input.owner, Area: input.area, Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor, ...handoff?.properties }
-    const fields = Object.entries(values).filter(([name, value]) => this.matches(card, name, this.normalized(card, name, value))).map(([name]) => name)
-    const sections = await this.content.sections(card.id, true)
-    const children = handoff?.children ?? Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value)))
-    const complete = fields.length === Object.keys(values).length && children.every(child => sections.some(section => section.text === createBlockText(child)))
-    return { outcome: complete ? 'saved' : 'partially-saved', code: complete ? 'already-saved' : 'readback-mismatch', message: complete ? 'Existing Jira creation and content confirmed' : 'Existing Jira issue found; only listed fields confirmed. Correct this same issue explicitly; creation was not replayed.', operation_id: input.operation_id, saved_fields: ['card', ...fields], card }
-  }
-  private async performCreate(input: CreateWorkInput, actor: string, handoff?: { signature: string; properties: Record<string, unknown>; children?: WorkflowCreateBlock[] }): Promise<StartWorkResult> {
+  private async performCreate(input: CreateWorkInput, actor: string, handoff: { signature: string; properties: Record<string, unknown>; children: WorkflowCreateBlock[] }): Promise<StartWorkResult> {
     let attempted = false, card: WorkCard | undefined
     const saved: string[] = []
-    const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify(input.provider === 'jira' ? [actor, 'jira', input.operation_id] : [actor, input.operation_id]), signature = handoff?.signature ?? JSON.stringify(input)
+    const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify([actor, input.operation_id]), signature = handoff.signature
     const result = (outcome: StartWorkResult['outcome'], code: string, message: string, saved_fields: string[] = saved): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields, ...(card ? { card } : {}) })
     try {
       const config = this.reader.config
-      if (input.provider === 'jira' ? !this.reader.jira : !config) throw new Error('Requested provider is not configured')
+      if (!config) throw new Error('Requested provider is not configured')
       const previous = await this.creations.get(key)
       if (previous && previous.input !== signature) throw new WorkflowError('operation-conflict', 'operation_id was used with different creation input')
       if (previous?.cardId) {
         saved.push('card'); card = await this.reader.card(previous.cardId, true); this.reader.confirm(card)
-        if (input.provider === 'jira') return this.jiraCreationReadback(card, input, actor, handoff)
         return result('saved', 'already-saved', 'Card creation previously confirmed; current card returned', ['card'])
       }
-      const candidate = await this.findCreation(actor, input.operation_id, input.name, input.provider)
+      const candidate = await this.findCreation(actor, input.operation_id, input.name)
       if (candidate) {
         card = candidate; saved.push('card')
         await this.creations.put(key, signature, card.id)
         card = await this.reader.card(candidate.id, true); this.reader.confirm(card)
         await this.changed({ card, actor, operationId: input.operation_id, properties: {} })
-        if (input.provider === 'jira') return this.jiraCreationReadback(card, input, actor, handoff)
         return result('saved', 'already-saved', 'Card creation already saved', ['card'])
       }
       if (previous) return result('partially-saved', 'create-unconfirmed', 'An earlier creation is unconfirmed and its receipt is not visible in the current name search. Reconcile that card before using a new operation_id; this retry will not create a duplicate.')
-      const schema = input.provider === 'jira' ? this.reader.jira!.schema() : await this.content.request(`data_sources/${config!.dataSourceId}`)
+      const schema = await this.content.request(`data_sources/${config.dataSourceId}`)
       const template = { properties: Object.fromEntries(Object.entries(schema.properties ?? {}).map(([name, value]) => [name, { type: (value as { type: string }).type }])) } as WorkCard
       const values = { ...input.properties, Name: input.name, Owner: input.owner, Area: input.area,
-        Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor, ...handoff?.properties }
+        Status: input.status, 'Last touched by': actor, ...handoff.properties }
       const properties = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, this.property(template, name, value)]))
-      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...(handoff?.children ?? Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value))))]
-      const beforeWrite = async () => {
-        await this.creations.put(key, signature)
-        attempted = true
-      }
-      if (input.provider !== 'jira') await beforeWrite()
+      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...handoff.children]
+      await this.creations.put(key, signature)
+      attempted = true
       let created: Awaited<ReturnType<WorkflowContent['request']>>
       try {
-        created = input.provider === 'jira' ? await this.reader.jira!.create(properties, children.map(child => ({ type: child.type, text: createBlockText(child) })), beforeWrite) : await this.content.request('pages', 'POST', { parent: { type: 'data_source_id', data_source_id: config!.dataSourceId }, properties, children })
+        created = await this.content.request('pages', 'POST', { parent: { type: 'data_source_id', data_source_id: config.dataSourceId }, properties, children })
       } catch (error) {
         if (error instanceof NotionWriteError && error.status < 500) {
           await this.creations.remove(key)
@@ -1099,7 +1159,7 @@ export class WorkflowOperations {
         }
         throw error
       }
-      card = input.provider === 'jira' ? created as WorkCard : notionCard(created)
+      card = notionCard(created)
       saved.push('card')
       await this.creations.put(key, signature, card.id)
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
@@ -1112,7 +1172,6 @@ export class WorkflowOperations {
     } catch (error) {
       if (error instanceof CardLeaseError) return result(saved.length ? 'partially-saved' : 'not-saved', error.lease ? 'card-held' : 'claim-lost', error.message, saved)
       if (error instanceof WorkflowError) return result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message)
-      if (error instanceof JiraMappingError && !attempted) return result('not-saved', 'jira-incompatible', error.message)
       return result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'create-unconfirmed' : 'source-unavailable', saved.length ? 'Card created; only listed steps confirmed saved. Current verification failed; retry identical input to retrieve the existing card.' : attempted ? 'Creation submitted but unconfirmed; retry identical input to find its receipt before creating again' : 'Current source unavailable; card not created')
     }
   }

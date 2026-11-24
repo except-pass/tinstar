@@ -10,14 +10,14 @@ import { ReconciliationSources } from '..'
 import { NotionApi } from '../notionApi'
 import { WorkReader } from '../workReader'
 import { WorkflowOperations } from '../workflow'
-import { WorkflowContent, receiptMarker, sectionText } from '../workflowContent'
+import { WorkflowContent, receiptMarker } from '../workflowContent'
 import { ImplementationContracts, implementationContract, digest } from '../implementationContract'
 import { ReconciliationMcp } from '../mcp'
 import { JiraAdapter, jiraPropertyKey, JIRA_SYNTHETIC_LABEL, JiraMappingError, jiraText } from '../jira'
-import { jiraCardPrefix, cardIdSchema } from '../../../shared/workIdentity'
+import { cardSourceUrl, jiraCardPrefix, cardIdSchema } from '../../../shared/workIdentity'
 import { workerLinkRecord } from '../workerLinks'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
-import type { CreateWorkInput, SubmitHandoffInput } from '../../../shared/workflow'
+import type { SubmitHandoffInput } from '../../../shared/workflow'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 
 const json = (value: unknown, status = 200) => new Response(status === 204 ? null : JSON.stringify(value), { status })
@@ -56,7 +56,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'jira-workflow-')); roots.push(root)
   const issues = new Map<string, any>(), notes = new Map<string, any[]>(), attachments = new Map<string, any>()
   const requests: Array<{ path: string; method: string; body: any }> = []
-  const controls = { read429AfterWrite: -1, read429Count: 1, failReads: false, uncertainCreate: false, failEdit: false, failTransition: false, lostEdit: false, lostNote: false, failNote: false, lostAttachment: false, partialAttachment: false, omitField: '', missingStatus: '', truncatedSearch: false, foreign: false, unlabelled: false }
+  const controls = { read429AfterWrite: -1, read429Count: 1, failReads: false, failEdit: false, failTransition: false, lostEdit: false, lostNote: false, failNote: false, lostAttachment: false, partialAttachment: false, omitField: '', missingStatus: '', truncatedSearch: false, foreign: false, unlabelled: false }
   let tick = 0, attachmentId = 1000, mutated = false, postWriteReads = 0
   const updated = () => new Date(Date.now() + tick++).toISOString()
   const statuses = [
@@ -78,13 +78,6 @@ async function fixture() {
     if (path === 'project/10638/statuses') return json([{ id: '10582', statuses: visibleStatuses() }])
     if (path === 'project/10638') return json({ id: '10638', key: 'TSSPIKE', style: 'next-gen' })
     if (path === 'search/jql') return json({ issues: [...issues.values()], isLast: !controls.truncatedSearch, ...(controls.truncatedSearch ? { nextPageToken: 'next' } : {}) })
-    if (path === 'issue' && method === 'POST') {
-      if (controls.uncertainCreate) throw new Error('Connection lost during create')
-      const newId = String(60001 + issues.size), raw = make(newId, body.fields, Object.fromEntries(body.properties.map((p: any) => [p.key, p.value])))
-      raw.fields.project = { id: '10638', key: 'TSSPIKE' }; raw.fields.issuetype = { id: '10582', name: 'Task' }
-      issues.set(newId, raw); notes.set(newId, [])
-      return json({ id: newId, key: raw.key }, 201)
-    }
     if (path.startsWith('attachment/content/')) return json(attachments.get(path.split('/')[2]!))
     const match = /^issue\/(\d+)(?:\/(.*))?$/.exec(path), issueId = match?.[1]!, part = match?.[2], raw = issues.get(issueId)
     if (!raw) return json({}, 404)
@@ -144,14 +137,11 @@ async function fixture() {
   const { kind: _kind, ...link } = worker
   return { root, fetcher, reader, workflow, sources, seed, controls, notes, attachments, requests, worker, link, home, task, statuses }
 }
-const create: CreateWorkInput = { provider: 'jira', name: 'Synthetic Jira adapter workflow proof', owner: 'Firstmate', area: 'Engineering', operation_id: 'synthetic-create', status: 'Queued', content: { brief: 'Synthetic implementation brief', acceptance_criteria: 'All reads agree' } }
-
 it('routes canonical identity to exactly one source, rejects other sites/projects and requires synthetic scope before writes', async () => {
   const f = await fixture()
   expect(cardIdSchema.safeParse(id).success).toBe(true)
   for (const bad of ['60001', 'TSSPIKE-1', id.replace('10638', '10639'), id.replace('fortresspower', 'other')]) expect(cardIdSchema.safeParse(bad).success).toBe(false)
   expect((await f.reader.card(id)).source).toMatchObject({ provider: 'jira', itemId: '60001', collectionId: '10638', synthetic: true })
-  expect(await f.workflow.create({ ...create, provider: undefined }, 'Fixture')).toMatchObject({ outcome: 'not-saved' })
   for (const flag of ['foreign', 'unlabelled'] as const) {
     f.controls[flag] = true
     await expect(f.reader.card(id, true)).rejects.toThrow('scope')
@@ -161,12 +151,10 @@ it('routes canonical identity to exactly one source, rejects other sites/project
   expect(f.requests.every(request => request.method === 'GET')).toBe(true)
 })
 
-it('creates, edits, queues, starts with exact synthetic provenance, retains two waits and answers only one decision before completion', async () => {
+it('edits, queues, starts with exact synthetic provenance, retains two waits and answers only one decision before completion', async () => {
   const f = await fixture(), notify = vi.fn()
   f.workflow.onChange = notify
-  const created = await f.workflow.create(create, 'Fixture')
-  expect(created).toMatchObject({ outcome: 'saved', card: { properties: { Status: { value: 'Queued' } } } })
-  const cardId = (created.card as any).id
+  const cardId = id
   const update = (input: Record<string, unknown>) => f.workflow.update({ card_id: cardId, ...input } as any, 'Fixture')
   expect(await update({ kind: 'edit', operation_id: 'edit', properties: { Link: 'https://example.test/synthetic', Attention: 'Normal' }, content: { brief: 'Revised synthetic brief' }, note: 'Ordinary comment is not a decision' })).toMatchObject({ outcome: 'saved' })
   expect(await update({ kind: 'assign', operation_id: 'queue', owner: 'Firstmate', status: 'Todo' })).toMatchObject({ outcome: 'saved', card: { properties: { Status: { value: 'Queued' } } } })
@@ -189,7 +177,7 @@ it('creates, edits, queues, starts with exact synthetic provenance, retains two 
   expect(notify).not.toHaveBeenCalled()
   expect((await f.reader.query({}, true)).data!.cards.some(card => card.id === cardId)).toBe(false)
   expect((await f.reader.query({ history: true }, true)).data!.cards.some(card => card.id === cardId)).toBe(true)
-  expect(f.requests.filter(request => request.method !== 'GET').every(request => request.path === 'search/jql' || request.path === 'issue' || /^issue\/\d+(?:\/(?:comment|transitions|attachments))?$/.test(request.path))).toBe(true)
+  expect(f.requests.filter(request => request.method !== 'GET').every(request => request.path === 'search/jql' || /^issue\/\d+(?:\/(?:comment|transitions|attachments))?$/.test(request.path))).toBe(true)
 })
 
 it('maps the approved Jira status spellings and leaves every other name unchanged', async () => {
@@ -284,16 +272,6 @@ it('retains exact large contract versions in native attachments with the existin
   await expect(contracts.read(id, { revision: contract.manifest.version, offset: 0, limit: 1 })).rejects.toThrow('differs')
 })
 
-it('never calls an incomplete native create saved on retry', async () => {
-  const f = await fixture()
-  f.controls.failTransition = true
-  expect(await f.workflow.create(create, 'Fixture')).toMatchObject({ outcome: 'partially-saved' })
-  f.controls.failTransition = false
-  const retry = new WorkflowOperations(f.reader, async () => [], f.root)
-  expect(await retry.create(create, 'Fixture')).toMatchObject({ outcome: 'partially-saved', code: 'readback-mismatch', card: { properties: { Status: { value: 'Todo' } } } })
-  expect(f.requests.filter(request => request.path === 'issue' && request.method === 'POST')).toHaveLength(1)
-})
-
 it('shares UI and authenticated MCP operations/readback for the same Jira state', async () => {
   const f = await fixture()
   const mcp = new ReconciliationMcp(f.sources, f.root)
@@ -305,9 +283,9 @@ it('shares UI and authenticated MCP operations/readback for the same Jira state'
   const client = new Client({ name: 'synthetic-jira-proof', version: '1' }); clients.push(client)
   const { installToken } = await import('../mcp')
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${installToken(f.root)}` } } }))
-  const created = JSON.parse((await client.callTool({ name: 'create_work', arguments: create }) as any).content[0].text)
-  expect(created.outcome).toBe('saved')
-  const cardId = created.card.id
+  const creation = await client.callTool({ name: 'create_work', arguments: { provider: 'jira', operation_id: 'public-create', name: 'Fixture' } })
+  expect(JSON.parse((creation.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ outcome: 'not-saved', code: 'unavailable' })
+  const cardId = id
   const ui = await (await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation: 'update', input: { kind: 'edit', card_id: cardId, operation_id: 'ui-edit', properties: { Area: 'Product' }, note: 'UI and MCP agreement proof' } }) })).json()
   expect(ui).toMatchObject({ ok: true, data: { outcome: 'saved' } })
   const mcpRead = JSON.parse((await client.callTool({ name: 'get_work', arguments: { card_id: cardId, details: true, refresh: true } }) as any).content[0].text)
@@ -316,7 +294,6 @@ it('shares UI and authenticated MCP operations/readback for the same Jira state'
   expect(uiRead.data.card.source.properties).toEqual(mcpRead.card.source.properties)
   expect(mcpRead.card.source.properties.Area.value).toBe('Product')
   expect((await new WorkflowContent(f.reader).notes(cardId)).some(note => note.text.includes(receiptMarker('Tin Star UI', 'ui-edit')))).toBe(true)
-  expect(sectionText('brief', 'Synthetic implementation brief')).toBeTruthy()
 })
 
 it('retains known cards as stale on provider failure and exposes incomplete pagination', async () => {
@@ -362,33 +339,9 @@ it('records an approved handoff on the existing Jira card without offering picku
 })
 
 
-it.each([
-  { status: 'Backlog' as const, properties: {}, missingStatus: 'Backlog', message: 'TSSPIKE Task lacks native status Backlog' },
-  { status: 'Todo' as const, properties: { 'Start Date': '2026-11-12T09:00:00Z' }, missingStatus: '', message: "Start Date: Jira's native date field requires YYYY-MM-DD; a timestamp cannot be silently truncated" },
-  { status: 'Todo' as const, properties: { 'Due Date': '2026-11-12T09:00:00Z' }, missingStatus: '', message: "Due Date: Jira's native date field requires YYYY-MM-DD; a timestamp cannot be silently truncated" },
-])('keeps proven pre-write creation incompatibilities retryable: $message', async ({ status, properties, missingStatus, message }) => {
-  const f = await fixture()
-  f.controls.missingStatus = missingStatus
-  const input = { ...create, owner: 'Fixture', status, properties }
-  for (let retry = 0; retry < 2; retry++) {
-    const workflow = new WorkflowOperations(f.reader, async () => [], f.root)
-    expect(await workflow.create(input, 'Fixture')).toMatchObject({ outcome: 'not-saved', code: 'jira-incompatible', message })
-  }
-  expect(f.requests.filter(request => request.path === 'issue' && request.method === 'POST')).toHaveLength(0)
-  f.controls.missingStatus = ''
-  const workflow = new WorkflowOperations(f.reader, async () => [], f.root)
-  expect(await workflow.create({ ...input, properties: {} }, 'Fixture')).toMatchObject({ outcome: 'saved' })
-  expect(f.requests.filter(request => request.path === 'issue' && request.method === 'POST')).toHaveLength(1)
-})
-
-it('retains the durable duplicate guard after a potentially submitted Jira creation', async () => {
-  const f = await fixture()
-  f.controls.uncertainCreate = true
-  expect(await f.workflow.create(create, 'Fixture')).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed' })
-  f.controls.uncertainCreate = false
-  const workflow = new WorkflowOperations(f.reader, async () => [], f.root)
-  expect(await workflow.create(create, 'Fixture')).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed' })
-  expect(f.requests.filter(request => request.path === 'issue' && request.method === 'POST')).toHaveLength(1)
+it('preserves the shared URL fallback for Jira IDs outside the pilot', () => {
+  const nativeId = 'jira:sample.atlassian.net:10001:60001'
+  expect(cardSourceUrl(nativeId)).toBe(`https://www.notion.so/${nativeId}`)
 })
 
 it('renders provider-aware parent references while preserving Notion contract bytes', () => {
