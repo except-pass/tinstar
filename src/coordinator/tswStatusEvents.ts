@@ -170,27 +170,22 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
       if (events.length) byKey.set(key, [...byKey.get(key) ?? [], events])
     }
   }
-  const events = new Map<string, StatusEvent[]>()
-  for (const [key, subjects] of [...byKey].sort(([a], [b]) => a.localeCompare(b, 'en', { numeric: true }))) {
-    const candidates = subjects.map(subject => subject[0]!)
-    const [first, ...others] = candidates
-    const head = first?.target === 'Ready for Review' ? first.head : null
-    const pull = first?.target === 'Ready for Review' && head ? releasePull(first.pull) : null
-    const equivalent = pull && others.every(candidate =>
-      candidate.target === 'Ready for Review' && candidate.head === head && releasePull(candidate.pull)?.id === pull.id)
-      ? pull : null
-    const conflicting = findings.some(finding => finding.key === key && finding.reason === 'conflicting-card-declarations')
-    if (first?.target === 'Ready for Review' && equivalent && !conflicting) {
-      const ordered = [...candidates].sort((a, b) => a.id.localeCompare(b.id))
-      const actors = [...new Set(ordered.map(candidate => candidate.actor))].sort()
-      const expiresAt = ordered.flatMap(candidate => candidate.expiresAt ?? []).sort()[0] ?? null
-      events.set(key, [{ ...first, owner: ordered[0]!.owner, pull: equivalent.url,
-        actor: actors.join(', '), expiresAt, id: eventId([key, equivalent.url, head]) }])
-    } else if (first && !others.length && !conflicting) {
-      events.set(key, subjects[0]!)
-    } else {
-      for (const candidate of candidates) findings.push({ key, home: candidate.home, task: candidate.task, reason: 'competing-task-events' })
-    }
+  return { events: new Map([...byKey].sort(([a], [b]) => a.localeCompare(b, 'en', { numeric: true }))), findings }
+}
+
+export function arbitrateTswEvents(key: string, subjects: StatusEvent[][], conflicting: boolean) {
+  const candidates = subjects.flatMap(subject => subject.slice(0, 1))
+  const [first, ...others] = candidates
+  if (!first || conflicting) return { events: [], competing: candidates }
+  const head = first.target === 'Ready for Review' ? first.head : null
+  const pull = first.target === 'Ready for Review' && head ? releasePull(first.pull) : null
+  if (first.target === 'Ready for Review' && pull && others.every(candidate =>
+    candidate.target === 'Ready for Review' && candidate.head === head && releasePull(candidate.pull)?.id === pull.id)) {
+    const ordered = [...candidates].sort((a, b) => a.id.localeCompare(b.id))
+    const actors = [...new Set(ordered.map(candidate => candidate.actor))].sort()
+    const expiresAt = ordered.flatMap(candidate => candidate.expiresAt ?? []).sort()[0] ?? null
+    return { events: [{ ...first, owner: ordered[0]!.owner, pull: pull.url,
+      actor: actors.join(', '), expiresAt, id: eventId([key, pull.url, head]) }], competing: [] }
   }
-  return { events, findings }
+  return others.length ? { events: [], competing: candidates } : { events: subjects.find(subject => subject.length)!, competing: [] }
 }

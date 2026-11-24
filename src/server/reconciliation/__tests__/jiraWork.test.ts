@@ -703,7 +703,7 @@ async function tswFixture() {
   }
   const run = async (apply: boolean, maxCards = 5, interruptSubmit: boolean | string = false) => runTswStatusSync(await sources.fleetSnapshot(true), {
     jira: f.jira(), stateFile: join(f.root, 'status-checkpoints.json'), apply, maxCards, audit: async entry => {
-      if (interruptSubmit && entry.result === 'write-planned' && entry.operationId?.endsWith(typeof interruptSubmit === 'string' ? interruptSubmit : '-ready-for-review')) throw new Error('Interrupted before write')
+      if (interruptSubmit && entry.result === 'write-planned' && entry.operationId?.slice('tsw-'.length + 64) === (typeof interruptSubmit === 'string' ? interruptSubmit : '-ready-for-review')) throw new Error('Interrupted before write')
     },
   })
   return { ...f, call, create, publish, publishBackup, run }
@@ -796,6 +796,66 @@ it('considers review and later wait requests while an answered decision remains 
     { verb: 'blocked', key: 'valid', summary: `wait ${JSON.stringify(typedWait)}` }])
   expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'external-wait-invalid' }))
   expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker })
+})
+
+it('replans a staged decision after a human advances Jira without duplicating the question', async () => {
+  const f = await tswFixture()
+  const { card: { key } } = await f.create('staged decision')
+  const summary = 'Which release window?'
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [{ verb: 'needs-decision', key: 'window', summary }] } })])
+  expect((await f.run(true, 1, '-decision')).stopped).toBe(true)
+  const issue = f.issues.get('60001')!
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Backlog', assignee: 'William Gathright',
+    decision_questions: [{ id: 'D1', question: summary }] })
+  issue.fields.status = { name: 'To Do' }
+  f.appendHistory(issue.id, [{ fieldId: 'status', fromString: 'Backlog', toString: 'To Do' }], 'jira-owner')
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Decision', assignee: 'William Gathright',
+    decision_questions: [{ id: 'D1', question: summary }] })
+})
+
+it('skips a capped decision in both modes and applies the next wait', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('capped decision')
+  const decision = { verb: 'needs-decision', key: 'window', summary: 'Which release window?' }
+  const wait = { verb: 'blocked', key: 'release', summary: `wait ${JSON.stringify(typedWait)}` }
+  const publish = (open_decisions: unknown[]) => f.publish([tswTask(key, '', 'off', { hints: { open_decisions } })])
+  await publish([decision])
+  f.controls.refuseTransition = true
+  for (let attempt = 0; attempt < 3; attempt++) await f.run(true)
+  f.controls.refuseTransition = false
+  await publish([decision, wait])
+  for (const apply of [false, true]) {
+    const result = await f.run(apply)
+    expect(result.audits).toContainEqual(expect.objectContaining({ result: 'rejected-cap-reached' }))
+    expect(result.plans.map(plan => plan.event.target)).toEqual(['Waiting For'])
+  }
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker,
+    decision_questions: [{ id: 'D1', question: decision.summary }] })
+  expect(await f.call('update_work', { kind: 'jira_edit', card_id, operation_id: 'clear-wait', blocker: null })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'resolve', verb: 'Resolve Wait', to: 'To Do', evidence: 'Resolved.' }))
+    .toMatchObject({ outcome: 'saved' })
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Decision',
+    decision_questions: [{ id: 'D1', question: decision.summary }] })
+})
+
+it('combines review signals from two mates after filtering an answered decision', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('shared review')
+  const decision = { verb: 'needs-decision', key: 'window', summary: 'Which release window?' }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [decision] } })])
+  await f.run(true)
+  await f.call('update_work', { kind: 'jira_edit', card_id, operation_id: 'answer', answers: [{ id: 'D1', answer: 'Tonight.' }] })
+  await f.call('transition_work', { card_id, operation_id: 'resume', verb: 'Answer Decision', to: 'In Progress', evidence: 'Resuming.' })
+  const detail = 'checks green: PR ready for review'
+  await f.publish([tswTask(key, detail, 'off', { hints: {
+    last_event_text: `done: PR ${fixturePull} checks green at head ${fixtureHead}`, open_decisions: [decision],
+  } })])
+  await f.publishBackup([tswTask(key, detail)])
+  const result = await f.run(true)
+  expect(result.plans[0]?.event).toMatchObject({ target: 'Ready for Review', actor: 'Firstmate backup, Firstmate fleet' })
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Ready for Review' })
 })
 
 it('replans an owner-only wait after a Jira move and definitive Block rejections', async () => {
