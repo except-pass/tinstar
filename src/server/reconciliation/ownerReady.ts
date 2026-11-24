@@ -1,3 +1,4 @@
+import { homeName } from '../../cockpit/overviewQuery'
 import { firstMateRequestSchema, requestAnchor } from '../../shared/deskSource'
 import type { OwnerReadyRead, OwnerRequestSource, OwnerMergeAsk, OwnerDecisionAsk } from '../../shared/ownerReady'
 import { inventoryPullState, type PullsRead } from '../../shared/pulls'
@@ -52,7 +53,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     if (!value) { value = { repository, merges: [], decisions: [] }; groups.set(repository, value) }
     return value
   }
-  const addMerge = (source: OwnerRequestSource, url: string | null, head: string | null, fresh: boolean) => {
+  const addMerge = (source: OwnerRequestSource, url: string | null, head: string | null, fresh: boolean, superseded = false) => {
     const pull = url ? releasePull(url) : null
     const id = pull?.id ?? JSON.stringify([source.kind, source.id])
     let ask = merges.get(id)
@@ -61,7 +62,8 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       merges.set(id, ask)
       group(pull?.repository ?? null).merges.push(ask)
     }
-    addSource(ask.sources, { ...source, requestedHead: head })
+    addSource(ask.sources, { ...source, requestedHead: head, ...(superseded ? { superseded: true as const } : {}) })
+    if (superseded) return
     if (head && !ask.requestedHeads.includes(head)) ask.requestedHeads.push(head)
     if (head && fresh) ask.unverifiedRequest = false
     ask.fresh ||= fresh
@@ -101,6 +103,13 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       }
     }
   }
+  type JiraMerge = NonNullable<JiraRead['data']>[number]['merges'][number]
+  const latestJira = new Map<string, JiraMerge>()
+  for (const issue of jiraIssues.values()) for (const merge of issue.merges) {
+    const latest = latestJira.get(merge.id)
+    if (!latest || merge.createdAt > latest.createdAt ||
+        (merge.createdAt === latest.createdAt && BigInt(merge.comment) > BigInt(latest.comment))) latestJira.set(merge.id, merge)
+  }
   for (const issue of jiraIssues.values()) {
     const fresh = !!jira && current(jira.status)
     if (issue.warning) warnings.push(`${issue.key} · ${issue.warning}`)
@@ -113,7 +122,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       if (issue.notesUnavailable) incompleteJiraPulls.add(merge.id)
       const id = JSON.stringify([issue.id, merge.comment, merge.head])
       addMerge({ kind: 'jira', id, label: issue.key, url: `${issue.url}?focusedCommentId=${merge.comment}` },
-        merge.url, merge.head, fresh && !issue.notesUnavailable && !merge.conditional)
+        merge.url, merge.head, fresh && !issue.notesUnavailable && !merge.conditional, latestJira.get(merge.id)?.comment !== merge.comment)
     }
   }
 
@@ -170,6 +179,17 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
   }
 
   const workers = new Map(fleetRows.map(row => [JSON.stringify([row.home, row.task.id]), row]))
+  const workerLink = (home: string, taskId: string) => {
+    const matches = fleetRows.filter(row => row.task.identity.task_id === taskId)
+    if (!matches.some(row => row.home === home)) return null
+    const query = new URLSearchParams({ worker: taskId })
+    if (matches.length > 1) {
+      const label = homeName(home)
+      if (matches.filter(row => homeName(row.home) === label).length !== 1) return null
+      query.set('home', label)
+    }
+    return `/?${query}`
+  }
   // Source-local readiness/response bindings come from the existing queue.
   // Its cross-source grouping alone is too broad to identify a decision.
   for (const item of buildQueue(snapshot).items) for (const source of item.sources) {
@@ -179,7 +199,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     const binding = JSON.stringify([source.responseAnchor, source.question, source.generation ?? null])
     if (boundRequests.has(binding) && !boundRequests.get(binding)) continue
     const id = boundRequests.get(binding) ?? JSON.stringify([source.responseAnchor, source.generation ?? null])
-    const record: OwnerRequestSource = { kind: 'firstmate', id: source.responseAnchor, label: source.request.id, url: worker?.task.recordUrl ?? null }
+    const record: OwnerRequestSource = { kind: 'firstmate', id: source.responseAnchor, label: source.request.id, url: workerLink(home, taskId) }
     const merge = mergePublication(source.question)
     const fresh = current(source.status)
     const repository = declaredRepository(worker?.row?.repo) ?? declaredRepository(worker?.task.project)
@@ -197,8 +217,11 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     // ticket/URL, can attest the requested revision.
     const publication = readyHeadPublication(task.lastEventText ?? '')
     if (!publication?.head || publication.conditional || publication.head !== requestedHead(task.pr.head) ||
-        publication.id !== releasePull(String(task.pr.url))?.id || !issue.merges.some(merge => merge.id === publication.id)) continue
-    addMerge({ kind: 'firstmate', id: JSON.stringify([home, task.id, task.identity.spawn_gen]), label: `${issue.key} · worker publication`, url: task.recordUrl ?? null },
+        publication.id !== releasePull(String(task.pr.url))?.id) continue
+    const latest = latestJira.get(publication.id)
+    if (!latest || latest.conditional || (latest.head && latest.head !== publication.head) ||
+        !issue.merges.includes(latest)) continue
+    addMerge({ kind: 'firstmate', id: JSON.stringify([home, task.id, task.identity.spawn_gen]), label: `${issue.key} · worker publication`, url: task.identity.task_id ? workerLink(home, task.identity.task_id) : null },
       publication.url, publication.head, fresh)
   }
 

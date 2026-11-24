@@ -58,6 +58,7 @@ type WriteInput = JiraCreate | JiraEdit | JiraTransition | JiraLink
 export class JiraWork extends JiraClient {
   private readonly receipts: CreationReceipts
   private readonly site: string
+  private reviewHistoryCursor?: string
   readonly ownerRequests = new CachedObservation(() => this.readOwnerRequests(), 20_000, 60_000,
     'Jira owner requests unavailable; retained records require verification.', Date.now, (previous: OwnerIssue[], current: OwnerIssue[]) =>
       retainMissing(previous, current, issue => issue.id), (previous, current) => {
@@ -225,9 +226,13 @@ export class JiraWork extends JiraClient {
         break
       }
     }
-    const reviews = [...issues].filter(([, issue]) => issue.reviewAssigned)
+    const candidates = [...issues].filter(([, issue]) => issue.reviewAssigned)
+    const start = candidates.findIndex(([id]) => id === this.reviewHistoryCursor) + 1
+    const reviews = [...candidates.slice(start), ...candidates.slice(0, start)]
     for (let offset = 0; offset < reviews.length; offset += 4) {
-      await Promise.all(reviews.slice(offset, offset + 4).map(async ([id, issue]) => {
+      const batch = reviews.slice(offset, offset + 4)
+      if (!signal.aborted) this.reviewHistoryCursor = batch.at(-1)?.[0]
+      await Promise.all(batch.map(async ([id, issue]) => {
         try {
           signal.throwIfAborted()
           const after = await this.previousReviewExit(id, signal)

@@ -10,7 +10,7 @@ export interface OwnerMergeAsk {
   requestedHeads: string[]
   unverifiedRequest: boolean
   fresh: boolean
-  sources: Array<OwnerRequestSource & { requestedHead: string | null }>
+  sources: Array<OwnerRequestSource & { requestedHead: string | null; superseded?: true }>
   live?: { head: string | null; state: 'ready' | 'stale' | 'pending' | 'unverified'; observedAt: string | null }
 }
 
