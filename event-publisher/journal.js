@@ -827,18 +827,23 @@ export class Journal {
   }
 
   registerRelay({ name, stream, startAfter }) {
-    if (startAfter > this.tail()) {
-      throw new JournalConfigurationError('startAfter exceeds the current journal tip')
+    try {
+      if (startAfter > this.tail()) {
+        throw new JournalConfigurationError('startAfter exceeds the current journal tip')
+      }
+      this.db.prepare(`
+        INSERT INTO jetstream_relays (name, stream, sequence) VALUES (?, ?, ?)
+        ON CONFLICT(name) DO NOTHING
+      `).run(name, stream, startAfter)
+      const row = this.db.prepare('SELECT stream, sequence FROM jetstream_relays WHERE name = ?').get(name)
+      if (row.stream !== stream) {
+        throw new JournalConfigurationError('use a distinct relay name when changing the destination stream')
+      }
+      return row.sequence
+    } catch (error) {
+      if (error instanceof JournalConfigurationError) throw error
+      throw new RelayCheckpointError(`JetStream relay ${name} could not initialize or reload checkpoint`)
     }
-    this.db.prepare(`
-      INSERT INTO jetstream_relays (name, stream, sequence) VALUES (?, ?, ?)
-      ON CONFLICT(name) DO NOTHING
-    `).run(name, stream, startAfter)
-    const row = this.db.prepare('SELECT stream, sequence FROM jetstream_relays WHERE name = ?').get(name)
-    if (row.stream !== stream) {
-      throw new JournalConfigurationError('use a distinct relay name when changing the destination stream')
-    }
-    return row.sequence
   }
 
   updateRelay(name, sequence, health, reason = null, ackAt = null) {

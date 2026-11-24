@@ -95,20 +95,29 @@ permanent relay. Keep Hulk's signed Jira ingress and publisher running
 throughout the cutover. Install and start the permanent Hulk relay as a
 supervised service with the live journal and supervised SSH forward.
 
-After cutover, arrange one new authentic Jira status change that triggers a
-signed delivery. Set `sequence` to the recorded journal sequence, then run
-both checks on Hulk.
+Once the supervised relay is running, read the current live journal tip
+immediately before triggering a controlled Jira status change.
+
+```sh
+./events replay --db /home/farm/srv/event-publisher/data/journal.sqlite --last 1 --json
+```
+
+Set `sequence` to that tip's `sequence` value. Trigger the change through Jira
+so it sends a new signed delivery. Record the issue, the before and after
+statuses, and the time of the change. Then run both checks on Hulk.
 
 ```sh
 ./events replay --db /home/farm/srv/event-publisher/data/journal.sqlite --source jira --after "$sequence" --json
 ./events sources --db /home/farm/srv/event-publisher/data/journal.sqlite
 ```
 
-Confirm signed delivery evidence and relay progress. Use Serena's JetStream
-management API to replay the stored fact and match its event ID to
-the live journal. Keep stage 1 open until the before-and-after replay and the
-new delivery through Hulk ingress, the live journal, the relay and Serena
-are recorded. Perform this rollout after merge.
+Identify the matching `ticket.status.changed` row by issue, transition and
+time, and confirm its signed delivery evidence. Record its Jira changelog ID
+and event ID, and verify the relay has processed its sequence. Use Serena's
+JetStream management API to replay the issue's fact subject and locate the
+same event ID, change and changelog ID. Keep stage 1 open until the before-and-after replay
+and the new delivery through Hulk ingress, the live journal, the relay and
+Serena are recorded. Perform this rollout after merge.
 
 ## Facts and recovery
 

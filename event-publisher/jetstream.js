@@ -74,12 +74,13 @@ export async function runRelay(journal, config, seed, signal) {
   let js
   let delay = 1000
   const authenticator = nkeyAuthenticator(Buffer.from(seed))
+  const tls = new URL(config.server).protocol === 'tls:' ? { rejectUnauthorized: true } : undefined
   try {
     while (!signal.aborted) {
       try {
         if (!nc || nc.isClosed()) {
           try {
-            nc = await connect({ servers: config.server, name: config.name, authenticator,
+            nc = await connect({ servers: config.server, name: config.name, authenticator, tls,
               inboxPrefix: `_INBOX.tinstar_relay.${config.name}`,
               reconnect: false, timeout: 5000, pingInterval: 10_000 })
             js = jetstream(nc, { timeout: 5000, checkAPI: false })
