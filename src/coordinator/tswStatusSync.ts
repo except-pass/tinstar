@@ -153,9 +153,9 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           return jira.repairTransitionAudit(repair.input, repair.actor)
         })().catch(() => undefined)
         const repaired = result?.outcome === 'saved'
-        const identityChanged = result?.outcome === 'issue-identity-changed'
+        const skipReason = result?.outcome === 'issue-identity-changed' || result?.outcome === 'card-canceled' ? result.outcome : undefined
         const attempts = repair.attempts + Number(result?.dispatched === true)
-        const abandoned = identityChanged || attempts >= noteRepairLimit
+        const abandoned = !!skipReason || attempts >= noteRepairLimit
         if (!repaired && !abandoned && attempts === repair.attempts) {
           await audit(key, 'note-repair-pending', { operationId })
           continue
@@ -164,7 +164,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           entry !== repair ? [entry] : repaired || abandoned ? [] : [{ ...entry, attempts }])
         await save(key, { ...checkpoint, noteRepairs })
         await audit(key, repaired ? 'note-repaired' : abandoned ? 'note-repair-abandoned' : 'note-repair-pending', {
-          operationId, ...(identityChanged && { detail: 'issue-identity-changed' }),
+          operationId, ...(skipReason && { detail: skipReason }),
         })
       }
     }

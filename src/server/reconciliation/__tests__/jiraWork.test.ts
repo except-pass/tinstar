@@ -551,6 +551,28 @@ it.each(['Fast-track', 'Complete Directly'] as const)('recovers evidence for a l
   if (verb === 'Complete Directly') expect(notes.some(note => note.includes(fixturePull))).toBe(true)
 })
 
+it('skips a deferred Fast-track note after the owner cancels the card', async () => {
+  const f = await tswFixture()
+  await f.create('canceled after Fast-track')
+  await f.publish([tswTask('TSW-1')])
+  f.controls.commentResponse = 'rejected'
+  const first = await f.run(true)
+  const operationId = first.audits.find(entry => entry.result === 'landed-note-pending' && entry.operationId?.endsWith('-queued'))!.operationId
+  const issue = f.issues.get('60001')!
+  expect(issue.fields.status.name).toBe('In Progress')
+  f.appendHistory(issue.id, [{ fieldId: 'status', fromString: issue.fields.status.name, toString: 'Canceled' }], 'workflow-admin')
+  issue.fields.status = { name: 'Canceled' }
+  f.controls.commentResponse = undefined
+  const writesBefore = f.requests.filter(request => request.method !== 'GET').length
+
+  const resumed = await f.run(true)
+  expect(resumed.audits).toContainEqual(expect.objectContaining({
+    result: 'note-repair-abandoned', detail: 'card-canceled', operationId,
+  }))
+  expect(issue.fields.status.name).toBe('Canceled')
+  expect(f.requests.filter(request => request.method !== 'GET')).toHaveLength(writesBefore)
+})
+
 it('repairs the oldest note first without consuming the forward-write allowance', async () => {
   const f = await tswFixture()
   await f.create('forward')

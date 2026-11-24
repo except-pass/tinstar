@@ -536,8 +536,12 @@ export class JiraWork extends JiraClient {
 
   private async postTransitionAudit(id: string, note: string, deferAudit: boolean, onDispatch?: () => void) {
     const baseline = await this.commentBaseline(id).catch(() => undefined)
-    await this.checkProject(id)
     const body = jiraText(note)
+    if (deferAudit) {
+      if ((await this.read(id)).status === 'Canceled') return false
+    } else {
+      await this.checkProject(id)
+    }
     onDispatch?.()
     const posted = await this.request(`issue/${id}/comment`, 'POST', { body }).catch(error => {
       if (isWriteRejection(error)) {
@@ -549,6 +553,7 @@ export class JiraWork extends JiraClient {
     const expected = nativeId(posted?.id) ? posted.id : baseline
     if (!expected) throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
     await this.checkComment(id, note, expected)
+    return true
   }
 
   async repairTransitionAudit(input: JiraTransition, actor: string) {
@@ -561,7 +566,7 @@ export class JiraWork extends JiraClient {
         await this.checkComment(id, note)
       } catch (error) {
         if (!(error instanceof JiraWorkUnconfirmed)) throw error
-        await this.postTransitionAudit(id, note, true, () => { dispatched = true })
+        if (!await this.postTransitionAudit(id, note, true, () => { dispatched = true })) return { outcome: 'card-canceled' }
       }
       return attempt.confirm(await this.read(id))
     }) as { outcome: string }
@@ -601,7 +606,9 @@ export class JiraWork extends JiraClient {
       })
       const saved = await readDestination(to)
       if (!note) return attempt.confirm(saved)
-      await this.postTransitionAudit(id, note, deferAudit)
+      if (!await this.postTransitionAudit(id, note, deferAudit)) {
+        throw new JiraWorkUnconfirmed('Jira ticket was canceled before the audit comment could be posted')
+      }
       return attempt.confirm(await readDestination(to))
     })
   }
