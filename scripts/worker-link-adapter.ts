@@ -17,7 +17,7 @@ async function main() {
     console.log([
       'Usage with Notion: npm run --silent worker-links:adapter -- --audit-file FILE [--config-home DIR] [--card ID ...] [--apply --max-cards 1..5 --write-token-file FILE]',
       'Usage for TSW only: npm run --silent worker-links:adapter -- --audit-file FILE [--config-home DIR] --card TSW-n [--card TSW-n ...] [--apply --max-cards 1..5]',
-      'Defaults to report-only. Apply limits writes per board. TSW apply uses the configured Jira work service account. Keep the audit file and its adjacent TSW checkpoint across runs.',
+      'Defaults to report-only. Jira writes require --apply and an explicit TSW --card and use the configured Jira work service account. Keep the audit file and its adjacent TSW checkpoint across runs.',
     ].join('\n'))
     return
   }
@@ -45,7 +45,7 @@ async function main() {
     const result = input ? await runWorkerLinkAdapter(input, { apply: values.apply, maxCards, cards: notionCards, transport, audit }) : null
     const tsw = runTsw ? await runTswStatusSync(input?.fleet ?? await sources.fleetSnapshot(), {
       jira: config.jiraWork?.projectId === tswProjectId ? sources.jiraWork : undefined,
-      apply: values.apply, maxCards, cards: tswCards, audit, stateFile: `${auditFile}.tsw-state.json`,
+      apply: values.apply && !!tswCards?.length, maxCards, cards: tswCards, audit, stateFile: `${auditFile}.tsw-state.json`,
     }) : undefined
     console.log(JSON.stringify({ ...result, ...(!result ? { mode: values.apply ? 'apply' : 'report-only' } : {}),
       stopped: !!(result?.stopped || tsw?.stopped), ...(tsw && { tsw: tsw.audits.map(({ cardId, result }) => ({ cardId, result })) }) }, null, 2))

@@ -6,6 +6,7 @@ import type { SourceSnapshot } from '../server/reconciliation'
 import { dispatchForTask } from '../server/reconciliation/dispatchProvenance'
 import { ageObservation } from '../server/reconciliation/observation'
 import { tswEvidence } from '../server/reconciliation/tswSnapshot'
+import { isPublishedReviewDetail } from '../server/reconciliation/workerLinkReport'
 
 type Home = SourceSnapshot['fleet'][number]
 type Fleet = NonNullable<Home['observation']['data']>
@@ -65,8 +66,7 @@ function classify(id: string, task: Task | undefined, row: Backlog | undefined, 
 
   const readyEvent = verb === 'pr-ready' || verb === 'done' &&
     /^PR https:\/\/github\.com\/\S+\/pull\/\d+ checks green\b/i.test(summary ?? '')
-  const readyState = /^(?:run passed: PR open|checks green: PR (?:held for merge|ready for review))\b/i.test(detail)
-  if ((readyState || readyEvent) && attempt?.yolo !== 'on') {
+  if ((isPublishedReviewDetail(detail) || readyEvent) && attempt?.yolo !== 'on') {
     if (!pull) return 'review-without-pull-evidence'
     if (attempt?.yolo === 'off') return event({ target: 'Ready for Review', pull }, pull, `First Mate reported checks green. ${pull}`)
     return 'merge-authority-unavailable'

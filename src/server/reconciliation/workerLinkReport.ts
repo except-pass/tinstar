@@ -7,11 +7,11 @@ import { BLANK_PROPERTY_REASON, FIRST_MATE_TASKS, workerLinkRecord, parseWorkerL
 // pr.url is the recorded pull request. current_state.detail is the forge disposition
 // published by crew state (open, held for merge, or ready for review). Title text is not evidence.
 // Only an inactive worker that passes this check is admitted to the write tier.
+export const isPublishedReviewDetail = (detail: unknown) => typeof detail === 'string' &&
+  /^(?:run passed: PR open|checks green: PR (?:held for merge|ready for review))\b/.test(detail)
 const reviewPrOpen = (execution: Execution) => {
   const url = execution.source.pr.url
-  const detail = execution.source.current_state.detail
-  return typeof url === 'string' && url.length > 0 && typeof detail === 'string' &&
-    /^(?:run passed: PR open|checks green: PR (?:held for merge|ready for review))\b/.test(detail)
+  return typeof url === 'string' && url.length > 0 && isPublishedReviewDetail(execution.source.current_state.detail)
 }
 const operationalWorker = (execution: Execution) =>
   execution.kind !== 'secondmate' && (execution.activity !== 'inactive' || reviewPrOpen(execution))

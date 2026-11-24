@@ -389,6 +389,9 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   expect(issue.fields.status.name).toBe('In Progress')
 
   const green = 'checks green: PR ready for review'
+  await f.publish([tswTask('TSW-1', 'Checks green: PR ready for review')])
+  expect(await f.run(true)).toMatchObject({ plans: [] })
+  expect(issue.fields.status.name).toBe('In Progress')
   await f.publish([tswTask('TSW-1', green, 'on')])
   expect(await f.run(true)).toMatchObject({ plans: [] })
   expect(issue.fields.assignee).toBeNull()
