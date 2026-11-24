@@ -150,18 +150,20 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       const offset = Number(body.nextPageToken ?? 0), end = offset + search.pageSize
       if (controls.rejectSearch || offset >= search.failFrom) return response({}, search.failureStatus)
       expect(body.jql).toContain(`project = ${projectId}`)
-      const query = /^project = (\d+)(?: AND issuetype IN \(([\d, ]+)\))?(?: AND cf\[(\d+)\] = ("(?:[^"\\]|\\.)*") AND status IN \((.+)\))? ORDER BY id( DESC)?$/.exec(body.jql)
+      const query = /^project = (\d+)(?: AND issuetype IN \(([\d, ]+)\))?(?: AND cf\[(\d+)\] = ("(?:[^"\\]|\\.)*") AND status IN \((.+)\))?(?: AND key IN \((.+)\))? ORDER BY id( DESC)?$/.exec(body.jql)
       const ownerQuery = /^project = (\d+) AND status NOT IN \(Done, Canceled\) AND \(cf\[(\d+)\] IS NOT EMPTY OR status = "Ready for Review"\) ORDER BY id$/.exec(body.jql)
       if (!query && !ownerQuery) return response({}, 400)
-      const [, workProject, types, ownerField, owner, statuses, descending] = query ?? []
+      const [, workProject, types, ownerField, owner, statuses, keys, descending] = query ?? []
       const project = workProject ?? ownerQuery?.[1]
       const decisionsField = ownerQuery ? `customfield_${ownerQuery[2]}` : undefined
       const selectedOwner: string | undefined = owner === undefined ? undefined : JSON.parse(owner)
       const selectedStatuses: string[] | undefined = statuses === undefined ? undefined : JSON.parse(`[${statuses}]`)
+      const selectedKeys: string[] | undefined = keys === undefined ? undefined : JSON.parse(`[${keys}]`)
       const visible = controls.staleSearch ? [] : [...issues.values()].map(issue => ({ ...issue, fields: search.indexed.get(issue.id) ?? issue.fields })).filter(issue => issue.fields.project.id === project &&
         (!types || types.split(', ').includes(issue.fields.issuetype?.id)) &&
         (!ownerField || issue.fields[`customfield_${ownerField}`]?.value === selectedOwner) &&
         (!selectedStatuses || selectedStatuses.includes(issue.fields.status.name)) &&
+        (!selectedKeys || selectedKeys.includes(issue.key)) &&
         (!decisionsField || (!['Done', 'Canceled'].includes(issue.fields.status.name) &&
           (issue.fields[decisionsField] != null && issue.fields[decisionsField] !== '' || issue.fields.status.name === 'Ready for Review'))))
         .sort((a, b) => descending ? Number(b.id) - Number(a.id) : Number(a.id) - Number(b.id))
@@ -715,10 +717,12 @@ const tswTask = (key: string, detail = '', yolo = 'off', overrides: Record<strin
   ...overrides,
 })
 
-it('reads the configured TSW board when reporting worker links through MCP', async () => {
+it('reports only declared TSW issues through MCP', async () => {
   const f = await fixture(tswProjectId)
   const key = 'TSW-987654321', id = '987654321', home = '/fixture/crew'
   f.issues.set(id, f.make(id, key, tswProjectId, { status: { name: 'In Progress' }, [config.fields.owner]: { value: 'Firstmate' } }))
+  const unrelated = '987654322'
+  f.issues.set(unrelated, f.make(unrelated, `TSW-${unrelated}`, tswProjectId, { status: { name: 'To Do' }, [config.fields.owner]: { value: 'Firstmate' } }))
   const file = join(f.root, 'worker-link-snapshot.json')
   await writeFile(file, JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: home, generated: new Date().toISOString(),
     main_inventory: { valid: true }, tasks: [tswTask(key)], backlog: { present: true, records: [] } }))
@@ -727,6 +731,7 @@ it('reads the configured TSW board when reporting worker links through MCP', asy
   expect(report.homes[0].tiers['already confirmed']).toMatchObject([{ task_id: `task-${key}`, cardIds: [expect.stringMatching(new RegExp(`:${id}$`))] }])
   expect(report.findings).not.toContainEqual(expect.objectContaining({ detector: 'invalid-dispatch-card' }))
   expect(report.merges).toEqual([])
+  expect(JSON.stringify(report)).not.toContain(unrelated)
 })
 
 it('blocks both card keys in conflicting dispatch copies even with separate live candidates', async () => {

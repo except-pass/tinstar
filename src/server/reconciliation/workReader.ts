@@ -67,12 +67,12 @@ export class WorkReader {
     } else if (!force && entry.observation.isCached()) this.api.diagnostics.cacheHits++
     return entry.observation.get(force, background)
   }
-  async query(scope: WorkScope = {}, force = false, background = false, includeNative = false): Promise<Observation<WorkData>> {
+  async query(scope: WorkScope = {}, force = false, background = false, includeNative = false, jiraKeys?: ReadonlySet<string>): Promise<Observation<WorkData>> {
     if (!includeNative || !this.native) return this.board(scope, force, background)
     const revision = this.native.accessRevision
     const [board, jira] = await Promise.all([
       this.config || this.jira ? this.board(scope, force, background) : null,
-      this.native.observationFor(scope).get(force, background),
+      (jiraKeys ? this.native.observationForKeys(jiraKeys) : this.native.observationFor(scope)).get(force, background),
     ])
     return this.combine(scope, board, revision === this.native.accessRevision ? jira : { ...jira, data: null, status: 'unknown', coverage: 'unknown', observedAt: null, expiresAt: null })
   }

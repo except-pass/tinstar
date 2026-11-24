@@ -25,16 +25,17 @@ import { loadReconciliationConfig, type ReconciliationConfig, type FleetSource }
 import { fleetObservation } from './fleet'
 import type { WorkScope } from './notion'
 import type { SceneCard } from './scene'
-import { ageObservation, retainMissing } from './observation'
+import { ageObservation, retainMissing, type Observation } from './observation'
 import { CardContextReader, hasUnverifiedRetractions, type CardContextRead } from './cardContext'
 import { SceneReconciler } from './scene'
 import { buildQueue } from './queue'
 import { QueuePullReader, queuePullReadBudget } from './queuePulls'
 import { buildWorkerLinkReport } from './workerLinkReport'
-import { tswProjectId } from './tswIdentity'
+import { dispatchForTask } from './dispatchProvenance'
+import { tswKey, tswProjectId } from './tswIdentity'
 import { SearchDocumentCollector } from './searchIndex'
 import { NotionApi } from './notionApi'
-import { WorkReader, type WorkCard } from './workReader'
+import { WorkReader, type WorkCard, type WorkData } from './workReader'
 import { getConfigRoot } from '../configRoot'
 import { WorkflowOperations } from './workflow'
 import { externalWorkers, searchWorkSchema, getWorkSchema, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput } from '../../shared/workflow'
@@ -156,6 +157,10 @@ export class ReconciliationSources {
 
   async snapshot(force = false, scope: WorkScope = {}, background = false, includeNative = false) {
     const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force, background, includeNative)])
+    return this.sourceSnapshot(fleet, intentions)
+  }
+
+  private sourceSnapshot(fleet: Awaited<ReturnType<ReconciliationSources['fleetSnapshot']>>, intentions: Observation<WorkData>) {
     // Scene refreshes read source properties only. Awaiting per-card comments
     // here makes a large board exceed the source deadline. Comment updates use
     // the existing rotating sweep and targeted search_work/get_work refreshes.
@@ -458,7 +463,21 @@ export class ReconciliationSources {
     return verifyRetractions ? this.context.verifyRetractions(context) : context
   }
 
-  workerLinkSnapshot() { return this.snapshot(false, {}, false, this.config.jiraWork?.projectId === tswProjectId) }
+  private async workerLinkSnapshot() {
+    if (this.config.jiraWork?.projectId !== tswProjectId) return this.snapshot()
+    const fleet = await this.fleetSnapshot()
+    const keys = new Set<string>()
+    for (const { observation } of fleet) {
+      for (const task of observation.data?.tasks ?? []) {
+        const backlog = observation.data?.backlog?.find(row => row.id === (task.backlog.id ?? task.identity.task_id))
+        const dispatch = dispatchForTask(task, backlog)
+        const key = dispatch.status === 'card' ? tswKey(dispatch.cardId) : null
+        if (key) keys.add(key)
+      }
+    }
+    const intentions = await this.workReader.query({}, false, false, keys.size > 0, keys)
+    return this.sourceSnapshot(fleet, intentions)
+  }
 
   async workerLinkReport() { return buildWorkerLinkReport(await this.workerLinkSnapshot()) }
 

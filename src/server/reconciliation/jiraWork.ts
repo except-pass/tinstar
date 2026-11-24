@@ -173,7 +173,12 @@ export class JiraWork extends JiraClient {
     return observation
   }
 
-  private observeProject(filter = '', scope?: WorkScope) {
+  observationForKeys(keys: ReadonlySet<string>) {
+    const filter = ` AND key IN (${[...keys].map(key => JSON.stringify(key)).join(', ')})`
+    return this.observeProject(filter, undefined, keys)
+  }
+
+  private observeProject(filter = '', scope?: WorkScope, keys?: ReadonlySet<string>) {
     return new CachedObservation<WorkData>(async () => {
       const cards = new Map<string, WorkCard>(), seen = new Set<string>()
       const signal = AbortSignal.timeout(20_000)
@@ -188,6 +193,7 @@ export class JiraWork extends JiraClient {
           if (!Array.isArray(result.issues)) throw new Error('Incomplete Jira work search page')
           for (const row of result.issues) {
             try {
+              if (keys && !keys.has(row.key)) continue
               const projected = this.boardFieldsFrom(row)
               if (!Object.values(this.config.issueTypes).includes(row.fields.issuetype.id)) throw new Error('Unexpected Jira issue type in search')
               const card = this.projectCard(projected)
@@ -206,6 +212,7 @@ export class JiraWork extends JiraClient {
       }
       for (const [id, { card, until }] of this.confirmed) {
         if (until <= Date.now()) { this.confirmed.delete(id); continue }
+        if (keys && (!card.source || !keys.has(card.source.displayKey))) continue
         const indexed = cards.get(id)
         if (indexed && Date.parse(indexed.last_edited_time) > Date.parse(card.last_edited_time)) continue
         cards.delete(id)
@@ -214,7 +221,7 @@ export class JiraWork extends JiraClient {
           if (raw.id !== this.id(id) || !nativeId(raw.fields?.project?.id) || !nativeId(raw.fields?.issuetype?.id)) throw new Error('Jira issue identity could not be confirmed')
           if (raw.fields?.project?.id !== this.config.projectId || !Object.values(this.config.issueTypes).includes(raw.fields?.issuetype?.id)) continue
           const current = this.projectCard(this.boardFieldsFrom(raw))
-          if (!scope || scopeMatches(current, scope)) cards.set(id, current)
+          if ((!keys || keys.has(raw.key)) && (!scope || scopeMatches(current, scope))) cards.set(id, current)
         } catch (error) {
           if (accessDenied(error)) throw error
           if (!(error instanceof JiraWriteError && error.status === 404)) complete = false
