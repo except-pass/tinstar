@@ -100,7 +100,7 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   deepEqual(calls.slice(2).map(([, etag]) => etag), ['"sample"', '"sample"'])
   deepEqual(journal.events({ after: before, provider: 'github' }), observed)
 
-  taskLinks(journal, secondary, { two: [] }, 5, false)
+  taskLinks(journal, secondary, { two: [] }, 5)
   conditional = false
   pr = pull({ state: 'closed', merged: true, updated_at: at(18) })
   checks = { total_count: 1, check_runs: [prCheck('success')] }
@@ -130,12 +130,6 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   equal(await resumed(journal), false)
   equal(journal.sources().find(source => source.type === 'pr').health, 'stale')
   equal(journal.tail(), cursor)
-  pr = pull({ head: { sha: nextRevision }, updated_at: at(30) })
-  const oldSnapshot = journal.sources().find(source => source.type === 'pr').last_snapshot_id
-  checks = { total_count: 101, check_runs: [prCheck()] }
-  equal(await resumed(journal), false)
-  equal(journal.sources().find(source => source.type === 'pr').last_snapshot_id, oldSnapshot)
-  equal(journal.tail(), cursor)
 
   const { stdout } = await exec(cli, ['replay', '--db', path, '--type', 'pr', '--source', 'github', '--entity',
     'github:pr:example/project#12', '--after', String(observed.at(-1).sequence), '--json'])
@@ -160,8 +154,149 @@ test('GitHub rejects check runs from another repository even when the head match
     }),
   })
   equal(await observe(journal), false)
-  deepEqual(journal.events({ provider: 'github' }), [])
-  equal(journal.sources().find(source => source.type === 'pr').last_snapshot_id, null)
+  const events = journal.events({ provider: 'github' })
+  deepEqual(events.map(event => event.event_type), ['pr.observed'])
+  equal(events[0].evidence.check_coverage, 'unavailable')
+})
+
+test('GitHub retains check provenance through a partial merge poll and observes an empty new head', async t => {
+  const path = await journalPath(t)
+  let journal = new Journal(path)
+  t.after(() => journal.close())
+  journal.registerSources([githubSource])
+  taskLinks(journal, openHome, { one: [pullUrl] })
+  let second = 10
+  let pr = pull()
+  let checks = { total_count: 1, check_runs: [prCheck()] }
+  const options = {
+    repositories: ['example/project'],
+    now: () => new Date(at(second++)),
+    get: async path => githubResponse(path.includes('/pulls/') ? pr : checks),
+  }
+  const observe = githubObserver(options)
+  equal(await observe(journal), true)
+  const verified = journal.events().at(-1)
+
+  pr = pull({ state: 'closed', merged: true, updated_at: at(20) })
+  checks = { total_count: 101, check_runs: [prCheck()] }
+  equal(await observe(journal), false)
+  const partial = journal.events({ provider: 'github', after: verified.sequence })
+  deepEqual(partial.map(event => event.event_type), ['pr.merged', 'pr.updated'])
+  equal(partial[0].evidence.check_coverage, 'unavailable')
+  equal(journal.sources().find(source => source.type === 'pr').health, 'partial')
+
+  journal.close()
+  journal = new Journal(path)
+  const resumed = githubObserver(options)
+  checks = { total_count: 1, check_runs: [prCheck('success')] }
+  equal(await resumed(journal), true)
+  const recovered = journal.events().at(-1)
+  equal(recovered.event_type, 'pr.checks.changed')
+  equal(recovered.observation.previous_snapshot, verified.observation.current_snapshot)
+  pr = { ...pr, head: { sha: nextRevision }, updated_at: at(30) }
+  checks = { total_count: 0, check_runs: [] }
+  equal(await resumed(journal), true)
+  const empty = journal.events().at(-1)
+  equal(empty.event_type, 'pr.checks.observed')
+  deepEqual(empty.change, { field: 'checks', after: [] })
+  equal(empty.observation.previous_snapshot, undefined)
+  equal(await resumed(journal), true)
+  equal(journal.tail(), empty.sequence)
+})
+
+test('GitHub rechecks links after awaits and resolves associations at append time', async t => {
+  const journal = new Journal(await journalPath(t))
+  t.after(() => journal.close())
+  journal.registerSources([githubSource])
+  const otherPull = pullUrl.replace('/12', '/13')
+  taskLinks(journal, openHome, { one: [pullUrl, otherPull] })
+  let second = 10
+  let phase = 0
+  const calls = []
+  const observe = githubObserver({
+    repositories: ['example/project'],
+    now: () => new Date(at(second++)),
+    get: async path => {
+      calls.push(path)
+      if (phase === 0) {
+        taskLinks(journal, openHome, { one: [] }, 5)
+        return githubResponse(pull())
+      }
+      if (path.includes('/pulls/')) return githubResponse(pull({ draft: true, updated_at: at(20) }))
+      taskLinks(journal, openHome, { one: [], two: [pullUrl] }, 15)
+      return githubResponse({ total_count: 0, check_runs: [] })
+    },
+  })
+  equal(await observe(journal), false)
+  deepEqual(calls, ['repos/example/project/pulls/12'])
+  deepEqual(journal.events({ provider: 'github' }).at(-1).related, [])
+  phase++
+  taskLinks(journal, openHome, { one: [pullUrl] }, 10)
+  equal(await observe(journal), true)
+  for (const event of journal.events({ provider: 'github' }).slice(1)) {
+    deepEqual(event.related, [{ relation: 'linked-task', subject: { type: 'task', id: entityId('task', openHome.id, 'two') } }])
+  }
+})
+
+test('GitHub distinguishes an empty verified backlog from incomplete discovery', async t => {
+  const journal = new Journal(await journalPath(t))
+  t.after(() => journal.close())
+  journal.registerSources([githubSource])
+  taskLinks(journal, openHome, {})
+  let second = 10
+  let calls = 0
+  const observe = githubObserver({
+    repositories: ['example/project'],
+    now: () => new Date(at(second++)),
+    get: async path => {
+      calls++
+      return githubResponse(path.includes('/pulls/') ? pull() : { total_count: 0, check_runs: [] })
+    },
+  })
+  const health = () => journal.sources().find(source => source.type === 'pr').health
+  equal(await observe(journal), true)
+  equal(health(), 'unconnected')
+  const [source] = sourcesFor(openHome)
+  journal.record({ source, health: 'unavailable', started_at: at(5), observed_at: at(6) })
+  equal(await observe(journal), false)
+  equal(health(), 'unavailable')
+  equal(calls, 0)
+  const other = { ...openHome, id: 'example-other', path: '/example/other' }
+  taskLinks(journal, other, { two: [pullUrl] })
+  equal(await observe(journal), false)
+  equal(health(), 'partial')
+  equal(calls, 2)
+  taskLinks(journal, openHome, { one: [pullUrl.replace('/12', '/13')] }, 10)
+  taskLinks(journal, openHome, { one: [] }, 15, false)
+  equal(await observe(journal), false)
+  equal(health(), 'partial')
+  equal(calls, 4)
+})
+
+test('text replay identifies checks that swap outcomes with unchanged totals', async t => {
+  const path = await journalPath(t)
+  const journal = new Journal(path)
+  t.after(() => journal.close())
+  journal.registerSources([githubSource])
+  taskLinks(journal, openHome, { one: [pullUrl] })
+  let second = 10
+  let swapped = false
+  const observe = githubObserver({
+    repositories: ['example/project'],
+    now: () => new Date(at(second++)),
+    get: async endpoint => githubResponse(endpoint.includes('/pulls/') ? pull() : {
+      total_count: 2,
+      check_runs: [prCheck(swapped ? 'failure' : 'success'), {
+        ...prCheck(swapped ? 'success' : 'failure'), id: 101,
+        url: 'https://api.github.com/repos/Example/Project/check-runs/101',
+      }],
+    }),
+  })
+  equal(await observe(journal), true)
+  swapped = true
+  equal(await observe(journal), true)
+  const { stdout } = await exec(cli, ['replay', '--db', path, '--type', 'pr', '--last', '1'])
+  match(stdout, /#100 completed\/success → completed\/failure, #101 completed\/failure → completed\/success/)
 })
 
 test('GitHub rotates bounded pulls and stops at the shared reserve', async t => {
@@ -184,7 +319,7 @@ test('GitHub rotates bounded pulls and stops at the shared reserve', async t => 
   })
   equal(await observe(journal), false)
   equal(requests, 8)
-  deepEqual(journal.sources().find(source => source.type === 'pr').counts, { linked: 5, observed: 4, failed: 0, deferred: 1 })
+  deepEqual(journal.sources().find(source => source.type === 'pr').counts, { linked: 5, observed: 4, failed: 0, deferred: 1, checks_unavailable: 0 })
   equal(journal.events({ provider: 'github' }).at(-1).evidence.source_reference.number, 15)
   equal(await observe(journal), false)
   equal(requests, 16)

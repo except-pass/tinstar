@@ -15,12 +15,12 @@ export const deploymentLifecycleSource = {
 }
 
 export function deploymentDiff(before, after) {
-  if (!before) return [{ event_type: 'deployment.running.observed', change: { after } }]
-  if (before.revision === after.revision) return []
-  return [{
+  if (!before) return { changes: [{ event_type: 'deployment.running.observed', change: { after } }] }
+  if (before.revision === after.revision) return { changes: [] }
+  return { changes: [{
     event_type: 'deployment.revision.changed',
     change: { field: 'revision', before: before.revision, after: after.revision },
-  }]
+  }] }
 }
 
 export async function observeFloor(journal, signal, { fetchFloor = fetch, now = () => new Date() } = {}) {

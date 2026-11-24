@@ -290,7 +290,7 @@ export class Journal {
     }
   }
 
-  linkedPulls() {
+  linkedPulls(url = null) {
     return this.db.prepare(`
       SELECT DISTINCT e.entity_id AS task_id, link.value AS url
       FROM entities e JOIN sources s USING (source_id),
@@ -301,8 +301,9 @@ export class Journal {
         AND COALESCE(json_extract(s.description, '$.configured'), 1) = 1
         AND s.health = 'ok' AND e.last_seen_snapshot = s.last_snapshot_id
         AND json_extract(e.evidence, '$.pr_link_source') = ?
+        AND (? IS NULL OR link.value = ?)
       ORDER BY url, task_id
-    `).all(prLinkSource)
+    `).all(prLinkSource, url, url)
   }
 
   recordProviderPoll(source, { startedAt, observedAt, entries, health, reason, counts }, diff) {
@@ -324,11 +325,17 @@ export class Journal {
         `)
         for (const entry of entries) {
           const prior = select.get(source.source_id, entry.id)
-          const changes = diff(prior ? JSON.parse(prior.fields) : null, entry.fields)
+          const result = diff(prior ? JSON.parse(prior.fields) : null, entry.fields,
+            { prior, snapshot, startedAt: entry.startedAt })
           // A provider can recognize an older source revision after restart.
-          if (changes === null) continue
+          if (result === null) continue
+          const { changes, fields = entry.fields } = result
+          const related = source.provider === 'github' ?
+            this.linkedPulls(entry.evidence.source_reference.url).map(({ task_id }) => ({
+              relation: 'linked-task', subject: { type: 'task', id: task_id },
+            })) : entry.related
           accepted++
-          for (const difference of changes) {
+          for (const { previous = prior, ...difference } of changes) {
             const event_id = `event:${randomUUID()}`
             const event = {
               schema: 'event-publisher.event.v1', event_id, ...difference,
@@ -338,15 +345,15 @@ export class Journal {
               observation: {
                 method: 'snapshot-diff', read_method: source.command, coverage: source.coverage,
                 batch_id: snapshot, current_snapshot: snapshot,
-                ...(prior ? { previous_snapshot: prior.snapshot_id } : {}),
-                observed_between: { after: prior?.started_at ?? null, by: entry.observedAt },
+                ...(previous ? { previous_snapshot: previous.snapshot_id } : {}),
+                observed_between: { after: previous?.started_at ?? null, by: entry.observedAt },
               },
-              related: entry.related, evidence: entry.evidence,
+              related, evidence: entry.evidence,
             }
             append.run(event_id, source.source_id, source.type, entry.id, JSON.stringify(event))
           }
           save.run(source.source_id, entry.id, snapshot, snapshot, entry.startedAt, entry.observedAt,
-            JSON.stringify(entry.fields), JSON.stringify(entry.evidence))
+            JSON.stringify(fields), JSON.stringify(entry.evidence))
         }
         if (accepted < entries.length) {
           health = accepted ? 'partial' : 'stale'

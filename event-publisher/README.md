@@ -104,9 +104,11 @@ of its exact head SHA in the base repository. The collector keeps ETags in
 memory and sends conditional requests. It pauses when the shared core quota
 reaches a 1,000-request reserve and honors rate-limit retry instructions.
 `events sources` reports the linked, observed, failed and deferred PR counts.
-Long lists take multiple passes. A missing or incomplete check-run response
-leaves that PR's previous snapshot intact. Check statuses posted only through
-the legacy commit-status API or another repository are outside this coverage.
+Long lists take multiple passes. Unavailable task-link discovery or check reads
+are reported in source health. Verified PR fields are journaled even when check
+reads fail, and the last verified check baseline is retained. Check statuses
+posted only through the legacy commit-status API or another repository are
+outside this coverage.
 The service checks every accepted sample's exact repository and PR number.
 PR identity is `owner/repo#number`, so a rename or transfer that changes the
 slug starts a new identity.
@@ -184,8 +186,8 @@ for (const [index, lifecycle] of ['started', 'smoke_failed', 'failed', 'rolled_b
     startedAt: at, observedAt: at, health: 'ok', reason: null, counts: { observed: 1 },
     entries: [{ id, startedAt: at, observedAt: at, fields, related: [],
       evidence: { source_reference: { target: 'fixture-floor' } } }],
-  }, (before, after) => [{ event_type: `deployment.${after.lifecycle}`,
-    change: before ? { field: 'lifecycle', before: before.lifecycle, after: after.lifecycle } : { after } }])
+  }, (before, after) => ({ changes: [{ event_type: `deployment.${after.lifecycle}`,
+    change: before ? { field: 'lifecycle', before: before.lifecycle, after: after.lifecycle } : { after } }] }))
 }
 journal.close()
 EOF

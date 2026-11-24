@@ -55,7 +55,7 @@ function checkFields(body, repository, head, headers) {
   }).sort((a, b) => a.id - b.id)
 }
 
-export function githubDiff(before, after) {
+function githubDiff(before, after, { prior, snapshot, startedAt }) {
   const { checks, updated_at, ...fields } = after
   if (before && updated_at < before.updated_at) return null
   const changes = before ? Object.entries(fields)
@@ -64,14 +64,21 @@ export function githubDiff(before, after) {
       event_type: field === 'state' ? `pr.${value === 'open' ? 'opened' : value}` : 'pr.updated',
       change: { field, before: before[field], after: value },
     })) : [{ event_type: 'pr.observed', change: { after: fields } }]
-  const priorChecks = before?.head_sha === fields.head_sha ? before.checks : null
-  if (JSON.stringify(priorChecks ?? []) !== JSON.stringify(checks)) {
+
+  const baseline = before?.check_inventory ?? (before?.checks && {
+    head: before.head_sha, runs: before.checks, snapshot_id: prior.snapshot_id, started_at: prior.started_at,
+  })
+  const previous = before?.head_sha === fields.head_sha && baseline?.head === fields.head_sha ? baseline : null
+  if (checks !== undefined && (!previous || JSON.stringify(previous.runs) !== JSON.stringify(checks))) {
     changes.push({
-      event_type: priorChecks ? 'pr.checks.changed' : 'pr.checks.observed',
-      change: { field: 'checks', ...(priorChecks ? { before: priorChecks } : {}), after: checks },
+      event_type: previous ? 'pr.checks.changed' : 'pr.checks.observed',
+      change: { field: 'checks', ...(previous ? { before: previous.runs } : {}), after: checks },
+      previous,
     })
   }
-  return changes
+  const inventory = checks === undefined ? baseline :
+    { head: fields.head_sha, runs: checks, snapshot_id: snapshot, started_at: startedAt }
+  return { changes, fields: { ...fields, updated_at, check_inventory: inventory } }
 }
 
 async function githubGet(path, etag, signal) {
@@ -125,24 +132,17 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
 
   return async (journal, signal) => {
     const startedAt = now().toISOString()
-    const targets = new Map()
-    for (const { url, task_id } of journal.linkedPulls()) {
-      const repository = pullUrl.exec(url)?.[1]
-      if (!allowed.has(repository)) continue
-      if (!targets.has(url)) targets.set(url, [])
-      targets.get(url).push({
-        relation: 'linked-task',
-        subject: { type: 'task', id: task_id },
-      })
-    }
+    const targets = new Set(journal.linkedPulls().map(({ url }) => url)
+      .filter(url => allowed.has(pullUrl.exec(url)?.[1])))
     for (const url of caches.keys()) if (!targets.has(url)) caches.delete(url)
     // Poll least recently attempted links first so a large backlog cannot starve any PR.
-    const candidates = [...targets.keys()].sort((a, b) => (caches.get(a)?.attempt ?? 0) - (caches.get(b)?.attempt ?? 0))
+    const candidates = [...targets].sort((a, b) => (caches.get(a)?.attempt ?? 0) - (caches.get(b)?.attempt ?? 0))
     const entries = []
-    const counts = { linked: targets.size, observed: 0, failed: 0, deferred: 0 }
+    const counts = { linked: targets.size, observed: 0, failed: 0, deferred: 0, checks_unavailable: 0 }
     let reason = null
     for (const url of candidates.slice(0, pullsPerPass)) {
       if (signal?.aborted || now() < notBefore) break
+      if (!journal.linkedPulls(url).length) continue
       const [, repository, numberText] = pullUrl.exec(url)
       const number = Number(numberText)
       const attempt = now()
@@ -154,18 +154,29 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
           body => prFields(body, repository, number), signal)
         cache.pull = pull
         const head = pull.value.head_sha
-        const checks = await sample(`repos/${repository}/commits/${head}/check-runs?filter=all&per_page=100`,
-          cache.head === head ? cache.checks : null, (body, headers) => checkFields(body, repository, head, headers), signal)
-        cache.head = head
-        cache.checks = checks
+        let checks
+        let observedAt = now().toISOString()
+        try {
+          if (signal?.aborted) return
+          if (!journal.linkedPulls(url).length) throw new GitHubReadError('verified task link no longer available')
+          checks = await sample(`repos/${repository}/commits/${head}/check-runs?filter=all&per_page=100`,
+            cache.head === head ? cache.checks : null, (body, headers) => checkFields(body, repository, head, headers), signal)
+          cache.head = head
+          cache.checks = checks
+          observedAt = now().toISOString()
+        } catch (error) {
+          counts.checks_unavailable++
+          reason ??= error instanceof GitHubReadError ? error.message : 'invalid GitHub check response'
+        }
         entries.push({
           id: `github:pr:${repository}#${number}`,
-          startedAt: attempt.toISOString(), observedAt: now().toISOString(),
-          fields: { ...pull.value, checks: checks.value },
-          related: targets.get(url),
+          startedAt: attempt.toISOString(), observedAt,
+          fields: { ...pull.value, checks: checks?.value },
           evidence: {
             source_reference: { url, repository, number, head_sha: head },
-            confidence_basis: 'matching GitHub PR identity and check runs for its exact head SHA',
+            check_coverage: checks ? 'verified' : 'unavailable',
+            confidence_basis: checks ? 'matching GitHub PR identity and check runs for its exact head SHA' :
+              'matching GitHub PR identity',
           },
         })
         counts.observed++
@@ -177,10 +188,17 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
     }
     if (signal?.aborted) return
     counts.deferred = counts.linked - counts.observed - counts.failed
-    if (!counts.linked) reason = 'no allowlisted PR links in the accepted live task backlog'
-    else if (now() < notBefore) reason = deferReason
-    else if (counts.deferred) reason ??= 'poll budget rotates through linked PRs'
-    const health = !counts.linked ? 'unconnected' : reason ? entries.length ? 'partial' : 'unavailable' : 'ok'
+    const taskSources = journal.sources().filter(source =>
+      source.source_id.startsWith('firstmate:home:') && source.type === 'task' && source.mode === 'live' && source.health !== 'deconfigured')
+    const discoveryIncomplete = taskSources.filter(source => source.health !== 'ok' || source.counts?.pr_links_unobserved).length
+    if (discoveryIncomplete) {
+      counts.task_sources_incomplete = discoveryIncomplete
+      reason ??= 'verified PR link discovery incomplete'
+    }
+    if (now() < notBefore) reason ??= deferReason
+    if (counts.deferred) reason ??= 'some linked PRs were deferred'
+    const health = reason ? entries.length ? 'partial' : 'unavailable' : counts.linked ? 'ok' : 'unconnected'
+    if (health === 'unconnected') reason = 'no allowlisted PR links in the accepted live task backlog'
     return journal.recordProviderPoll(githubSource, {
       startedAt, observedAt: now().toISOString(), entries, health, reason, counts,
     }, githubDiff)

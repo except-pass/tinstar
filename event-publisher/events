@@ -267,6 +267,15 @@ function jiraEventLabel(event) {
   return `${change.field} ${printable(change.before)} → ${printable(change.after)}`
 }
 
+function checkTransitions(before, after) {
+  const earlier = new Map(before.map(run => [run.id, run]))
+  const later = new Map(after.map(run => [run.id, run]))
+  const label = run => run ? [run.status, run.conclusion].filter(Boolean).join('/') : '—'
+  return [...new Set([...earlier.keys(), ...later.keys()])].sort((a, b) => a - b)
+    .filter(id => label(earlier.get(id)) !== label(later.get(id)))
+    .map(id => `#${id} ${label(earlier.get(id))} → ${label(later.get(id))}`).join(', ')
+}
+
 function eventText(event, replay, health) {
   const time = new Date(event.observed_at).toLocaleTimeString()
   const { source, subject, change, evidence } = event
@@ -294,8 +303,11 @@ function eventText(event, replay, health) {
       if (change.field?.endsWith('sha') || change.field === 'revision') return value?.slice(0, 12) ?? '—'
       return change.field ? valueText(value) : value.state ?? `${value.lifecycle} ${value.revision.slice(0, 12)}`
     }
-    const meaning = [event.event_type, change.field, Object.hasOwn(change, 'before')
-      ? `${render(change.before)} → ${render(change.after)}` : render(change.after)].filter(Boolean).join(' · ')
+    const after = render(change.after)
+    const before = Object.hasOwn(change, 'before') ? render(change.before) : null
+    const detail = before === null ? after : change.field === 'checks' && before === after
+      ? checkTransitions(change.before, change.after) : `${before} → ${after}`
+    const meaning = [event.event_type, change.field, detail].filter(Boolean).join(' · ')
     return `${time} [${labels.join('/')}] ${category} ${compact} · ${meaning} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
   }
   const compact = [reference.task_id, reference.spawn_gen].filter(Boolean).join('@')
