@@ -301,7 +301,7 @@ function eventText(event, replay, health) {
         return Object.keys(groups).sort().map(result => `${result}=${groups[result].length}`).join(', ') || 'no checks'
       }
       if (change.field?.endsWith('sha') || change.field === 'revision') return value?.slice(0, 12) ?? '—'
-      return change.field ? valueText(value) : value.state ?? `${value.lifecycle} ${value.revision.slice(0, 12)}`
+      return change.field ? valueText(value) : value.state ?? [value.lifecycle, value.revision?.slice(0, 12)].filter(Boolean).join(' ')
     }
     const after = render(change.after)
     const before = Object.hasOwn(change, 'before') ? render(change.before) : null

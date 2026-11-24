@@ -326,7 +326,7 @@ export class Journal {
         for (const entry of entries) {
           const prior = select.get(source.source_id, entry.id)
           const result = diff(prior ? JSON.parse(prior.fields) : null, entry.fields,
-            { prior, snapshot, startedAt: entry.startedAt })
+            { snapshot, startedAt: entry.startedAt })
           // A provider can recognize an older source revision after restart.
           if (result === null) continue
           const { changes, fields = entry.fields } = result
@@ -341,9 +341,9 @@ export class Journal {
               schema: 'event-publisher.event.v1', event_id, ...difference,
               source: { provider: source.provider, source_id: source.source_id, mode: source.mode },
               subject: { type: source.type, id: entry.id },
-              observed_at: entry.observedAt, occurred_at: null,
+              observed_at: entry.observedAt, occurred_at: entry.occurredAt ?? null,
               observation: {
-                method: 'snapshot-diff', read_method: source.command, coverage: source.coverage,
+                method: entry.occurredAt ? 'audit-record' : 'snapshot-diff', read_method: source.command, coverage: source.coverage,
                 batch_id: snapshot, current_snapshot: snapshot,
                 ...(previous ? { previous_snapshot: previous.snapshot_id } : {}),
                 observed_between: { after: previous?.started_at ?? null, by: entry.observedAt },

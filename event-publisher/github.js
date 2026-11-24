@@ -55,7 +55,7 @@ function checkFields(body, repository, head, headers) {
   }).sort((a, b) => a.id - b.id)
 }
 
-function githubDiff(before, after, { prior, snapshot, startedAt }) {
+function githubDiff(before, after, { snapshot, startedAt }) {
   const { checks, updated_at, ...fields } = after
   if (before && updated_at < before.updated_at) return null
   const changes = before ? Object.entries(fields)
@@ -65,9 +65,7 @@ function githubDiff(before, after, { prior, snapshot, startedAt }) {
       change: { field, before: before[field], after: value },
     })) : [{ event_type: 'pr.observed', change: { after: fields } }]
 
-  const baseline = before?.check_inventory ?? (before?.checks && {
-    head: before.head_sha, runs: before.checks, snapshot_id: prior.snapshot_id, started_at: prior.started_at,
-  })
+  const baseline = before?.check_inventory
   const previous = before?.head_sha === fields.head_sha && baseline?.head === fields.head_sha ? baseline : null
   if (checks !== undefined && (!previous || JSON.stringify(previous.runs) !== JSON.stringify(checks))) {
     changes.push({

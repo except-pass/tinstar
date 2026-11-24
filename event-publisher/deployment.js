@@ -1,5 +1,6 @@
 import { hostname } from 'node:os'
 
+const shaPattern = /^[a-f0-9]{40}$/
 const floorUrl = 'http://127.0.0.1:5281/api/deployment'
 const floorTarget = `tinstar-floor:${encodeURIComponent(hostname())}:5281`
 export const deploymentSource = {
@@ -11,7 +12,58 @@ export const deploymentSource = {
 export const deploymentLifecycleSource = {
   source_id: 'deployment:lifecycle', provider: 'deployment', type: 'deployment', health: 'unconnected',
   coverage: 'deployment attempts, smoke, failure and rollback',
-  reason: 'the deploy audit lives on the deployment host and is not readable by the publisher without a new reader',
+  reason: 'the deploy audit is an owner-only file on the deployment host and the publisher has no read-only reader there',
+}
+
+function auditTime(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return null
+  const time = value.length === 20 ? value.replace('Z', '.000Z') : value
+  const date = new Date(time)
+  return Number.isFinite(date.getTime()) && date.toISOString() === time ? time : null
+}
+
+export function parseFloorAudit(jsonl, { target, failureMarker = '' }) {
+  const observations = new Map()
+  function add(time, lifecycle, action, revision, nativeId, extra = {}) {
+    const occurredAt = auditTime(time)
+    if (!occurredAt) return
+    const id = `deployment:${encodeURIComponent(target)}:${nativeId ?? revision ?? 'block'}`
+    const event_type = `deployment.${lifecycle}`
+    observations.set(JSON.stringify([id, event_type, occurredAt]), {
+      id, event_type, occurredAt,
+      fields: { environment: 'floor', revision, lifecycle, native_deployment_id: nativeId, ...extra },
+      evidence: { source_reference: { target, action }, confidence_basis: 'guarded floor deployment record' },
+    })
+  }
+
+  for (const line of jsonl.split('\n')) {
+    let row
+    try {
+      row = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const { action, time, newSha, oldSha, head, gate } = row ?? {}
+    if (action === 'floor-deployment' && typeof newSha === 'string' &&
+        shaPattern.test(newSha) && row.id === `floor:${newSha}`) {
+      add(time, 'started', action, newSha, row.id, {
+        previous_revision: typeof oldSha === 'string' && shaPattern.test(oldSha) ? oldSha : null,
+      })
+    } else if (action === 'floor-smoke' && row.passed === true && typeof newSha === 'string' &&
+        shaPattern.test(newSha) && row.deploymentId === `floor:${newSha}`) {
+      add(time, 'completed', action, newSha, row.deploymentId)
+    } else if (gate === 'block' && action === 'override' && typeof head === 'string' && shaPattern.test(head)) {
+      add(time, 'block_bypassed', action, head, null)
+    } else if (gate === 'block' && action === 'clear-block') {
+      add(time, 'block_cleared', action, null, null, {
+        checkout_revision: typeof head === 'string' && shaPattern.test(head) ? head : null,
+      })
+    }
+  }
+
+  const marker = /^failed_at=([^\r\n]+)\r?\nphase=[^\r\n]+\r?\nsha=([a-f0-9]{40})(?:\r?\n)?$/.exec(failureMarker)
+  if (marker) add(marker[1], 'failed', 'failure-marker', marker[2], null)
+  return [...observations.values()].sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
 }
 
 export function deploymentDiff(before, after) {
@@ -33,7 +85,7 @@ export async function observeFloor(journal, signal, { fetchFloor = fetch, now = 
     })
     if (response.ok) {
       const body = await response.json()
-      if (body?.ok === true && typeof body.data?.sha === 'string' && /^[a-f0-9]{40}$/.test(body.data.sha)) {
+      if (body?.ok === true && typeof body.data?.sha === 'string' && shaPattern.test(body.data.sha)) {
         revision = body.data.sha
       } else reason = 'floor endpoint did not identify a running revision'
     } else {

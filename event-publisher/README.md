@@ -158,36 +158,44 @@ events replay --type deployment --last 10 --json
 A verified read gives the running-revision source `ok` health. An unavailable
 endpoint or unknown SHA leaves the last verified revision in the journal.
 Deployment lifecycle (attempts, smoke, failure and rollback) stays unconnected
-because the deploy audit lives on the deployment host and is not readable by
-the publisher without a new reader. PR membership remains unknown.
+because the deploy audit is an owner-only file on the deployment host and
+the publisher has no read-only reader there. The audit path is
+`${TINSTAR_DEPLOY_BLOCK}.audit.jsonl`, defaulting to
+`$TINSTAR_CONFIG_HOME/deploy.blocked.audit.jsonl`. PR membership remains unknown.
 
 ### Synthetic deployment lifecycle fixture
 
-Run from the repository root to replay synthetic lifecycle events in a separate
-journal. Every event is labeled `fixture`.
+Run from the repository root. The parser reads synthetic audit JSONL and the
+separate failure marker format. It emits starts from deployment receipts,
+completions from successful smoke receipts, failure from the marker, and
+audited block bypasses and clears. The current writers supply no explicit
+rollback receipt. Every replayed event is labeled `fixture`.
 
 ```sh
 fixture_dir=$(mktemp -d)
 node --input-type=module - "$fixture_dir/journal.sqlite" <<'EOF'
+import { readFileSync } from 'node:fs'
+import { parseFloorAudit } from './event-publisher/deployment.js'
 import { Journal } from './event-publisher/journal.js'
 
 const journal = new Journal(process.argv[2])
 const source = {
   source_id: 'deployment:lifecycle-fixture', provider: 'deployment',
   type: 'deployment', mode: 'fixture', home_path: null,
-  coverage: 'synthetic deployment audit', command: 'fixture',
+  coverage: 'synthetic deployment audit and failure marker', command: 'fixture',
 }
+const fixtures = './event-publisher/test/fixtures'
+const observations = parseFloorAudit(readFileSync(`${fixtures}/deployment-audit.synthetic.jsonl`, 'utf8'), {
+  target: 'fixture-floor',
+  failureMarker: readFileSync(`${fixtures}/deployment-failure.synthetic.txt`, 'utf8'),
+})
 journal.registerSources([source])
-const id = 'deployment:fixture-floor:attempt-1'
-for (const [index, lifecycle] of ['started', 'smoke_failed', 'failed', 'rolled_back'].entries()) {
-  const at = new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString()
-  const fields = { lifecycle, environment: 'fixture-floor', revision: 'a'.repeat(40), native_deployment_id: 'attempt-1' }
+for (const { event_type, ...record } of observations) {
+  const at = record.occurredAt
   journal.recordProviderPoll(source, {
     startedAt: at, observedAt: at, health: 'ok', reason: null, counts: { observed: 1 },
-    entries: [{ id, startedAt: at, observedAt: at, fields, related: [],
-      evidence: { source_reference: { target: 'fixture-floor' } } }],
-  }, (before, after) => ({ changes: [{ event_type: `deployment.${after.lifecycle}`,
-    change: before ? { field: 'lifecycle', before: before.lifecycle, after: after.lifecycle } : { after } }] }))
+    entries: [{ ...record, startedAt: at, observedAt: at, related: [] }],
+  }, (_before, after) => ({ changes: [{ event_type, change: { after } }] }))
 }
 journal.close()
 EOF

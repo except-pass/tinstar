@@ -1,0 +1,5 @@
+{"action":"floor-deployment","id":"floor:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","time":"2026-01-01T00:00:00.000Z","oldSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","newSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pulls":[{"url":"https://github.com/example/project/pull/1"}],"membershipComplete":true}
+{"action":"floor-smoke","deploymentId":"floor:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","newSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","time":"2026-01-01T00:01:00.000Z","passed":true,"receipt":"synthetic receipt"}
+{"action":"floor-deployment","id":"floor:cccccccccccccccccccccccccccccccccccccccc","time":"2026-01-01T00:02:00.000Z","oldSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","newSha":"cccccccccccccccccccccccccccccccccccccccc"}
+{"action":"override","gate":"block","time":"2026-01-01T00:04:00.000Z","user":"synthetic-user","head":"cccccccccccccccccccccccccccccccccccccccc","reason":"synthetic operator reason"}
+{"action":"clear-block","gate":"block","time":"2026-01-01T00:05:00.000Z","user":"synthetic-user","head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","reason":"synthetic operator reason"}

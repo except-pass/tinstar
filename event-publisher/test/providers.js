@@ -1,12 +1,12 @@
 import { deepEqual, equal, match, ok, rejects } from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { deploymentSource, observeFloor } from '../deployment.js'
+import { deploymentSource, observeFloor, parseFloorAudit } from '../deployment.js'
 import { entityId, sourcesFor } from '../firstmate.js'
 import { githubObserver, githubSource } from '../github.js'
 import { Journal } from '../journal.js'
@@ -360,6 +360,31 @@ test('the GitHub configuration rejects owner-wide allowlist entries', async t =>
   await rejects(exec(cli, ['observe', '--db', path, '--config', config]), {
     stderr: /github\.repositories must list exact owner\/repo entries/,
   })
+})
+
+test('deployment parser projects synthetic audit receipts and a failure marker', async () => {
+  const [audit, failureMarker] = await Promise.all([
+    readFile(new URL('./fixtures/deployment-audit.synthetic.jsonl', import.meta.url), 'utf8'),
+    readFile(new URL('./fixtures/deployment-failure.synthetic.txt', import.meta.url), 'utf8'),
+  ])
+  const target = 'fixture-floor'
+  const events = parseFloorAudit(audit + audit, { target, failureMarker })
+  deepEqual(events.map(event => event.event_type), [
+    'deployment.started', 'deployment.completed', 'deployment.started',
+    'deployment.failed', 'deployment.block_bypassed', 'deployment.block_cleared',
+  ])
+  equal(events[0].id, events[1].id)
+  equal(events[0].fields.previous_revision, nextRevision)
+  equal(events[1].fields.revision, revision)
+  equal(events[1].fields.native_deployment_id, `floor:${revision}`)
+  equal(events[3].fields.revision, 'c'.repeat(40))
+  equal(events[3].fields.native_deployment_id, null)
+  equal(events[3].occurredAt, '2026-01-01T00:03:00.000Z')
+  equal(events[5].fields.revision, null)
+  equal(events[5].fields.checkout_revision, revision)
+  ok(events.every(event => event.evidence.source_reference.target === target))
+  ok(!/synthetic-user|synthetic operator reason|synthetic receipt|github[.]com/.test(JSON.stringify(events)))
+  deepEqual(parseFloorAudit('bad JSON\n{"action":"floor-smoke","passed":true}', { target }), [])
 })
 
 test('deployment observes an exact running build through outages and restart without asserting ancestry or lifecycle transitions', async t => {
