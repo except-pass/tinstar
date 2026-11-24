@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto'
 
 export const migrationSourceId = 'routing:mate-migration'
 
-export function migrationSource() {
+export function migrationSource(mode) {
   return {
     source_id: migrationSourceId, provider: 'routing', type: 'mate', home_path: null,
-    coverage: 'operator-recorded mate migrations',
+    coverage: 'operator-recorded mate migrations', mode,
   }
 }
 
@@ -53,18 +53,19 @@ export function migrationReceipt(input, observedAt) {
   if (routeKey(before) === routeKey(after)) {
     throw new MigrationReceiptError('old and new routing contexts must differ')
   }
-  const identity = JSON.stringify([mate_id, before, after, occurred_at])
+  const mode = controlled ? 'fixture' : 'live'
+  const identity = JSON.stringify([mate_id, before, after, occurred_at, mode])
   const event_id = `event:${createHash('sha256').update(identity).digest('hex')}`
   return {
     schema: 'event-publisher.event.v1',
     event_type: 'mate.migration.recorded',
     event_id,
-    source: { provider: 'routing', source_id: migrationSourceId, mode: controlled ? 'fixture' : 'live' },
+    source: { provider: 'routing', source_id: migrationSourceId, mode },
     subject: { type: 'mate', id: mate_id },
     observed_at: observedAt,
     occurred_at,
     effective_start_at: occurred_at,
-    observation: { method: 'manual', read_method: 'local-cli', coverage: migrationSource().coverage },
+    observation: { method: 'manual', read_method: 'local-cli', coverage: migrationSource(mode).coverage },
     related: [],
     change: { field: 'routing_context', before, after },
     evidence: {
@@ -116,7 +117,7 @@ export function routingReplayCheck(receipts) {
     if (gap) {
       return {
         warning: 'routing.uncovered_timestamp_excluded',
-        observation_id: row.observation_id,
+        observation_id: isText(row.observation_id) ? row.observation_id : undefined,
         mate_id: row.mate_id,
         occurred_at: row.occurred_at,
         previous_migration_event_id: gap.start.event_id,

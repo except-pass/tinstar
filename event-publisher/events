@@ -329,12 +329,17 @@ async function main() {
   const last = integer(values.last ?? '100', '--last', 1)
   if (values.source !== undefined && !['firstmate', 'jira', 'routing'].includes(values.source)) throw new UsageError('--source must be firstmate, jira or routing')
   const filters = { type: values.type, entity: values.entity, provider: values.source }
-  const path = resolve(values.db ?? process.env.EVENTS_DB ?? join(homedir(), 'srv/event-publisher/journal.sqlite'))
+  const defaultPath = join(homedir(), 'srv/event-publisher/journal.sqlite')
+  const configuredPath = resolve(process.env.EVENTS_DB ?? defaultPath)
+  const path = resolve(values.db ?? configuredPath)
   const collector = command === 'serve' || command === 'observe'
   const interval = command === 'serve' ? integer(values.interval ?? '20', '--interval', 15) : null
   if (interval > 3600) throw new UsageError('--interval must be at most 3600 seconds')
   const config = collector ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
   const migration = command === 'record-migration' ? await readMigration(detail) : null
+  if (migration?.source.mode === 'fixture' && (!values.db || path === configuredPath || path === defaultPath)) {
+    throw new UsageError('controlled receipts require --db pointing to a separate journal')
+  }
   const secret = process.env.EVENTS_JIRA_WEBHOOK_SECRET
   const readToken = process.env.EVENTS_JIRA_READ_TOKEN
   // First Mate polling starts subprocesses. Keep Jira credentials in this process.

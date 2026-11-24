@@ -200,7 +200,9 @@ export class Journal {
       INSERT INTO sources (source_id, description) VALUES (?, ?)
       ON CONFLICT(source_id) DO UPDATE SET description = excluded.description
       WHERE json_extract(sources.description, '$.mode') IS json_extract(excluded.description, '$.mode')
-    `).run(source.source_id, JSON.stringify(source))
+        OR (sources.source_id = ? AND json_extract(sources.description, '$.mode') IS NULL
+            AND json_extract(excluded.description, '$.mode') = 'live')
+    `).run(source.source_id, JSON.stringify(source), migrationSourceId)
     // Otherwise fixture state could generate a fabricated live transition.
     if (!result.changes) throw new JournalConfigurationError('use a separate journal for live and fixture baselines')
   }
@@ -212,9 +214,9 @@ export class Journal {
   recordMigration(event) {
     this.db.exec('BEGIN IMMEDIATE')
     try {
+      this.register(migrationSource(event.source.mode))
       let receipt = this.inspect(event.event_id)
       if (!receipt) {
-        this.register(migrationSource())
         const { lastInsertRowid: sequence } = this.db.prepare(insertEvent)
           .run(event.event_id, migrationSourceId, event.subject.type, event.subject.id, JSON.stringify(event))
         this.db.prepare(`
@@ -232,7 +234,12 @@ export class Journal {
   }
 
   *migrationReceipts() {
-    const rows = this.db.prepare('SELECT sequence, envelope FROM events WHERE source_id = ? ORDER BY sequence')
+    const rows = this.db.prepare(`
+      SELECT sequence, envelope FROM events JOIN sources USING (source_id)
+      WHERE source_id = ?
+        AND json_extract(envelope, '$.source.mode') = COALESCE(json_extract(description, '$.mode'), 'live')
+      ORDER BY sequence
+    `)
     for (const row of rows.iterate(migrationSourceId)) yield readEvent(row)
   }
 

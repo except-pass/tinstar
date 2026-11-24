@@ -188,7 +188,7 @@ the next receipt's old route. Backfill missing receipts to restore coverage.
 Use the existing service account's journal access.
 
 The following receipt is a controlled example. Save it as `receipt.json` and
-use a separate private journal for the example.
+use a separate private journal selected explicitly with `--db` for the example.
 
 ```json
 {
@@ -209,7 +209,7 @@ events replay --db "$proof_dir/journal.sqlite" --source routing --type mate --af
 ```
 
 The command returns the durable `mate.migration.recorded` receipt. The mate ID,
-old and new contexts, and normalized effective instant determine the event ID.
+old and new contexts, normalized effective instant, and source mode determine the event ID.
 Repeating the command returns the original receipt with its first provenance
 and observation time. For actual migrations, omit `controlled` and supply the
 real operator and source reference. Use a source identifier or link without

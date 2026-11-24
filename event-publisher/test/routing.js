@@ -36,7 +36,7 @@ async function setup(t) {
 }
 
 test('controlled migration receipt is durable and retries preserve original provenance', async t => {
-  const { db, run, record } = await setup(t)
+  const { db, directory, run, record } = await setup(t)
   await rejects(record({ effective_start_at: '2026-11-31T19:34Z' }), error => {
     equal(error.code, 2)
     match(error.stderr, /effective_start_at/)
@@ -48,6 +48,27 @@ test('controlled migration receipt is durable and retries preserve original prov
     return true
   })
   const receipt = await record()
+  await rejects(record({ controlled: false }), error => {
+    equal(error.code, 1)
+    match(error.stderr, /separate journal/)
+    return true
+  })
+  const liveDb = join(directory, 'live.sqlite')
+  const env = { ...process.env, EVENTS_DB: liveDb }
+  const input = join(directory, 'live-receipt.json')
+  await writeFile(input, JSON.stringify(fixture))
+  for (const args of [[], ['--db', liveDb]]) {
+    await rejects(exec(process.execPath, [cli, ...args, 'record-migration', input], { env }), error => {
+      equal(error.code, 2)
+      match(error.stderr, /controlled receipts require --db pointing to a separate journal/)
+      return true
+    })
+  }
+  await writeFile(input, JSON.stringify({ ...fixture, controlled: false, source_reference: 'live proof' }))
+  const live = JSON.parse((await exec(process.execPath, [cli, 'record-migration', input], { env })).stdout)
+  equal(live.source.mode, 'live')
+  equal(live.event_id === receipt.event_id, false)
+  equal(live.evidence.source_reference.reference, 'live proof')
   const retries = await Promise.all([
     record({ recorded_by: 'retry', effective_start_at: '2026-11-23T14:34:00-05:00' }),
     record({ source_reference: 'retry', new: { provider: 'OpenAI', machine: 'Hulk', runtime: 'Codex' } }),
@@ -70,7 +91,7 @@ test('controlled migration receipt is durable and retries preserve original prov
   } finally {
     journal.close()
   }
-  match((await run('sources')).stdout, /routing:mate-migration ok .*last recorded migration/)
+  match((await run('sources')).stdout, /routing:mate-migration \[fixture\] ok .*last recorded migration/)
   deepEqual(JSON.parse((await run('inspect', receipt.event_id)).stdout), receipt)
   const { stdout } = await run('replay', '--source', 'routing', '--type', 'mate', '--entity', fixture.mate_id, '--after', '0', '--json')
   deepEqual(stdout.trim().split('\n').map(JSON.parse), [receipt])
@@ -117,10 +138,12 @@ test('routing metrics keep observations within any visit to the exact route', as
   })
   await record({ mate_id: tiedMate, effective_start_at: '2026-11-23T05:00-05:00' })
   const gapRow = { ...betweenVisits, observation_id: 'gap-b', mate_id: gapMate }
+  const invalidGapId = { ...gapRow, observation_id: { unexpected: 'payload' } }
   const gapRows = [
     gapRow,
     { ...gapRow, observation_id: 'gap-c', route: missingLinkRoute },
     { ...gapRow, observation_id: 'gap-start', route: undefined, occurred_at: '2026-11-23T10:00Z' },
+    invalidGapId,
   ]
   const rows = [
     observation,
@@ -172,7 +195,7 @@ test('routing metrics keep observations within any visit to the exact route', as
     },
     ...gapRows.map(row => ({
       warning: 'routing.uncovered_timestamp_excluded',
-      observation_id: row.observation_id,
+      ...(row === invalidGapId ? {} : { observation_id: row.observation_id }),
       mate_id: gapMate,
       occurred_at: row.occurred_at,
       previous_migration_event_id: beforeGap.event_id,
