@@ -145,7 +145,15 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       const offset = Number(body.nextPageToken ?? 0), end = offset + search.pageSize
       if (controls.rejectSearch || offset >= search.failFrom) return response({}, 403)
       expect(body.jql).toContain(`project = ${projectId}`)
-      const visible = controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === projectId)
+      const query = /^project = (\d+)(?: AND cf\[(\d+)\] = ("(?:[^"\\]|\\.)*") AND status IN \((.+)\))? ORDER BY id( DESC)?$/.exec(body.jql)
+      if (!query) return response({}, 400)
+      const [, project, ownerField, owner, statuses, descending] = query
+      const selectedOwner: string | undefined = owner === undefined ? undefined : JSON.parse(owner)
+      const selectedStatuses: string[] | undefined = statuses === undefined ? undefined : JSON.parse(`[${statuses}]`)
+      const visible = controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === project &&
+        (!ownerField || issue.fields[`customfield_${ownerField}`]?.value === selectedOwner) &&
+        (!selectedStatuses || selectedStatuses.includes(issue.fields.status.name)))
+        .sort((a, b) => descending ? Number(b.id) - Number(a.id) : Number(a.id) - Number(b.id))
       return response({ issues: visible.slice(offset, end), isLast: end >= visible.length, ...(end < visible.length ? { nextPageToken: String(end) } : {}) })
     }
     if (path === 'issue' && method === 'POST') {
@@ -310,10 +318,16 @@ it('includes matching Jira and legacy Notion cards with independent search cover
   const other = f.make('60102', 'WORK-102', config.projectId, { status: { name: 'Queued' }, [config.fields.owner]: { value: 'Taylor' } })
   const canceled = f.make('60103', 'WORK-103', config.projectId, { status: { name: 'Canceled' }, [config.fields.owner]: { value: 'Clawson' } })
   for (const issue of [active, other, canceled]) f.issues.set(issue.id, issue)
+  for (let id = 60104; id < 60124; id++) {
+    const nonmatching = id % 2 ? other : canceled
+    f.issues.set(String(id), f.make(String(id), `WORK-${id - 60000}`, config.projectId, nonmatching.fields))
+  }
+  const queued = f.make('60124', 'WORK-124', config.projectId, { status: { name: 'Queued' }, [config.fields.owner]: { value: 'Clawson' } })
+  f.issues.set(queued.id, queued)
   f.search.pageSize = 1
   const args = { owner: 'Clawson', statuses: ['Queued', 'In Progress'], limit: 100, refresh: true }
   const work = await call('search_work', args)
-  expect(work.total).toBe(2)
+  expect(work.total).toBe(3)
   expect(work.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete', sources: [
     { source: 'notion', status: 'fresh', coverage: 'complete' }, { source: 'jira', status: 'fresh', coverage: 'complete' },
   ] })
@@ -322,16 +336,19 @@ it('includes matching Jira and legacy Notion cards with independent search cover
     { id: `jira:${new URL(config.url).hostname}:${config.projectId}:${active.id}`, url: `${config.url}/browse/${active.key}`, last_edited_time: active.fields.updated,
       archived: false, in_trash: false, properties: { Owner: { value: 'Clawson' }, Status: { value: 'In Progress' }, Name: { value: active.fields.summary },
         'Next check-in': { value: { start: '2026-01-04', end: null, time_zone: null } }, 'Last touched by': { value: null } } },
+    { id: `jira:${new URL(config.url).hostname}:${config.projectId}:${queued.id}`, properties: { Status: { value: 'Queued' } } },
   ])
-  expect(f.requests.filter(request => request.path === 'search/jql')).toHaveLength(3)
-  expect(await call('search_work', { owner: 'Clawson', history: true })).toMatchObject({ total: 2 })
+  expect(f.requests.filter(request => request.path === 'search/jql')).toHaveLength(2)
+  f.search.pageSize = 100
+  expect(await call('search_work', { owner: 'Clawson', history: true })).toMatchObject({ total: 3 })
   const selected = await call('search_work', { owner: 'Clawson', statuses: ['Canceled'] })
   expect(selected.records.find((record: any) => record.card.source.id === `jira:${new URL(config.url).hostname}:${config.projectId}:${canceled.id}`)?.card.source).toMatchObject({
     archived: true, in_trash: false, properties: { Status: { value: 'Canceled' } },
   })
+  f.search.pageSize = 1
   f.search.failFrom = 1
   const partial = await call('search_work', args)
-  expect(partial.total).toBe(2)
+  expect(partial.total).toBe(3)
   expect(partial.coverage.intentions).toMatchObject({ status: 'partial', coverage: 'partial', sources: [
     { source: 'notion', coverage: 'complete' }, { source: 'jira', coverage: 'partial' },
   ] })
@@ -345,22 +362,28 @@ it('includes matching Jira and legacy Notion cards with independent search cover
 })
 
 it('projects the private Jira census and its coverage into the owner Desk queue', async () => {
-  const f = await fixture()
+  const f = await fixture('10639', true)
   const { sources } = await f.connect()
   const owner = new IncomingMessage(new Socket())
   owner.headers['tailscale-user-login'] = 'owner@example.test'
   sources.authorizePulls = async request => request === owner
-  const issue = f.make('60101', 'WORK-101', config.projectId, { status: { name: 'In Progress' }, duedate: '2026-01-04', [config.fields.owner]: { value: 'Will' } })
+  const issue = f.make('60101', 'TSW-101', '10639', { status: { name: 'In Progress' }, duedate: '2026-01-04', [config.fields.owner]: { value: 'Clawson' } })
+  const queued = f.make('60102', 'TSW-102', '10639', { status: { name: 'Queued' }, [config.fields.owner]: { value: 'Clawson' } })
   f.issues.set(issue.id, issue)
+  f.issues.set(queued.id, queued)
   const authorized = await sources.queue(owner, undefined, false, 'read')
-  expect(authorized.items).toEqual([expect.objectContaining({ title: 'Fixture', checkpoint: '2026-01-04',
-    evidence: [{ kind: 'card', url: `${config.url}/browse/${issue.key}` }], sources: [expect.objectContaining({ kind: 'jira', coverage: 'complete' })] })])
-  expect(authorized.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete', sources: [{ source: 'jira', coverage: 'complete' }] })
+  expect(authorized.items).toHaveLength(3)
+  const native = (queue: typeof authorized, key: string) => queue.items.find(item => item.evidence.some(link => link.url === `${config.url}/browse/${key}`))
+  expect(native(authorized, issue.key)).toMatchObject({ title: 'Fixture', checkpoint: '2026-01-04', readiness: 'needs-readiness-verification',
+    evidence: [{ kind: 'card', url: `${config.url}/browse/${issue.key}` }], sources: [{ kind: 'jira', coverage: 'complete' }] })
+  expect(native(authorized, queued.key)).toMatchObject({ kind: 'decision', readiness: 'future-or-conditional', sources: [{ kind: 'jira' }] })
+  expect(authorized.items.find(item => item.cardIds.includes(f.notionCard.id))).toMatchObject({ kind: 'decision', readiness: 'future-or-conditional', sources: [{ kind: 'notion' }] })
+  expect(authorized.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete', sources: [{ source: 'notion' }, { source: 'jira', coverage: 'complete' }] })
   f.controls.rejectSearch = true
   const partial = await sources.queue(owner, undefined, false, 'read')
   expect(partial.coverage.intentions).toMatchObject({ status: 'partial', coverage: 'partial' })
-  expect(partial.items[0]).toMatchObject({ readiness: 'needs-readiness-verification', sources: [expect.objectContaining({ status: 'stale' })] })
-  expect(await sources.queue(undefined, undefined, false, 'read')).toMatchObject({ items: [], coverage: { intentions: { status: 'unknown' } } })
+  expect(native(partial, issue.key)).toMatchObject({ readiness: 'needs-readiness-verification', sources: [{ status: 'stale' }] })
+  expect((await sources.queue(undefined, undefined, false, 'read')).items.map(item => item.cardIds)).toEqual([[f.notionCard.id]])
 })
 
 const mergeSelection = { operation_id: '39f71a89-d20e-4846-bd37-590d69f25348', targets: Array.from({ length: 10 }, (_, i) => ({

@@ -229,6 +229,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const actions = prop(card, 'Will action')
     let tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
     const owner = normalize(word(card, 'Owner') ?? '')
+    const clawsonPickup = owner === 'clawson' && ['queued', 'in progress'].includes(normalize(word(card, 'Status') ?? ''))
     const waitingForWill = /\bWill\b/.test(word(card, 'Waiting For') ?? '')
     const linkedPulls = queuePulls({ cardIds: [card.id], evidence: [word(card, 'Link'), word(card, 'Evidence')].flatMap(url => url ? [{ kind: 'pull-request', url }] : []) }, inventory)
     const pr = linkedPulls.length === 1 ? pullStates.get(linkedPulls[0]!.url) : undefined
@@ -237,9 +238,10 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       (!pr.expiresAt || Date.parse(pr.expiresAt) > now) && (pr.state === 'merged' || pr.state === 'closed'))
     if (resolvedMerge) {
       tags = tags.filter(tag => normalize(tag) !== 'merge')
-      if (!tags.length && !waitingForWill) continue
+      if (!tags.length && !waitingForWill && !clawsonPickup) continue
     }
-    if ((owner !== 'will' || isReviewStatus(word(card, 'Status'))) && !tags.length && !waitingForWill) continue
+    const ownerRequest = (owner === 'will' && !isReviewStatus(word(card, 'Status'))) || tags.length > 0 || waitingForWill
+    if (!ownerRequest && !clawsonPickup) continue
     const action = word(card, 'Next action') ?? word(card, 'Next Action')
     const merge = tags.some(tag => normalize(tag) === 'merge')
     const remainingAction = resolvedMerge && (!action || /^(?:please\s+)?merge\b/i.test(action))
@@ -261,6 +263,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       tagOnlyCandidates.add(item)
       lower(item, 'needs-readiness-verification', 'The source has no action text to review in Workbench')
     }
+    if (!ownerRequest && action) lower(item, 'needs-readiness-verification', 'Card is assigned to Clawson')
     if (!merge && !cardWaitsForWill(card) && tags.some(tag => !['decision'].includes(normalize(tag)))) {
       tagOnlyCandidates.delete(item)
       lower(item, 'needs-readiness-verification', 'Command/release readiness requires prerequisite and authority verification')

@@ -29,15 +29,13 @@ export class WorkReader {
   leases?: CardLeases
   onConfirmed?: (card: WorkCard) => void
   private queries = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
-  private readonly native?: JiraWork['observation']
   private cards = new Map<string, { until: number; value: Promise<WorkCard>; background: boolean }>()
   private known = new Map<string, { card: WorkCard; observedAt: string }>()
   mutate<T>(id: string, perform: () => Promise<T>, intent?: SourceWriteIntent, probe?: (intent: SourceWriteIntent) => Promise<'applied' | 'different' | 'unknown'>) { return this.leases ? this.leases.mutate(id, perform, intent, probe) : perform() }
   lastKnown(id: string) { return this.known.get(id) }
   readonly jira?: JiraAdapter
-  constructor(readonly config: ReconciliationConfig['notion'], readonly api: NotionApi, jira?: ReconciliationConfig['jira'], jiraWork?: JiraWork) {
+  constructor(readonly config: ReconciliationConfig['notion'], readonly api: NotionApi, jira?: ReconciliationConfig['jira'], private readonly native?: JiraWork) {
     if (jira) this.jira = new JiraAdapter(jira, api.fetch, api.backgroundFetch, api.parallelFetch)
-    this.native = jiraWork?.observation
   }
   private board(scope: WorkScope, force: boolean, background: boolean) {
     const key = scopeKey(scope)
@@ -62,7 +60,7 @@ export class WorkReader {
     if (!includeNative || !this.native) return this.board(scope, force, background)
     const [board, jira] = await Promise.all([
       this.config || this.jira ? this.board(scope, force, background) : null,
-      this.native.get(force, background),
+      this.native.observationFor(scope).get(force, background),
     ])
     return this.combine(scope, board, jira)
   }
@@ -84,7 +82,7 @@ export class WorkReader {
     }
     const board = this.queries.get(scopeKey({}))?.observation.peek() ?? pending
     return includeNative && this.native
-      ? this.combine({}, this.config || this.jira ? board : null, this.native.peek() ?? pending) : board
+      ? this.combine({}, this.config || this.jira ? board : null, this.native.observation.peek() ?? pending) : board
   }
   card(id: string, force = false, background = false, signal?: AbortSignal) {
     const cached = this.cards.get(id)

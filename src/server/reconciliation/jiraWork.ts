@@ -13,7 +13,8 @@ import {
 import { CreationReceipts } from './workflowReceipts'
 import { tswKey, tswProjectId } from './tswSnapshot'
 import { CachedObservation, retainMissing } from './observation'
-import type { WorkCard, WorkData } from './workReader'
+import { scopeMatches, type WorkCard, type WorkData } from './workReader'
+import type { WorkScope } from './notion'
 
 const createProperty = 'tinstar.work.create'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -52,6 +53,7 @@ type BeforeWrite = (current: JiraWorkCard) => void
 export class JiraWork extends JiraClient {
   private readonly receipts: CreationReceipts
   private readonly site: string
+  private readonly scoped = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
   constructor(private readonly config: JiraWorkConfig, private readonly root: string, fetcher?: (input: string, init?: RequestInit) => Promise<Response>) {
     super(`https://api.atlassian.com/ex/jira/${config.cloudId}`, `Bearer ${config.token}`, fetcher)
     this.site = new URL(config.url).hostname
@@ -87,38 +89,56 @@ export class JiraWork extends JiraClient {
     }
   }
 
-  readonly observation = new CachedObservation<WorkData>(async () => {
-    const cards = new Map<string, WorkCard>(), seen = new Set<string>()
-    const signal = AbortSignal.timeout(20_000)
-    let cursor: string | undefined, complete = false, invalidRow = false
-    // Bound the project census and preserve pages already read if a later request fails.
-    for (let page = 0; page < 20; page++) {
-      try {
-        const result = await this.request('search/jql', 'POST', {
-          jql: `project = ${this.config.projectId} ORDER BY id`, fields: this.boardFields(),
-          maxResults: 100, ...(cursor ? { nextPageToken: cursor } : {}),
-        }, signal)
-        if (!Array.isArray(result.issues)) throw new Error('Incomplete Jira work search page')
-        for (const row of result.issues) {
-          try {
-            const card = this.boardCard(row)
-            cards.set(card.id, card)
-          } catch { invalidRow = true }
+  readonly observation = this.observeProject()
+
+  observationFor({ owner, statuses }: WorkScope) {
+    if (!owner || !statuses?.length) return this.observation
+    const scope = { owner, statuses: [...new Set(statuses)].sort() }
+    const key = JSON.stringify(scope)
+    const cached = this.scoped.get(key)
+    if (cached) return cached.observation
+    if (this.scoped.size >= 100) this.scoped.delete(this.scoped.keys().next().value!)
+    const fieldId = this.config.fields.owner.slice('customfield_'.length)
+    const filter = ` AND cf[${fieldId}] = ${JSON.stringify(owner)} AND status IN (${scope.statuses.map(status => JSON.stringify(status)).join(', ')})`
+    const observation = this.observeProject(filter)
+    this.scoped.set(key, { scope, observation })
+    return observation
+  }
+
+  private observeProject(filter = '') {
+    return new CachedObservation<WorkData>(async () => {
+      const cards = new Map<string, WorkCard>(), seen = new Set<string>()
+      const signal = AbortSignal.timeout(20_000)
+      let cursor: string | undefined, complete = false, invalidRow = false
+      // Bound the project census and preserve pages already read if a later request fails.
+      for (let page = 0; page < 20; page++) {
+        try {
+          const result = await this.request('search/jql', 'POST', {
+            jql: `project = ${this.config.projectId}${filter} ORDER BY id`, fields: this.boardFields(),
+            maxResults: 100, ...(cursor ? { nextPageToken: cursor } : {}),
+          }, signal)
+          if (!Array.isArray(result.issues)) throw new Error('Incomplete Jira work search page')
+          for (const row of result.issues) {
+            try {
+              const card = this.boardCard(row)
+              cards.set(card.id, card)
+            } catch { invalidRow = true }
+          }
+          if (result.isLast === true) { complete = !invalidRow; break }
+          cursor = result.nextPageToken
+          if (typeof cursor !== 'string' || !cursor || seen.has(cursor)) throw new Error('Invalid Jira work search cursor')
+          seen.add(cursor)
+        } catch (error) {
+          if (!cards.size) throw error
+          break
         }
-        if (result.isLast === true) { complete = !invalidRow; break }
-        cursor = result.nextPageToken
-        if (typeof cursor !== 'string' || !cursor || seen.has(cursor)) throw new Error('Invalid Jira work search cursor')
-        seen.add(cursor)
-      } catch (error) {
-        if (!cards.size) throw error
-        break
       }
-    }
-    return { observedAt: new Date().toISOString(), coverage: complete ? 'complete' : 'partial',
-      data: { dataSourceId: `jira:${this.site}:${this.config.projectId}`, schema: {}, cards: [...cards.values()], hasMore: !complete,
-        truncatedRelations: [], missingSchemaProperties: [], scope: 'Configured Jira work project' } }
-  }, 60_000, 120_000, 'Jira work project read failed; verify project access', Date.now,
-  (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
+      return { observedAt: new Date().toISOString(), coverage: complete ? 'complete' : 'partial',
+        data: { dataSourceId: `jira:${this.site}:${this.config.projectId}`, schema: {}, cards: [...cards.values()], hasMore: !complete,
+          truncatedRelations: [], missingSchemaProperties: [], scope: 'Configured Jira work project' } }
+    }, 60_000, 120_000, 'Jira work project read failed; verify project access', Date.now,
+      (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
+  }
 
   private id(cardId: string) {
     const id = jiraWorkIdentity(cardId)
@@ -355,6 +375,9 @@ export class JiraWork extends JiraClient {
         confirm: issue => {
           const card = this.projectCard(issue)
           this.observation.updateData(data => ({ ...data, cards: [...data.cards.filter(prior => prior.id !== card.id), card] }))
+          for (const { scope, observation } of this.scoped.values()) observation.updateData(data => ({
+            ...data, cards: [...data.cards.filter(prior => prior.id !== card.id), ...(scopeMatches(card, scope) ? [card] : [])],
+          }))
           return this.saved(issue, dispatched)
         },
       })
