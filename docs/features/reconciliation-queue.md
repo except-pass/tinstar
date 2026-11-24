@@ -34,50 +34,6 @@ the same binding checks without sending or confirming deliveries on the tool
 path; a fresh closed source plus its exact acknowledged delivery can be observed
 as resolved while durable audit confirmation finishes in the background.
 
-## Owner-ready by repository
-
-The owner can expand **Owner-ready by repository** in Decisions Workbench
-while Main is unavailable. The same source grouping is available in
-`get_work_views.ownerReady` using the ordinary 20-card history budget.
-Decisions reserves up to five additional history reads for the bundle.
-With the existing MCP PR-read grant,
-`list_prs({ view: "owner-ready" })` adds live forge evidence. Select
-**Recheck current requests** in Decisions or call
-`list_prs({ view: "owner-ready", recheck: true })` when Main returns.
-The browser uses `GET /api/reconciliation/owner-ready` under the existing UI
-owner authorization and receives the bundle in `data`. Concurrent browser
-and MCP rechecks share one pass.
-
-The bundle reads requests already published through Jira questions and merge
-notes, card-native requests, and worker publications. Source records remain
-in their original systems. Existing delivery rules continue to apply.
-The explicit recheck only reads current state.
-
-Jira questions use the native issue identity and D-question ID. See
-[Jira owner review merge notes](jira-work.md#owner-review-merge-notes) for the
-exact-head request format. A current Jira request without a bound head is
-shown as **Requested head unverified**. Decisions without an exact repository
-stay under **Repository unspecified**.
-
-Merge entries share the canonical repository and PR identity while the source
-records remain separately linked. The newest eligible Jira merge note by
-creation time determines the requested head, with the higher comment ID
-breaking ties. A non-coordinator note that repeats a coordinator note’s exact
-PR and head on the same ticket stays linked without taking precedence. Only a
-current, unconditional Jira request can qualify for readiness checks on a
-matching head. The regular Decisions queue uses its existing readiness rules.
-Other Jira requests remain linked with their heads and are marked **Superseded**.
-Notion requests and worker notices retain their own links and heads and are
-marked **Not used for readiness**. Uncertainty about earlier Jira requests and
-non-Jira records appears in source coverage.
-Jira questions on the same ticket remain independent. Rechecks compare
-available PR heads with their requested heads and use the existing bounded
-checks reader for matches. When a current, unconditional request names a
-different head, Decisions shows **Requested head changed**. Closure evidence
-in the current read removes the active merge entry from that result. Source
-omissions, out-of-scope PRs and checks beyond the read budget remain visible as
-unverified.
-
 The operational queue retains canonical requests and their verification and conditional states. The [Decisions surface](#decisions-tab) presents those requests and offers prepared review. Discuss contains conversations only; raw holds and queue candidates never enter its tabs. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor. It needs an owner-actionable hold whose ID exactly equals the decision key, or a canonical card with an explicit `Will action = Decision` and one open keyed decision. If multiple tasks share that key, the hold must explicitly name the matching origin task. Fleet answer routes still require the exact owner-actionable hold; classification does not add transport permission. Legacy aliases, matching text and card ownership alone never supply routing.
 
 Source-bound answer transport, receipt reconciliation and delivery recovery follow the
@@ -210,3 +166,49 @@ unless the user interacts. Assistant reveal includes both its primary target
 and additional targets, including during foreground replay. Editing the local
 query dismisses the transient reveal. Steady selection and a brief flash use
 distinct styles; failed source reads report unavailable coverage.
+
+### Owner-ready by repository
+
+The owner can expand **Owner-ready by repository** in Decisions Workbench
+while Main is unavailable. The same source grouping is available in
+`get_work_views.ownerReady` using the ordinary 20-card history budget.
+Decisions reserves up to five additional history reads for the bundle.
+With the existing MCP PR-read grant,
+`list_prs({ view: "owner-ready" })` adds live forge evidence. Select
+**Recheck current requests** in Decisions or call
+`list_prs({ view: "owner-ready", recheck: true })` when Main returns.
+The browser uses `GET /api/reconciliation/owner-ready` under the existing UI
+owner authorization. This endpoint always rechecks and returns the bundle in
+`data`. Concurrent browser and MCP rechecks share one pass.
+
+The bundle reads requests already published through Jira questions and merge
+notes, card-native requests, and worker publications. Source records remain
+in their original systems. Existing delivery rules continue to apply.
+The explicit recheck only reads current state.
+
+Jira questions use the native issue identity and D-question ID. See
+[Jira owner review merge notes](jira-work.md#owner-review-merge-notes) for the
+exact-head request format. A current Jira request without a bound head is
+shown as **Requested head unverified**. Decisions without an exact repository
+stay under **Repository unspecified**.
+
+Merge entries share the canonical repository and PR identity while the source
+records remain separately linked. The newest eligible Jira merge note by
+creation time determines the requested head, with the higher comment ID
+breaking ties. A non-coordinator note that repeats a coordinator note’s exact
+PR and head on the same ticket stays linked without taking precedence. Only a
+current, unconditional Jira request can qualify for readiness checks on a
+matching head. Decisions shows **Ready at requested head** when fresh evidence
+confirms that the matching PR is open, out of draft, mergeable and passing its
+checks. The regular Decisions queue uses its existing readiness rules.
+Other Jira requests remain linked with their heads and are marked **Superseded**.
+Notion requests and worker notices retain their own links and heads and are
+marked **Not used for readiness**. Uncertainty about earlier Jira requests and
+non-Jira records appears in source coverage.
+Jira questions on the same ticket remain independent. Rechecks compare
+available PR heads with their requested heads and use the existing bounded
+checks reader for matches. When a current, unconditional request names a
+different head, Decisions shows **Requested head changed**. Closure evidence
+in the current read removes the active merge entry from that result. Source
+omissions, out-of-scope PRs and checks beyond the read budget remain visible as
+unverified.
