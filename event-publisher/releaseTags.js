@@ -106,10 +106,9 @@ export function releaseTagObserver({ reader = githubReader(), fetchEndpoint = fe
     }
     if (signal?.aborted) return
     const accepted = journal.recordReleaseTags({ startedAt, observedAt: now().toISOString(), tags, reason })
-    if (!accepted) return false
 
     const target = journal.nextReleaseTagEvidence(now().toISOString())
-    if (!target) return true
+    if (!target) return accepted
     let detail = null
     try {
       const url = new URL(releasesEndpoint)
@@ -131,6 +130,6 @@ export function releaseTagObserver({ reader = githubReader(), fetchEndpoint = fe
     const observedAt = now()
     journal.recordReleaseTagEvidence(target, detail, observedAt.toISOString(),
       new Date(observedAt.getTime() + (complete ? 3600 : tagInterval) * 1000).toISOString())
-    return true
+    return accepted
   }
 }

@@ -32,8 +32,8 @@ tag pushed fortresspower/cmsandbox <tag> <commit-sha> <observed-at-UTC> <created
 ```
 
 The check is silent on an empty replay and advances past tag deletions, repeat
-ref changes, historical startup events and enrichment events. It writes the
-cursor atomically after emitting the batch. If a process is interrupted between emission and the
+ref changes and enrichment events. It writes the cursor atomically after
+emitting the batch. If a process is interrupted between emission and the
 cursor update, a retry can repeat those lines with the same sequence numbers.
 A sibling lock file prevents overlapping checks from emitting the same batch.
 

@@ -32,7 +32,7 @@ batch=$(printf '%s' "$rows" | jq -er -s --argjson after "$after" '
   if all(.[]; (.sequence | type) == "number" and .sequence > $after and (.sequence | floor) == .sequence)
   then
     ([$after, .[].sequence] | max),
-    (.[] | select(.source.source_id == "github:cmsandbox-tags" and .source.mode == "live" and .event_type == "tag.pushed" and .evidence.action != "seeded")
+    (.[] | select(.source.source_id == "github:cmsandbox-tags" and .source.mode == "live" and .event_type == "tag.pushed")
       | .evidence.source_reference as $ref
       | if $ref.repository == "fortresspower/cmsandbox"
           and ($ref.tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))

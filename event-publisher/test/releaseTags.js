@@ -151,6 +151,7 @@ test('exact-SHA Releases evidence follows the base push and the Main check emits
   let tags = [row('v2.0.0', old)]
   let associationsComplete = true
   let releasesUnavailable = false
+  let inventoryUnavailable = false
   let associatedPulls = [pull(1), pull(3), pull(4), pull(7, { exceptions: [`Linked card unavailable: ${cardId}`] })]
   release.pulls.push(pull(8))
   associatedPulls.push(pull(8, { exceptions: [`Linked card unavailable: ${cardId}`] }))
@@ -170,7 +171,7 @@ eval "run_remote \${@: -1}"
   const env = { ...process.env, PATH: `${fixture.dir}:${process.env.PATH}`, TAG_WAKE_CURSOR: cursor,
     TAG_WAKE_REMOTE_EVENTS: cli, TAG_WAKE_REMOTE_DB: '', FIXTURE_DB: fixture.path }
   const observer = releaseTagObserver({
-    reader: githubReader({ get: async () => github(tags) }), now: fixture.now,
+    reader: githubReader({ get: async () => inventoryUnavailable ? github(null, { status: 503 }) : github(tags) }), now: fixture.now,
     fetchEndpoint: async endpoint => {
       equal(endpoint.searchParams.get('tag'), version)
       equal(fixture.events()[0].label, 'tag pushed')
@@ -191,7 +192,10 @@ eval "run_remote \${@: -1}"
   equal(push.observed_at, fixture.now().toISOString())
   equal(fixture.events().length, 1)
   release.sourceSha = head
-  await fixture.poll(observer)
+  inventoryUnavailable = true
+  equal(await fixture.poll(observer), false)
+  equal(fixture.source().health, 'unavailable')
+  inventoryUnavailable = false
   const evidence = fixture.events().at(-1)
   equal(evidence.event_type, 'tag.evidence.updated')
   equal(evidence.evidence.push_event_id, push.event_id)
@@ -239,8 +243,11 @@ eval "run_remote \${@: -1}"
   deepEqual(corrected.cards, { coverage: 'complete', items: [] })
   deepEqual(corrected.runs.items.map(({ id, freshness }) => [id, freshness]), [[10, 'fresh']])
 
+  inventoryUnavailable = true
   releasesUnavailable = true
-  await fixture.poll(observer)
+  equal(await fixture.poll(observer), false)
+  equal(fixture.source().health, 'unavailable')
+  inventoryUnavailable = false
   const unavailable = fixture.events().at(-1).change.after
   deepEqual(unavailable.pulls, corrected.pulls)
   deepEqual(unavailable.cards, corrected.cards)
