@@ -79,10 +79,11 @@ publisher change that covers the event type and its audience. Fixture events
 always stay local. The relay name also sets the reply prefix
 `_INBOX.tinstar_relay.<name>` and must agree with the broker permission.
 
-A new relay replays eligible events from sequence zero. An existing named
-relay continues from its saved cursor. It skips events excluded by the
+A new relay replays eligible events from sequence zero. Start that replay
+with an empty stream and an empty deduplication history. An existing named
+relay continues from its saved cursor and skips events excluded by the
 selection. To replay earlier matching events after expanding coverage, use
-a new relay name and provision its reply permission.
+the stream recreation and checkpoint reset procedure below.
 
 ### Verify the permanent cutover
 
@@ -102,9 +103,11 @@ Keep the existing store directory. If the broker has had a disk fault or
 stream loss is suspected, use the checkpoint reset and replay procedure below
 before starting the permanent relay.
 
-Check replay to Serena from an isolated journal backup before starting the
-permanent relay. Keep Hulk's signed Jira ingress and publisher running
-throughout the cutover. Install and start the permanent Hulk relay as a
+Check replay from an isolated journal backup into an empty Serena stream with
+no deduplication history. After recording the proof, stop the test relay
+and recreate the stream before the permanent relay's initial replay. Keep
+Hulk's signed Jira ingress and publisher running throughout the cutover.
+Install and start the permanent Hulk relay as a
 supervised service with the live journal and supervised SSH forward.
 
 Once the supervised relay is running, read the current live journal tip
@@ -166,14 +169,17 @@ and any actor account ID, is restricted to the authenticated Tin Star
 engineering account's approved audience. That audience comprises Tin Star
 and the owner's First Mate bridges, all owner-operated with the same TSW
 visibility as Hulk journal readers. This restriction applies to management
-API retrieval and replay as well as live delivery. Keep broker history for
-replay and recovery within the stream's 30-day and 256 MiB limits. Use the
-journal for replay beyond that window.
+API retrieval and replay as well as live delivery. JetStream retains facts
+within the stream's 30-day and 256 MiB limits. Facts that age out or are evicted
+under the size limit remain available from the journal.
 
 After any broker disk fault, suspected stream loss, or broker or stream
-replacement, stop the named relay. Restore the file-backed stream on a broker
-configured with `sync_interval: always`. If the destination changed, update
-the relay config for the replacement destination.
+replacement, stop the named relay. Delete and recreate the file-backed stream
+or provision a replacement on a broker configured with `sync_interval: always`.
+Start with an empty stream and an empty deduplication history. When replay
+targets a populated stream, older facts can evict recent ones under the byte
+limit, and cached IDs can cause JetStream to acknowledge those recent facts
+without storing them again. If the destination changed, update the relay config.
 As the journal owner on Hulk, remove only that relay's checkpoint from the
 live journal, then restart the relay to replay eligible facts from zero.
 For the shipped `hulk-jira` relay, run:
