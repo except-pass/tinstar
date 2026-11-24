@@ -182,10 +182,10 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
   }
 
   const workers = new Map(fleetRows.map(row => [JSON.stringify([row.home, row.task.id]), row]))
-  const workerLink = (home: string, taskId: string) => {
+  const workerLink = (home: string, taskId: string | null) => {
     const matches = fleetRows.filter(row => row.task.identity.task_id === taskId)
     if (!matches.some(row => row.home === home)) return null
-    const query = new URLSearchParams({ worker: taskId })
+    const query = new URLSearchParams({ worker: String(taskId) })
     if (matches.length > 1) {
       const label = homeName(home)
       if (matches.filter(row => homeName(row.home) === label).length !== 1) return null

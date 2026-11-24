@@ -9,10 +9,11 @@ terminal reader.
 
 Use Node 22.13 or later, GNU `timeout`, and the tools required by the configured
 First Mate installation, including `jq` and `tasks-axi` on the service's PATH.
+Run the install from the repository root using the workspace lockfile.
 
 ```sh
+npm ci --workspace tinstar-event-publisher
 cd event-publisher
-npm ci
 export PATH="$PWD:$PATH"
 export EVENTS_CONFIG="$HOME/srv/event-publisher/config.json"
 export EVENTS_DB="$HOME/srv/event-publisher/journal.sqlite"
