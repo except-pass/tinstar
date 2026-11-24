@@ -88,18 +88,28 @@ statuses. A changed head or any failed, pending, missing required or unreadable
 check stops the handoff with the affected PR and reason. This prevents a card
 from granting merge permission against an unverified or different commit.
 
-One click creates a Jira task owned by **Clawson** and releases it to **Queued**. The due date is the calendar date in the board’s
-check-in timezone. The Jira description records the approved selection, exact
-PR heads and merge instructions. Clawson reports the result on the ticket and
-returns ownership to the requester.
+One click creates a Jira task owned by **Clawson** and releases it to **Queued**.
+The due date is the calendar date in the board’s check-in timezone. The description
+records the owner’s approval for the listed PR URLs and exact heads, with one command per PR.
+
+```text
+gh pr merge <url> --squash --admin --match-head-commit <sha>
+```
+
+Under **Step 1 (run once)**, the script checks the recorded head, `MERGEABLE`
+state and the absence of failed or pending checks before each merge. It stops
+on failure. Clawson posts the output on any stop and otherwise posts the final
+state and merge commit for each PR before handing back. The approval excludes
+other PRs and deployment. The installed-action Merge restrictions above still apply.
 
 The button shows the Jira ticket link and preserves the selection. Retry the
 same click if creation or queueing remains unconfirmed. Tin Star uses the Jira
 operation property to find an already-created ticket. Before releasing the
 ticket to Clawson for the first time, Tin Star checks current PR state again.
-A retry confirms release only while the ticket still shows the approved handoff
-fields and Queued status. If the ticket has already changed hands, check it
-in Jira. If Jira rate-limits a write, retry the same click once the limit clears.
+A retry of an unconfirmed release requires the approved handoff fields and Queued
+status on readback. If the ticket has already changed hands, check it in Jira.
+A confirmed receipt returns the existing work item, including a legacy Notion
+card. If Jira rate-limits a write, retry the same click once the limit clears.
 Tin Star does not execute the merge commands.
 
 A First Mate suggested action with the optional `merge` target documented in the
@@ -115,7 +125,7 @@ and another device recover that same selection and handoff. A definite blocked
 preflight permits a fresh selection; an uncertain creation retains its identity.
 
 For other Ask suggestions within the mounted answer, retries reuse the operation ID. An uncertain outcome,
-including an unreadable response or `create-unconfirmed`, retains and replays the
+including an unreadable response or a partially saved handoff, retains and replays the
 posted URL and head without another GitHub read. A definite refusal clears that
 payload so the next click reads the PR again under the same operation ID. Receipt
 lookup failures are unconfirmed outcomes; definite preflight refusals remain

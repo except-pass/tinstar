@@ -11,8 +11,8 @@ window selection and acknowledgment still govern presentation focus/flash.
 
 This slice also delivers the work-read part of MCP Slice B. `search_work` wraps
 the configured work reader, scene/link projection and Smart Search predicates.
-`get_work` reads an exact card from the configured board, including history outside
-the operational result. IDs are the UI’s card/execution/claim IDs; links retain
+`get_work` reads an exact card, including history outside the operational result.
+See [native Jira reads](jira-work.md#mcp-calls) for the provider-specific contract. IDs are the UI’s card/execution/claim IDs; links retain
 current, last-known, historical, conflicting and unverified distinctions. Unknown
 coverage never means no worker. Stalled/Blocked use the UI’s `workHealth` rules,
 including unavailable evidence. Body/comments are on-demand; comments include
@@ -31,7 +31,7 @@ coverage, warnings, card/worker totals and `next_offset`. The same offset/limit 
 bounded result, not a claim about an incomplete board. Missing source evidence is
 visible in coverage and per-record health. No browser filters are inherited. The UI’s explicit All/custom status choices request history through the same reader; the default operational view does not scan history.
 
-`get_work({card_id, details?, refresh?})` verifies configured-board membership.
+For Notion, `get_work({card_id, details?, refresh?})` verifies configured-board membership.
 It returns current properties, worker links/evidence, external reports and
 optionally bounded prose/comments. Source failures expose unavailable or visibly
 stale last-known properties, never a successful empty card. External source changes

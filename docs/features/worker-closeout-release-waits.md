@@ -96,5 +96,4 @@ The worker-link report includes configured remote homes and their workers. Its
 [`coverage.unconfiguredHomes` field](../notion-worker-links.md#slice-b-backfill-and-deterministic-mismatch-report)
 inventories other observed home identities for configuration review.
 
-`search_work` owner/status filters and `coverage.intentions` are unchanged; the
-Clawson poller can continue requesting owner `Clawson`, statuses `["In Progress"]`.
+For Clawson pickup, see the [Jira search contract](jira-work.md#mcp-calls).
