@@ -30,8 +30,8 @@ Filters
   --source firstmate|jira|github|deployment|routing
   --type task|worker|ticket|pr|tag|deployment|mate    --entity <entity-id>
 All commands accept --db <path>. The default is ~/srv/event-publisher/journal.sqlite.
-EVENTS_DB provides the --db default. EVENTS_CONFIG and EVENTS_RELAY_CONFIG
-provide the collector and relay --config defaults.`
+EVENTS_DB provides the --db default. EVENTS_CONFIG provides the --config
+default for serve and observe.`
 
 const options = {
   db: { type: 'string' },
@@ -448,7 +448,7 @@ async function main() {
   const interval = command === 'serve' ? integer(values.interval ?? '20', '--interval', 15) : null
   if (interval > 3600) throw new UsageError('--interval must be at most 3600 seconds')
   const config = collector ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
-  const relayConfig = relay ? await readRelayConfig(values.config ?? process.env.EVENTS_RELAY_CONFIG) : null
+  const relayConfig = relay ? await readRelayConfig(values.config) : null
   const seed = process.env.EVENTS_NATS_NKEY_SEED?.trim()
   delete process.env.EVENTS_NATS_NKEY_SEED
   if (relay) {

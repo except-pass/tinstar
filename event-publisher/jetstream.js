@@ -12,7 +12,7 @@ export class RelayConfigurationError extends Error {}
 class RelayTransportError extends Error {}
 
 export async function readRelayConfig(path) {
-  if (!path) throw new RelayConfigurationError('set --config or EVENTS_RELAY_CONFIG')
+  if (!path) throw new RelayConfigurationError('set --config')
   let config
   try {
     config = JSON.parse(await readFile(path, 'utf8'))
