@@ -24,7 +24,6 @@ function auditTime(value) {
 
 export function parseFloorAudit(jsonl, { target, failureMarker = '' }) {
   const observations = new Map()
-  let pendingDeployment
   function add(time, lifecycle, action, revision, nativeId, extra = {}) {
     const occurredAt = auditTime(time)
     if (!occurredAt) return
@@ -37,7 +36,6 @@ export function parseFloorAudit(jsonl, { target, failureMarker = '' }) {
       fields: { environment: 'floor', revision, lifecycle, native_deployment_id: nativeId, ...extra },
       evidence: { source_reference: { target, action }, confidence_basis: 'guarded floor deployment record' },
     })
-    return occurredAt
   }
 
   for (const line of jsonl.split('\n')) {
@@ -50,17 +48,10 @@ export function parseFloorAudit(jsonl, { target, failureMarker = '' }) {
     const { action, time, newSha, head, gate } = row ?? {}
     if (action === 'floor-deployment' && typeof newSha === 'string' &&
         shaPattern.test(newSha) && row.id === `floor:${newSha}`) {
-      const startedAt = add(time, 'started', action, newSha, row.id)
-      if (startedAt) pendingDeployment = { id: row.id, startedAt }
+      add(time, 'started', action, newSha, row.id)
     } else if (action === 'floor-smoke' && row.passed === true && typeof newSha === 'string' &&
         shaPattern.test(newSha) && row.deploymentId === `floor:${newSha}`) {
-      const passedAt = add(time, 'smoke_passed', action, newSha, row.deploymentId)
-      if (passedAt && pendingDeployment?.id === row.deploymentId && passedAt >= pendingDeployment.startedAt) {
-        add(time, 'completed', action, newSha, row.deploymentId)
-        pendingDeployment = null
-      }
-    } else if (gate === 'block' && action === 'override' && typeof head === 'string' && shaPattern.test(head)) {
-      add(time, 'block_bypassed', action, head, null)
+      add(time, 'smoke_passed', action, newSha, row.deploymentId)
     } else if (gate === 'block' && action === 'clear-block') {
       add(time, 'block_clear_requested', action, null, null, {
         checkout_revision: typeof head === 'string' && shaPattern.test(head) ? head : null,
@@ -68,8 +59,8 @@ export function parseFloorAudit(jsonl, { target, failureMarker = '' }) {
     }
   }
 
-  const marker = /^failed_at=([^\r\n]+)\r?\nphase=[^\r\n]+\r?\nsha=([a-f0-9]{40})(?:\r?\n)?$/.exec(failureMarker)
-  if (marker) add(marker[1], 'failed', 'failure-marker', marker[2], null)
+  const marker = /^failed_at=([^\r\n]+)\r?\nphase=([\w.@:\\-]+)\r?\nsha=([a-f0-9]{40})(?:\r?\n)?$/.exec(failureMarker)
+  if (marker) add(marker[1], 'gate_failed', 'failure-marker', marker[3], null, { phase: marker[2] })
   return [...observations.values()].sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
 }
 
