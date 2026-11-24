@@ -82,6 +82,25 @@ CREATE TABLE IF NOT EXISTS jetstream_relays (
   last_ack_at TEXT,
   updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS jetstream_subscribers (
+  name TEXT PRIMARY KEY,
+  stream TEXT NOT NULL,
+  consumer TEXT NOT NULL,
+  flavor TEXT NOT NULL,
+  health TEXT NOT NULL DEFAULT 'pending',
+  reason TEXT,
+  request_id TEXT,
+  receipt_id TEXT,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS jetstream_subscriber_receipts (
+  name TEXT NOT NULL REFERENCES jetstream_subscribers(name),
+  request_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  receipt_id TEXT NOT NULL,
+  delivered_at TEXT NOT NULL,
+  PRIMARY KEY (name, request_id)
+);
 `
 
 function freshFleet(read, window, previousGeneration, allowSameRead = false) {
@@ -188,6 +207,7 @@ function releaseTagEvent(subject, tag, sha, observed_at, event_type, label, chan
 
 export class JournalConfigurationError extends Error {}
 export class RelayCheckpointError extends Error {}
+export class SubscriberJournalError extends Error {}
 
 export class Journal {
   constructor(path, { readOnly = false } = {}) {
@@ -859,6 +879,63 @@ export class Journal {
   relayStatus() {
     const present = this.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'jetstream_relays'").get()
     return present ? this.db.prepare('SELECT * FROM jetstream_relays ORDER BY name').all() : []
+  }
+
+  registerSubscriber({ name, stream, consumer, flavor }) {
+    try {
+      this.db.prepare(`
+        INSERT INTO jetstream_subscribers (name, stream, consumer, flavor) VALUES (?, ?, ?, ?)
+        ON CONFLICT(name) DO NOTHING
+      `).run(name, stream, consumer, flavor)
+      const previous = this.db.prepare('SELECT stream, consumer, flavor FROM jetstream_subscribers WHERE name = ?').get(name)
+      if (previous.stream !== stream || previous.consumer !== consumer || previous.flavor !== flavor) {
+        // A new delivery route needs its own receipt namespace so old receipts
+        // cannot suppress delivery on the new durable.
+        throw new JournalConfigurationError('use a distinct subscriber name when changing stream, durable or flavor')
+      }
+    } catch (error) {
+      if (error instanceof JournalConfigurationError) throw error
+      throw new SubscriberJournalError(`JetStream subscriber ${name} could not initialize its journal`)
+    }
+  }
+
+  updateSubscriber(name, health, reason = null, requestId = null, receiptId = null) {
+    try {
+      this.db.prepare(`
+        UPDATE jetstream_subscribers
+        SET health = ?, reason = ?, request_id = COALESCE(?, request_id),
+            receipt_id = CASE WHEN ? IS NULL THEN receipt_id ELSE ? END, updated_at = ?
+        WHERE name = ?
+      `).run(health, reason, requestId, requestId, receiptId, new Date().toISOString(), name)
+    } catch {
+      throw new SubscriberJournalError(`JetStream subscriber ${name} could not save its delivery status`)
+    }
+  }
+
+  subscriberReceipt(name, requestId) {
+    try {
+      return this.db.prepare(`
+        SELECT receipt_id FROM jetstream_subscriber_receipts WHERE name = ? AND request_id = ?
+      `).get(name, requestId)?.receipt_id
+    } catch {
+      throw new SubscriberJournalError(`JetStream subscriber ${name} could not read receipt ${requestId}`)
+    }
+  }
+
+  recordSubscriberReceipt(name, requestId, eventId, receiptId) {
+    try {
+      this.db.prepare(`
+        INSERT INTO jetstream_subscriber_receipts (name, request_id, event_id, receipt_id, delivered_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(name, request_id) DO NOTHING
+      `).run(name, requestId, eventId, receiptId, new Date().toISOString())
+    } catch {
+      throw new SubscriberJournalError(`JetStream subscriber ${name} could not save receipt ${requestId}`)
+    }
+  }
+
+  subscriberStatus() {
+    const present = this.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'jetstream_subscribers'").get()
+    return present ? this.db.prepare('SELECT * FROM jetstream_subscribers ORDER BY name').all() : []
   }
 
   inspect(id) {

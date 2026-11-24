@@ -89,7 +89,8 @@ Replay notices go to stderr so the JSON payloads stay identical.
 
 The optional [JetStream journal relay](jetstream.md) publishes selected
 facts to Tin Star's engineering broker and reports transport progress in
-`events sources`.
+`events sources`. [JetStream subscribers](subscribers.md) use the same CLI
+for local Mate and webhook delivery status.
 
 ## Observe cmsandbox production tags
 
