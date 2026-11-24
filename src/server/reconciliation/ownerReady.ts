@@ -43,9 +43,10 @@ export function selectJiraMergeRequests(jira?: JiraRead) {
   type Merge = NonNullable<JiraRead['data']>[number]['merges'][number]
   const selected = new Map<string, { merge: Merge; fresh: boolean; unverifiedRequest: boolean }>()
   for (const issue of jira?.data ?? []) {
-    const coordinatorPulls = new Set(issue.merges.filter(merge => merge.coordinator).map(merge => merge.id))
+    const coordinatorHeads = new Set(issue.merges.filter(merge => merge.coordinator && merge.head)
+      .map(merge => JSON.stringify([merge.id, merge.head])))
     for (const merge of issue.merges) {
-      if (coordinatorPulls.has(merge.id) && !merge.coordinator && !merge.conditional) continue
+      if (!merge.coordinator && merge.head && coordinatorHeads.has(JSON.stringify([merge.id, merge.head]))) continue
       const prior = selected.get(merge.id)?.merge
       if (prior && (prior.createdAt > merge.createdAt || (prior.createdAt === merge.createdAt &&
           BigInt(prior.comment) >= BigInt(merge.comment)))) continue

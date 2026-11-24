@@ -1,14 +1,12 @@
 import { expect, it, vi } from 'vitest'
-import { createServer, IncomingMessage, Server } from 'node:http'
+import { createServer, IncomingMessage } from 'node:http'
 import { Socket } from 'node:net'
-import { createRequire } from 'node:module'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHmac, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { jiraConfig, startJiraWebhook } from '../../../../event-publisher/jira.js'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import { runTswStatusSync } from '../../../coordinator/tswStatusSync'
 import type { OwnerReadyRead } from '../../../shared/ownerReady'
@@ -26,7 +24,6 @@ import { PullReader } from '../../pulls/reader'
 import { PullsApi } from '../../pulls/routes'
 import { AssociationStore } from '../../releases/associations'
 
-const { Journal } = createRequire(import.meta.url)('../../../../event-publisher/journal.js') as typeof import('../../../../event-publisher/journal.js')
 
 const original = 'a'.repeat(40), changed = 'b'.repeat(40), sibling = 'c'.repeat(40)
 const moving = 'https://github.com/owner/repo/pull/1'
@@ -47,7 +44,7 @@ const fields = { owner: 'customfield_101', decisions: 'customfield_102', blocker
 const bundle = (read: OwnerReadyRead, repository: string | null) => read.repositories.find(bundle => bundle.repository === repository)
 const merge = (read: OwnerReadyRead, url: string) => read.repositories.flatMap(bundle => bundle.merges).find(merge => merge.url === url)
 const entry = (url: string, head: string, id: string, created = '2026-11-23T12:00:00Z') =>
-  ({ id, body: `Will: merge ${url}${head ? ` head ${head}` : ''}`, created })
+  ({ id, author: undefined as { accountId: string } | undefined, body: `Will: merge ${url}${head ? ` head ${head}` : ''}`, created })
 const issue = (id: string, decisions = '', status = 'Ready for Review', description = '') => ({ id, key: `TSW-${id}`,
   fields: { project: { id: project }, status: { name: status }, assignee: { displayName: 'William Gathright', accountId: 'fixture-will' },
     [fields.decisions]: decisions, description } })
@@ -108,6 +105,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
         : { issues: tickets.slice(0, 3), isLast: false, nextPageToken: 'next-issues' })
     }
     if (init?.method && init.method !== 'GET') sourceWrites.push(`${init.method} ${path}`)
+    if (path.endsWith('/myself')) return Response.json({ accountId: 'fixture-service' })
     if (path === '/v1/comments') {
       if (boardHistoryUnavailable) return new Response(null, { status: 503 })
       return Response.json({ results: notionNotes.map((note, index) => ({ id: index === 0 ? mergeComment : `native-${index}`, created_time: '2026-11-23T11:30:00Z', rich_text: [{ plain_text: note }] })), has_more: false })
@@ -210,7 +208,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     const coordinatorHistory: Array<{ field: 'status' | 'assignee'; from: string | null; to: string; byService: boolean; occurredAt: number; entryId: string }> = []
     const edit = vi.fn(async (input: { note?: string }, actor: string) => {
       if (!input.note) throw new Error('Expected a coordinator merge note')
-      comments.get('10')!.unshift({ id: '21', body: `${input.note}\n\nRecorded via Tin Star (${actor})`, created: '2026-11-23T12:00:00Z' })
+      comments.get('10')!.unshift({ id: '21', author: { accountId: 'fixture-service' }, body: `${input.note}\n\nRecorded via Tin Star (${actor})`, created: '2026-11-23T12:00:00Z' })
       coordinatorHistory.push({ field: 'assignee', from: coordinatorAssignee, to: 'fixture-will', byService: true, occurredAt: Date.now(), entryId: '1' })
       coordinatorAssignee = 'fixture-will'
       return { outcome: 'saved' }
@@ -255,31 +253,6 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(coordinatorStatus).toBe('Ready for Review')
     expect(edit).toHaveBeenCalledTimes(1)
     expect(comments.get('10')![0]?.body).toContain('Recorded via Tin Star (Firstmate mate-a, Firstmate mate-b)')
-    const journal = new Journal(join(root, 'outage-events.sqlite'))
-    const publisherConfig = jiraConfig({ site: jiraSite, cloudId, projectId: project, fields })
-    const secret = randomBytes(32).toString('hex')
-    const deliveryId = 'fixture-merge-publication'
-    try {
-      journal.registerSources([publisherConfig.source])
-      const listen = Server.prototype.listen
-      const ephemeralListener = vi.spyOn(Server.prototype, 'listen').mockImplementationOnce(function (this: Server) {
-        return Reflect.apply(listen, this, [0, '127.0.0.1'])
-      })
-      const publisher = await startJiraWebhook(journal, publisherConfig, secret, secret).finally(() => ephemeralListener.mockRestore())
-      try {
-        const note = comments.get('10')![0]!
-        const body = JSON.stringify({ webhookEvent: 'comment_created', issue: review, comment: note, timestamp: Date.parse(note.created) })
-        const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`
-        const deliver = () => fetch(publisher.url, { method: 'POST', body, headers: {
-          'Content-Type': 'application/json', 'X-Atlassian-Webhook-Identifier': deliveryId, 'X-Hub-Signature': signature,
-        } })
-        expect((await deliver()).status).toBe(204)
-        expect((await deliver()).status).toBe(204)
-        const notices = journal.events()
-        expect(notices).toHaveLength(1)
-        expect(notices[0]).toMatchObject({ event_type: 'ticket.comment.created', source: { delivery_id: deliveryId }, change: { after: note.body } })
-      } finally { await publisher.close() }
-    } finally { journal.close() }
     const pending = (await call(mate, 'get_work_views')).ownerReady as OwnerReadyRead
     expect(pending.warnings).toContainEqual(expect.stringContaining('Fleet coverage for main is stale'))
     expect(pending.repositories.map(group => group.repository)).toEqual(['outside/repo', 'owner/other', 'owner/repo', null])

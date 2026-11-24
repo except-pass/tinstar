@@ -451,7 +451,7 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   expect(f.requests.some(request => request.path.includes('OTHER-1') || request.path.includes('70001'))).toBe(false)
 })
 
-it.each(['late publisher', 'new head', 'publisher after submit', 'deleted note'] as const)('reconciles append-only review notes for %s', async scenario => {
+it.each(['late publisher', 'new head', 'new head after submit', 'publisher after submit', 'deleted note'] as const)('reconciles append-only review notes for %s', async scenario => {
   const f = await tswFixture()
   await f.create('delivery')
   await f.publish([tswTask('TSW-1')])
@@ -461,7 +461,8 @@ it.each(['late publisher', 'new head', 'publisher after submit', 'deleted note']
     pr: { url: fixturePull, head }, hints: { last_event_text: `done: PR ${fixturePull} checks green at head ${head}` },
   })
   await f.publish([ready(original)])
-  const submitted = scenario === 'publisher after submit'
+  const submitted = scenario.endsWith('after submit')
+  const replacement = scenario.startsWith('new head')
   expect(await f.run(true, 5, !submitted)).toMatchObject({ stopped: !submitted })
   const issue = f.issues.get('60001')!
   const mergeNotes = () => issue.comments.filter(comment => adfText(comment.body).startsWith('Will: merge'))
@@ -476,22 +477,32 @@ it.each(['late publisher', 'new head', 'publisher after submit', 'deleted note']
     expect(mergeNotes()).toHaveLength(0)
     return
   }
-  if (scenario === 'new head') await f.publish([ready(next)])
+  if (replacement) await f.publish([ready(next)])
   else {
     await f.publishBackup([ready(original)])
     if (submitted) await f.publish([])
   }
-  expect(await f.run(true)).toMatchObject({ stopped: false })
+  const result = await f.run(true)
+  expect(result).toMatchObject({ stopped: false })
+  if (submitted && replacement) {
+    expect(result.plans[0]?.steps).toEqual([expect.objectContaining({ kind: 'jira_edit' })])
+    expect(result.plans[0]?.steps?.[0]).not.toHaveProperty('assignee')
+  }
   expect(issue.fields.status.name).toBe('Ready for Review')
-  expect(mergeNotes()).toHaveLength(scenario === 'new head' ? 2 : 1)
+  expect(mergeNotes()).toHaveLength(replacement ? 2 : 1)
   expect(mergeNotes()[0].id).toBe(id)
   expect(adfText(mergeNotes()[0].body)).toContain('Publishers: ["Firstmate fleet"]')
-  if (scenario === 'new head') {
+  if (replacement) {
     expect(adfText(mergeNotes()[1].body).split('\n')[0]).toBe(`Will: merge ${fixturePull} head ${next}`)
     issue.comments.push({ id: '99', body: jiraText(`Will: merge ${fixturePull} head ${original}`), created: new Date().toISOString(),
       author: { accountId: 'fixture-mate' } })
     const read = await f.jira().ownerRequests.get(true)
     expect(selectJiraMergeRequests(read).get('fixture/project#123')?.merge).toMatchObject({ head: next, coordinator: true })
+    const distinct = 'c'.repeat(40)
+    issue.comments.push({ id: '100', body: jiraText(`Will: merge ${fixturePull} head ${distinct}`), created: new Date().toISOString(),
+      author: { accountId: 'fixture-reviewer' } })
+    const withDistinct = await f.jira().ownerRequests.get(true)
+    expect(selectJiraMergeRequests(withDistinct).get('fixture/project#123')?.merge).toMatchObject({ head: distinct, coordinator: false })
   }
   expect(issue.comments.filter(comment => adfText(comment.body).startsWith('Submit for Review via Tin Star'))).toHaveLength(1)
 })
