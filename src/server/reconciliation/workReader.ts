@@ -19,7 +19,7 @@ export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
   const classifications = ([['Initiative', scope.initiative], ['Epic', scope.epic]] as const).map(([name, expected]) =>
     has(name, expected) ? true : card.properties[name]?.type === 'relation' && card.properties[name]?.hasMore ? undefined : false)
   const status = String(value('Status'))
-  const includeCanceled = card.source?.synthetic === false && status === 'Canceled' && (scope.history || scope.statuses?.includes(status))
+  const includeCanceled = card.source?.synthetic === false && status === 'Canceled' && scope.statuses?.includes(status)
   const matches = (!card.archived || includeCanceled) && !card.in_trash && has('Owner', scope.owner) &&
     (scope.statuses ? scope.statuses.includes(status) : scope.history || !['Done', 'Archived'].includes(status)) &&
     (!scope.checkpoint_before || !!date?.start && checkInTime(date.start, date.time_zone) <= Date.parse(scope.checkpoint_before))

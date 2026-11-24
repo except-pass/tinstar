@@ -324,8 +324,11 @@ it('includes matching Jira and legacy Notion cards with independent search cover
         'Next check-in': { value: { start: '2026-01-04', end: null, time_zone: null } }, 'Last touched by': { value: null } } },
   ])
   expect(f.requests.filter(request => request.path === 'search/jql')).toHaveLength(3)
-  const history = await call('search_work', { owner: 'Clawson', history: true })
-  expect(history.records.find((record: any) => record.card.source.properties.Status.value === 'Canceled')?.card.source).toMatchObject({ archived: true, in_trash: false })
+  expect(await call('search_work', { owner: 'Clawson', history: true })).toMatchObject({ total: 2 })
+  const selected = await call('search_work', { owner: 'Clawson', statuses: ['Canceled'] })
+  expect(selected.records.find((record: any) => record.card.source.id === `jira:${new URL(config.url).hostname}:${config.projectId}:${canceled.id}`)?.card.source).toMatchObject({
+    archived: true, in_trash: false, properties: { Status: { value: 'Canceled' } },
+  })
   f.search.failFrom = 1
   const partial = await call('search_work', args)
   expect(partial.total).toBe(2)
