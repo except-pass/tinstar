@@ -82,7 +82,7 @@ continue to use the operational queue rather than this progressive HTTP display.
 
 ## Source limits and prerequisites
 
-The owner-authorized Desk includes native Jira requests for Will. A Jira ticket in Waiting For with an Actor blocker targeting Will contributes the blocker condition as its proposed action and requires verification in Jira.
+The owner-authorized Desk includes native Jira requests for Will. A Jira ticket in Waiting For with an Actor blocker targeting Will contributes the blocker condition as its proposed action and requires verification in Jira. When present, `sources[].url` supplies the link for opening the native Jira issue from Desk.
 
 The queue retains only the snapshot's published open-decision keys/summaries, hold kind/completion and task-origin ID. It does not return raw backlog bodies, briefs, pane transcripts or operator command suggestions. Existing worker/message/terminal controls and receipt delivery remain unchanged; Decisions binds to them per source.
 
