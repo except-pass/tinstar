@@ -16,7 +16,7 @@ const details = z.object({ head: z.object({ sha: z.string() }), state: z.string(
 const reviews = z.array(z.object({ user: z.object({ login: z.string() }).nullable(), state: z.string(), html_url: z.string() }))
 export interface PullScope { account: string; owners: string[]; associated: PullIdentity[]; repositories?: string[]; authenticatedActor?: string; credentialProfile?: string }
 type PullActor = Omit<PullScope, 'associated'>
-type RepoRead = { pulls: Omit<PullSummary, 'links'>[]; coverage: PullRepository }
+type RepoRead = { pulls: Omit<PullSummary, 'links'>[]; closedPulls: string[]; coverage: PullRepository }
 
 /** Demand cache, shared across clients. Four repo reads at once, bounded pages;
  * limits prevent an accidental large account crawl from exhausting the shared API budget. */
@@ -121,7 +121,7 @@ export class PullReader {
     // Failed pagination retains previous rows as stale, including rows beyond the successful page.
     const merged = new Map<string, Omit<PullSummary, 'links'>>((!complete && previous ? previous.pulls.filter(pull => !closed.has(pull.id)).map(pull => [pull.id, { ...pull, freshness: 'stale' as const }] as const) : []))
     for (const pull of pulls) merged.set(pull.id, pull)
-    const data: RepoRead = { pulls: [...merged.values()], coverage: { repository, scope: owned ? 'all-open' : 'authored-or-associated', complete,
+    const data: RepoRead = { pulls: [...merged.values()], closedPulls: [...closed], coverage: { repository, scope: owned ? 'all-open' : 'authored-or-associated', complete,
       observedAt: pulls.length || complete ? observedAt : previous?.coverage.observedAt ?? null,
       status: complete ? 'fresh' : pulls.length ? 'partial' : previous?.pulls.length ? 'stale' : 'unavailable', error } }
     this.repos.set(key, { until: this.now() + 60_000, data })

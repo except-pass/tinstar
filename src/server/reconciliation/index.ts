@@ -549,14 +549,25 @@ export class ReconciliationSources {
     return workReadback(read)
   }
 
-  private readOwnerMergeStates(jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined, inventory: PullsRead | null, force: boolean, readBudget: number) {
+  private readOwnerMergeStates(merges: OwnerReadyRead['repositories'][number]['merges'], jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined, inventory: PullsRead | null, force: boolean, readBudget: number) {
     const selected = selectJiraMergeRequests(jira)
-    const expectedHeads = new Map<string, string>()
+    const expectedHeads = new Map<string, string | null>()
     for (const pull of inventory?.pulls ?? []) {
       const id = releasePull(pull.url)?.id
       const selection = id ? selected.get(id) : undefined
       if (pull.freshness === 'fresh' && selection && !selection.unverifiedRequest && selection.merge.head === pull.head) {
         expectedHeads.set(selection.merge.url, pull.head)
+      }
+    }
+    if (force && inventory) {
+      const listed = new Set(inventory.pulls.map(pull => pull.id))
+      const closed = new Set(inventory.closedPulls)
+      const scopes = new Map(inventory.repositories.map(repo => [repo.repository, repo.scope]))
+      const associated = new Set(inventory.associations?.filter(pull => pull.links.some(link => link.active)).map(pull => pull.id))
+      for (const merge of merges) {
+        const pull = merge.url && releasePull(merge.url)
+        if (pull && !listed.has(pull.id) && !closed.has(pull.id) &&
+            (scopes.get(pull.repository) === 'all-open' || scopes.get(pull.repository) === 'authored-or-associated' && associated.has(pull.id))) expectedHeads.set(pull.url, null)
       }
     }
     const urls = [...expectedHeads.keys()]
@@ -570,7 +581,7 @@ export class ReconciliationSources {
     const merges = read.repositories.flatMap(group => group.merges)
     const repositories = new Set(merges.flatMap(ask => ask.url ? [releasePull(ask.url)!.repository] : []))
     const inventory = knownInventory ?? (repositories.size ? await this.readOwnerInventory?.(repositories, recheck, scene).catch(() => null) : null) ?? null
-    const states = await this.readOwnerMergeStates(jira, inventory, recheck, readBudget)
+    const states = await this.readOwnerMergeStates(merges, jira, inventory, recheck, readBudget)
     verifyOwnerMerges(read, inventory, states)
     if (repositories.size && !inventory) read.warnings.push('GitHub inventory is unavailable. Current PR heads could not be verified.')
     if (recheck) read.recheckedAt = new Date().toISOString()
