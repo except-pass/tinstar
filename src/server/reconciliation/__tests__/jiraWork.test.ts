@@ -433,22 +433,39 @@ it('blocks review without overwriting an owner assignee', async () => {
   expect(issue.fields.assignee.accountId).toBe('owner-account')
 })
 
-it('advances the same PR again after the owner rejects review', async () => {
+it('preserves the owner’s Reject Review until First Mate supplies a new event', async () => {
   const f = await tswFixture()
   await f.create('Reject Review')
-  await f.publish([tswTask('TSW-1', 'checks green: PR ready for review')])
-  const first = await f.run(true)
-  const reviewId = (run: typeof first) =>
-    run.audits.find(entry => entry.result === 'verified' && entry.operationId?.endsWith('-ready-for-review'))!.operationId
-  const card_id = (await f.jira().readTswCard('TSW-1')).id
-  expect(await f.call('transition_work', {
-    card_id, operation_id: 'owner-action', verb: 'Reject Review', to: 'Queued', reason: 'Try again',
-  })).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
-  expect(reviewId(await f.run(true))).not.toBe(reviewId(first))
-  expect((await f.jira().readTswCard('TSW-1')).status).toBe('Ready for Review')
+  const detail = 'checks green: PR ready for review'
+  await f.publish([tswTask('TSW-1', detail)])
+  await f.run(true)
+  const issue = f.issues.get('60001')!
+  expect(issue.fields.status.name).toBe('Ready for Review')
+  f.appendHistory(issue.id, [{ fieldId: 'status', fromString: 'Ready for Review', toString: 'Queued' }], 'owner-account')
+  issue.fields.status = { name: 'Queued' }
+  for (const apply of [false, true, true]) {
+    expect(await f.run(apply)).toMatchObject({ plans: [], stopped: false })
+    expect(issue.fields.status.name).toBe('Queued')
+  }
+  await f.publish([tswTask('TSW-1', detail, 'off', { pr: { url: 'https://github.com/fixture/project/pull/124' } })])
+  expect(await f.run(true)).toMatchObject({ stopped: false })
+  expect(issue.fields.status.name).toBe('Ready for Review')
+})
+
+it('preserves the owner’s Park against an unchanged worker event', async () => {
+  const f = await tswFixture()
+  await f.create('Park')
   await f.publish([tswTask('TSW-1')])
-  expect(await f.run(true)).toMatchObject({ plans: [] })
-  expect((await f.jira().readTswCard('TSW-1')).status).toBe('Ready for Review')
+  await f.run(true)
+  const issue = f.issues.get('60001')!
+  expect(issue.fields.status.name).toBe('In Progress')
+  f.appendHistory(issue.id, [{ fieldId: 'status', fromString: 'In Progress', toString: 'Backlog' }], 'owner-account')
+  issue.fields.status = { name: 'Backlog' }
+  expect(await f.run(true)).toMatchObject({ plans: [], stopped: false })
+  expect(issue.fields.status.name).toBe('Backlog')
+  await f.publish([tswTask('TSW-1', '', 'off', { spawn_gen: 'attempt-2' })])
+  expect(await f.run(true)).toMatchObject({ stopped: false })
+  expect(issue.fields.status.name).toBe('In Progress')
 })
 
 it('replans a rejected Fast-track with a new operation ID on the next pass', async () => {
