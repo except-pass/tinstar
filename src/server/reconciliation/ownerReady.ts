@@ -42,12 +42,16 @@ const cardPulls = (card: Card) => ['Link', 'Evidence'].flatMap(name => {
 export function selectJiraMergeRequests(jira?: JiraRead) {
   type Merge = NonNullable<JiraRead['data']>[number]['merges'][number]
   const selected = new Map<string, { merge: Merge; fresh: boolean; unverifiedRequest: boolean }>()
-  for (const issue of jira?.data ?? []) for (const merge of issue.merges) {
-    const prior = selected.get(merge.id)?.merge
-    if (prior && (prior.createdAt > merge.createdAt || (prior.createdAt === merge.createdAt &&
-        BigInt(prior.comment) >= BigInt(merge.comment)))) continue
-    const fresh = current(jira!.status) && !issue.notesUnavailable && !merge.conditional
-    selected.set(merge.id, { merge, fresh, unverifiedRequest: !fresh || !merge.head })
+  for (const issue of jira?.data ?? []) {
+    const coordinatorPulls = new Set(issue.merges.filter(merge => merge.coordinator).map(merge => merge.id))
+    for (const merge of issue.merges) {
+      if (coordinatorPulls.has(merge.id) && !merge.coordinator && !merge.conditional) continue
+      const prior = selected.get(merge.id)?.merge
+      if (prior && (prior.createdAt > merge.createdAt || (prior.createdAt === merge.createdAt &&
+          BigInt(prior.comment) >= BigInt(merge.comment)))) continue
+      const fresh = current(jira!.status) && !issue.notesUnavailable && !merge.conditional
+      selected.set(merge.id, { merge, fresh, unverifiedRequest: !fresh || !merge.head })
+    }
   }
   return selected
 }
