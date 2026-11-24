@@ -18,8 +18,10 @@ with `nats-server -t -c /etc/tinstar-jetstream/nats.conf` and confirm the final
 listener is limited to Serena loopback. There is no monitoring HTTP listener.
 
 Keep `sync_interval: always` in the `jetstream` block for the standalone
-file-backed stream. It syncs message writes before acknowledgment so a Serena
-power loss cannot roll back an acknowledged fact that Hulk has checkpointed.
+file-backed stream. Synchronous writes close the normal delayed-flush window.
+NATS 2.10.7 can still acknowledge a fact after a disk I/O error during sync,
+and the fact can be lost. Hulk's journal remains the durable recovery source.
+[NATS 2.10.7 file store](https://github.com/nats-io/nats-server/blob/v2.10.7/server/filestore.go#L4919-L4924)
 
 Provision two NATS user NKeys. Store the relay seed as
 `tinstar/jetstream-hulk.seed` in Hulk's Clavis vault and the admin seed as
@@ -96,7 +98,9 @@ On Serena, verify that the active broker config has `sync_interval: always`
 in its `jetstream` block. If it is missing, add it, validate the config with
 `nats-server -t -c /etc/tinstar-jetstream/nats.conf`, restart
 `nats-server.service`, and confirm the existing file-backed stream is available.
-Keep the existing store directory.
+Keep the existing store directory. If the broker has had a disk fault or
+stream loss is suspected, use the checkpoint reset and replay procedure below
+before starting the permanent relay.
 
 Check replay to Serena from an isolated journal backup before starting the
 permanent relay. Keep Hulk's signed Jira ingress and publisher running
@@ -141,8 +145,10 @@ cursor past a selected event only after a publish acknowledgment from the
 expected stream. A crash or lost acknowledgment reuses the original
 `event_id` as the NATS message ID. JetStream deduplicates inside its
 configured window. Consumers must deduplicate logical effects by the stable
-event ID even after that window. With the required synchronous file storage,
-broker acknowledgment confirms stream persistence only.
+event ID even after that window. A broker acknowledgment confirms that the
+stream accepted the publish. If sync fails and the fact is lost, ordinary
+restart resumes from the saved checkpoint. Recover from the journal using
+the procedure below.
 
 `events sources --db <path>` reports the last recorded relay state, the processed
 sequence, the last broker acknowledgment and the failing sequence during
@@ -164,9 +170,10 @@ API retrieval and replay as well as live delivery. Keep broker history for
 replay and recovery within the stream's 30-day and 256 MiB limits. Use the
 journal for replay beyond that window.
 
-When replacing the broker or stream, stop the named relay, provision the
-replacement file-backed stream on a broker configured with
-`sync_interval: always`, and update the relay config for the replacement destination.
+After any broker disk fault, suspected stream loss, or broker or stream
+replacement, stop the named relay. Restore the file-backed stream on a broker
+configured with `sync_interval: always`. If the destination changed, update
+the relay config for the replacement destination.
 As the journal owner on Hulk, remove only that relay's checkpoint from the
 live journal, then restart the relay to replay eligible facts from zero.
 For the shipped `hulk-jira` relay, run:

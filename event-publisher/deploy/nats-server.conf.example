@@ -3,6 +3,8 @@ listen: "127.0.0.1:4222"
 
 jetstream {
   store_dir: "/var/lib/tinstar-jetstream"
+  # Closes the normal delayed-flush window. NATS 2.10.7 can acknowledge
+  # a write after a sync I/O error. See jetstream.md for journal replay recovery.
   sync_interval: always
   max_file_store: 1GB
   max_memory_store: 64MB
