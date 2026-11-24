@@ -97,9 +97,23 @@ test('routing metrics keep observations within any visit to the exact route', as
   const betweenVisits = {
     ...firstVisit, observation_id: 'between-visits', occurred_at: '2026-11-23T11:30Z',
   }
+  const gapMate = 'controlled-gap-worker'
+  const missingLinkRoute = { ...fixture.old, machine: 'Hilda' }
+  const afterGap = await record({
+    mate_id: gapMate, effective_start_at: '2026-11-23T12:00Z', old: missingLinkRoute,
+  })
+  const beforeGap = await record({ mate_id: gapMate, effective_start_at: '2026-11-23T10:00Z' })
+  const gapRow = { ...betweenVisits, observation_id: 'gap-b', mate_id: gapMate }
+  const gapRows = [
+    gapRow,
+    { ...gapRow, observation_id: 'gap-c', route: missingLinkRoute },
+    { ...gapRow, observation_id: 'gap-start', route: undefined, occurred_at: '2026-11-23T10:00Z' },
+  ]
   const rows = [
     observation,
     betweenVisits,
+    ...gapRows,
+    { ...gapRow, observation_id: 'gap-end', occurred_at: '2026-11-23T12:00Z' },
     firstVisit,
     { ...firstVisit, observation_id: 'at-return', occurred_at: '2026-11-23T12:00Z' },
     { ...observation, observation_id: 'at-cutover', occurred_at: '2026-11-23T14:34:00.0000040-05:00' },
@@ -118,7 +132,7 @@ test('routing metrics keep observations within any visit to the exact route', as
     '-c', 'exec "$1" --disable-warning=ExperimentalWarning "$2" --db "$3" routing-metrics-input < "$4"',
     'routing-test', process.execPath, cli, db, input,
   ])
-  deepEqual(stdout.trim().split('\n').map(JSON.parse), rows.slice(2))
+  deepEqual(stdout.trim().split('\n').map(JSON.parse), rows.slice(2 + gapRows.length))
   deepEqual(stderr.trim().split('\n').map(JSON.parse), [
     { warning: 'routing.invalid_json', line: 1, skipped_rows: 1 },
     {
@@ -139,8 +153,16 @@ test('routing metrics keep observations within any visit to the exact route', as
       effective_start_at: returnReceipt.effective_start_at,
       migration_event_id: returnReceipt.event_id,
     },
+    ...gapRows.map(row => ({
+      warning: 'routing.uncovered_timestamp_excluded',
+      observation_id: row.observation_id,
+      mate_id: gapMate,
+      occurred_at: row.occurred_at,
+      previous_migration_event_id: beforeGap.event_id,
+      next_migration_event_id: afterGap.event_id,
+    })),
     { warning: 'routing.invalid_json', line: rows.length + 2, skipped_rows: 2 },
   ])
   equal(await readFile(input, 'utf8'), original)
-  equal((await run('replay', '--source', 'routing', '--after', '0', '--json')).stdout.trim().split('\n').length, 4)
+  equal((await run('replay', '--source', 'routing', '--after', '0', '--json')).stdout.trim().split('\n').length, 6)
 })

@@ -183,7 +183,9 @@ against the actual project before accepting the integration.
 Use a stable `mate_id` that stays the same across machine, runtime, and provider
 changes. The effective start is when the destination began handling work. Give
 it a timezone and cite the operator, handoff, or source record that establishes
-the change. Use the existing service account's journal access.
+the change. Record each intervening move so the previous destination matches
+the next receipt's old route. Backfill missing receipts to restore coverage.
+Use the existing service account's journal access.
 
 The following receipt is a controlled example. Save it as `receipt.json` and
 use a separate private journal for the example.
@@ -240,10 +242,14 @@ The first row yields a JSON warning on stderr with its identity, original
 time, and the cutoff and receipt ID. The second row passes through to stdout.
 The filter orders each mate's migration receipts by effective start. The
 first old route is active before the first cutover, and each destination is
-active from its cutover until the next one. A timestamp in any visit to the
-exact route passes through. A timestamp outside every visit to a known route
-is warned about and excluded. Rows with unknown routes or insufficient
-attribution pass through for the report's existing handling.
+active from its cutover until the next one when that receipt's old route
+matches the destination. A mismatch leaves the span from the earlier cutover
+up to the later cutover uncovered. The filter excludes every row for that mate
+whose original timestamp falls in the span, regardless of route, and names
+both receipts in the stderr warning. Outside uncovered spans, a timestamp in
+any visit to the exact route passes through. A timestamp outside every visit
+to a known route is warned about and excluded. Rows with unknown routes or
+insufficient attribution pass through for the report's existing handling.
 Blank lines are ignored. Invalid JSON produces a warning with its line number
 and the running count of skipped malformed rows, and the filter continues.
 The filter opens the journal read-only and leaves the activity ledger intact.

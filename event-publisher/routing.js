@@ -79,17 +79,35 @@ export function routingReplayCheck(receipts) {
   const timelines = new Map()
   for (const receipt of ordered) {
     const mate = receipt.subject.id
+    const oldKey = routeKey(receipt.change.before)
     if (!timelines.has(mate)) {
-      timelines.set(mate, [{ key: routeKey(receipt.change.before), start: null }])
+      timelines.set(mate, [{ key: oldKey, start: null }])
     }
-    timelines.get(mate).push({ key: routeKey(receipt.change.after), start: receipt })
+    const timeline = timelines.get(mate)
+    const previous = timeline.at(-1)
+    if (previous.key !== oldKey) previous.uncoveredUntil = receipt
+    timeline.push({ key: routeKey(receipt.change.after), start: receipt })
   }
   return row => {
-    const context = route(row?.route)
-    if (!context || !isText(row.mate_id) || !isText(row.observation_id)) return null
+    if (!isText(row?.mate_id)) return null
     const timestamp = instant(row.occurred_at)
     const timeline = timelines.get(row.mate_id)
     if (!timestamp || !timeline) return null
+    const gap = timeline.find(({ start, uncoveredUntil }) => uncoveredUntil &&
+      !beforeInstant(timestamp, start.effective_start_at) &&
+      beforeInstant(timestamp, uncoveredUntil.effective_start_at))
+    if (gap) {
+      return {
+        warning: 'routing.uncovered_timestamp_excluded',
+        observation_id: row.observation_id,
+        mate_id: row.mate_id,
+        occurred_at: row.occurred_at,
+        previous_migration_event_id: gap.start.event_id,
+        next_migration_event_id: gap.uncoveredUntil.event_id,
+      }
+    }
+    const context = route(row.route)
+    if (!context || !isText(row.observation_id)) return null
     const key = routeKey(context)
     let receipt
     for (const [index, { key: intervalKey, start }] of timeline.entries()) {
