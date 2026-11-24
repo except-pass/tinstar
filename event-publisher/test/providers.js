@@ -382,8 +382,10 @@ test('deployment parser projects synthetic audit receipts and a failure marker',
   equal(events[4].fields.phase, 'post-deploy-smoke')
   equal(events[4].fields.native_deployment_id, null)
   equal(events[4].occurredAt, '2026-01-01T00:03:00.000Z')
-  equal(events[5].fields.revision, null)
-  equal(events[5].fields.checkout_revision, revision)
+  deepEqual(events[5].fields, {
+    environment: 'floor', revision: null, lifecycle: 'block_clear_requested', native_deployment_id: null,
+  })
+  equal(events[5].occurredAt, '2026-01-01T00:05:00.000Z')
   equal(events[3].id, events[6].id)
   const smokeOnly = audit.split('\n')[1]
   deepEqual(parseFloorAudit(smokeOnly, { target }).map(event => event.event_type), ['deployment.smoke_passed'])
