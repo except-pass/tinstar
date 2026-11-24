@@ -10,7 +10,7 @@ export function mergePublication(line: string, jira = false) {
     /^(?:Will: |Please )?merge (https:\/\/\S+?)(?:\s+(.*))?$/i).exec(line.trim())
   const pull = match && releasePull(match[1]!)
   if (!pull) return null
-  const suffix = (match[2] ?? '').replace(/\s*\(ready for review\)\s*$/i, '').trim()
+  const suffix = (match[2] ?? '').trim()
   const head = requestedHead(suffix.replace(/^(?:at )?head /i, ''))
   // Unfamiliar qualifiers may be conditions. Retain the exact target but hold
   // readiness until a current publication records an unconditional request.
