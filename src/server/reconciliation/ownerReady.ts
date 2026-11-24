@@ -2,7 +2,7 @@ import { firstMateRequestSchema, requestAnchor } from '../../shared/deskSource'
 import type { OwnerReadyRead, OwnerRequestSource, OwnerMergeAsk, OwnerDecisionAsk } from '../../shared/ownerReady'
 import { inventoryPullState, type PullsRead } from '../../shared/pulls'
 import { releasePull } from '../../shared/pullIdentity'
-import { cardSourceUrl } from '../../shared/workIdentity'
+import { cardSourceUrl, isJiraCard } from '../../shared/workIdentity'
 import { decisionRecordRows, decisionRequests, withdrawnDecisionIds } from '../../shared/workflowRequests'
 import type { SourceSnapshot } from '.'
 import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from './cardContext'
@@ -146,7 +146,9 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
         boundRequests.set(binding, request.answered ? null : id)
       }
       if (request.answered || !actions.includes(action)) continue
-      const source: OwnerRequestSource = { kind: 'notion', id, label: request.id, url }
+      const commentId = request.sourceId.replaceAll('-', '')
+      const destination = !isJiraCard(card.id) && /^[a-f0-9]{32}$/i.test(commentId) ? `${url}#${commentId}` : null
+      const source: OwnerRequestSource = { kind: 'notion', id, label: request.id, url: destination }
       const question = request.question ?? request.action
       if (action === 'merge') {
         const publication = mergePublication(question)
@@ -177,8 +179,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     const binding = JSON.stringify([source.responseAnchor, source.question, source.generation ?? null])
     if (boundRequests.has(binding) && !boundRequests.get(binding)) continue
     const id = boundRequests.get(binding) ?? JSON.stringify([source.responseAnchor, source.generation ?? null])
-    const links = item.cardIds.length === 1 ? cardSourceUrl(item.cardIds[0]!) : null
-    const record: OwnerRequestSource = { kind: 'firstmate', id: source.responseAnchor, label: source.request.id, url: links }
+    const record: OwnerRequestSource = { kind: 'firstmate', id: source.responseAnchor, label: source.request.id, url: worker?.task.recordUrl ?? null }
     const merge = mergePublication(source.question)
     const fresh = current(source.status)
     const repository = declaredRepository(worker?.row?.repo) ?? declaredRepository(worker?.task.project)
@@ -197,7 +198,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     const publication = readyHeadPublication(task.lastEventText ?? '')
     if (!publication?.head || publication.conditional || publication.head !== requestedHead(task.pr.head) ||
         publication.id !== releasePull(String(task.pr.url))?.id || !issue.merges.some(merge => merge.id === publication.id)) continue
-    addMerge({ kind: 'firstmate', id: JSON.stringify([home, task.id, task.identity.spawn_gen]), label: `${issue.key} · worker publication`, url: issue.url },
+    addMerge({ kind: 'firstmate', id: JSON.stringify([home, task.id, task.identity.spawn_gen]), label: `${issue.key} · worker publication`, url: task.recordUrl ?? null },
       publication.url, publication.head, fresh)
   }
 
@@ -221,7 +222,7 @@ export function verifyOwnerMerges(read: OwnerReadyRead, inventory: PullsRead | n
     const changed = !!liveHead && merge.requestedHeads.some(head => head !== liveHead)
     const ready = fresh && observed.state === 'open' && !observed.draft && observed.checks === 'passed' && observed.mergeability === 'ready'
     merge.live = { head: liveHead, observedAt: (fresh ? observed.observedAt : pull?.observedAt) ?? null,
-      state: changed ? 'stale' : !fresh || merge.unverifiedRequest ? 'unverified' : ready ? 'ready' : 'pending' }
+      state: merge.unverifiedRequest ? 'unverified' : changed ? 'stale' : !fresh ? 'unverified' : ready ? 'ready' : 'pending' }
     return true
   })
   read.repositories = read.repositories.filter(group => group.merges.length || group.decisions.length)

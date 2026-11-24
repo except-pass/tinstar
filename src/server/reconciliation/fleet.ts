@@ -17,6 +17,12 @@ const fields = <K extends string>(value: unknown, keys: K[]): Record<K, string |
   return [key, typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean' ? item : null]
 })) as Record<K, string | number | boolean | null>
 
+const workerRecordUrlSchema = z.string().url().refine(value => /^https?:\/\//i.test(value))
+function workerRecordLink(value: unknown): { recordUrl?: string } {
+  const url = workerRecordUrlSchema.safeParse(value)
+  return url.success ? { recordUrl: url.data } : {}
+}
+
 // Missing or malformed lists are unknown. Only an explicit [] proves no blockers.
 const readinessFields = (value: unknown): {
   unresolved_blocker_ids?: string[]; blocked_by_ids?: string[]
@@ -102,6 +108,7 @@ export function fleetObservation(source: FleetSource) {
     const mates = secondMateIds(snapshot)
     const tasks = snapshot.tasks.map(task => ({
       ...queueSignals(task),
+      ...workerRecordLink(task.record_url),
       ...codexFields(task),
       ...collectedDispatch(record(task.backlog), 'task.backlog.body_lines'),
       ...fields(task, ['id', 'kind', 'harness', 'model', 'branch', 'project', 'spawn_gen', 'backend']),
