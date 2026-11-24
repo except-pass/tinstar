@@ -250,6 +250,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     liveHeads.set(moving, changed)
     liveHeads.delete(closing)
     liveHeads.delete(legacy)
+    comments.set('12', [entry(legacy, sibling, '23')])
     review.fields[fields.decisions] = 'D1 [Answered]: Choose launch wording\n  Answer: Use the short wording\n\nD2 [Open]: Confirm the launch date'
     await snapshotFile(main!, [])
     const records = JSON.stringify({ tickets, notes: [...comments], notionNotes })
@@ -265,7 +266,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(returned.recheckedAt).toBeTruthy()
     expect(merge(returned, moving)).toMatchObject({ requestedHeads: [original], live: { head: changed, state: 'stale' } })
     expect(merge(returned, closing)).toBeUndefined()
-    expect(merge(returned, legacy)?.live).toMatchObject({ head: null, state: 'unverified' })
+    expect(merge(returned, legacy)).toMatchObject({ requestedHeads: [sibling], live: { head: original, state: 'stale' } })
     expect(merge(returned, unchanged)?.live?.state).toBe('ready')
     expect(bundle(returned, 'owner/repo')?.decisions.map(row => row.question)).toEqual(['Confirm the launch date', 'Choose a deployment window?'])
     expect(inventory.mock.calls.filter(([path]) => path.includes('state=open')).map(([path]) => path).sort()).toEqual([
@@ -281,6 +282,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(JSON.stringify({ tickets, notes: [...comments], notionNotes })).toBe(records)
 
     liveHeads.set(legacy, original)
+    comments.set('12', [entry(legacy, '', '23')])
 
     // A genuine replacement can refresh the ask; failed check coverage holds it.
     comments.get('10')!.unshift(entry(moving, changed, '26', '2026-11-23T13:00:00Z'))
@@ -389,7 +391,7 @@ it('bounds same-head checks, rotates coverage, and holds a head that moves after
 })
 
 it('holds unrecognized head spellings as conditional merge requests', () => {
-  for (const suffix of [`@ ${original}`, `head sha= ${original}`, `(head ${original})`]) {
+  for (const suffix of [`@ ${original}`, `head sha= ${original}`, `(head ${original})`, `head ${original} (ready for review)`, '(ready for review)']) {
     expect(mergePublication(`Will: merge ${moving} ${suffix}`, true)).toMatchObject({ head: null, conditional: true })
   }
 })

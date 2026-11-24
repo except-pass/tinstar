@@ -246,15 +246,11 @@ export function verifyOwnerMerges(read: OwnerReadyRead, inventory: Reconciliatio
     const fresh = observed?.status === 'fresh' && (!observed.expiresAt || Date.parse(observed.expiresAt) > Date.now()) &&
       (!pull?.observedAt || Date.parse(observed.observedAt ?? '') >= Date.parse(pull.observedAt))
     if (fresh && (observed.state === 'merged' || observed.state === 'closed')) return false
-    if (!pull) {
-      merge.live = { head: null, observedAt: null, state: 'unverified' }
-      return true
-    }
     const liveHead = fresh ? observed.head : pull?.head ?? null
     const changed = !!liveHead && merge.requestedHeads.some(head => head !== liveHead)
     const ready = fresh && observed.state === 'open' && !observed.draft && observed.checks === 'passed' && observed.mergeability === 'ready'
     merge.live = { head: liveHead, observedAt: (fresh ? observed.observedAt : pull?.observedAt) ?? null,
-      state: merge.unverifiedRequest ? 'unverified' : changed ? 'stale' : !fresh ? 'unverified' : ready ? 'ready' : 'pending' }
+      state: merge.unverifiedRequest ? 'unverified' : changed ? 'stale' : ready ? 'ready' : fresh && pull ? 'pending' : 'unverified' }
     return true
   })
   read.repositories = read.repositories.filter(group => group.merges.length || group.decisions.length)
