@@ -294,12 +294,12 @@ export class ReconciliationSources {
   }
 
   sourceWriteRecovery() {
-    const content = new WorkflowContent(this.workReader)
+    const content = new WorkflowContent(this.workReader, this.jiraWork)
     return { list: () => this.leases.pendingWrites(), reconcile: (card: string, operation: string, actor: string, reason: string) => this.leases.reconcileWrite(card, operation, actor, reason, intent => content.reservationReadback(card, intent)) }
   }
 
   recoverSourceWrites() {
-    const content = new WorkflowContent(this.workReader)
+    const content = new WorkflowContent(this.workReader, this.jiraWork)
     return this.sourceWriteRecoveryPass ??= this.leases.recoverStaleWrites((card, intent) => content.reservationReadback(card, intent))
       .finally(() => { this.sourceWriteRecoveryPass = undefined })
   }

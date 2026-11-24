@@ -1,10 +1,11 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { acquireLock } from '../infra/lock'
 import type { JiraWorkConfig } from './config'
-import { adfText, JiraClient, JiraWriteError, jiraText } from './jira'
+import { adfText, JiraAttachmentPreflightError, JiraClient, JiraWriteError, jiraText, type JiraSection } from './jira'
 import {
   checkJiraTransition, editJiraDecisions, formatJiraDecisions, jiraTransitionDestination, jiraWorkIdentity, JiraWorkInputError, readJiraDecisions,
   type JiraCreate, type JiraEdit, type JiraExternalBlocker, type JiraLink, type JiraTransition,
@@ -221,18 +222,27 @@ export class JiraWork extends JiraClient {
       properties: { Name: field('title', card.name), Owner: field('select', card.owner), Status: field('status', card.status) } }
   }
 
+  private readonly handoffAttachments = new AsyncLocalStorage<Map<string, JiraSection[]>>()
+
+  withHandoffAttachments<T>(perform: () => T) {
+    return this.handoffAttachments.run(new Map(), perform)
+  }
+
   async handoffSections(cardId: string) {
     const id = this.id(cardId)
     const issue = await this.request(`issue/${id}?fields=project,attachment`)
     if (issue.id !== id || issue.fields?.project?.id !== this.config.projectId) {
       throw new JiraWorkInputError('Ticket is outside the configured Jira project')
     }
-    return this.contractSections(cardId, issue.fields.attachment)
+    const sections = await this.contractSections(cardId, issue.fields.attachment, undefined, this.fetcher, this.handoffAttachments.getStore())
+    await this.checkProject(id)
+    return sections
   }
 
   async appendHandoffSections(cardId: string, sections: Array<{ type: string; text: string }>) {
     const id = this.id(cardId)
-    await this.checkProject(id)
+    try { await this.checkProject(id) }
+    catch (error) { throw new JiraAttachmentPreflightError(this.message(error), { cause: error }) }
     await this.uploadContract(id, sections)
   }
 

@@ -27,6 +27,7 @@ const nativeStatus = (name: string) => name === 'Todo' ? 'To Do' : name === 'In 
 export class JiraWriteError extends Error {
   constructor(readonly status: number, readonly method: string, public partial = false) { super(`Jira HTTP ${status}`) }
 }
+export class JiraAttachmentPreflightError extends Error {}
 export class JiraMappingError extends Error {}
 export class JiraConflictError extends Error {}
 export interface JiraSection { id: string; type: string; text: string }
@@ -85,19 +86,25 @@ export class JiraClient {
     const response = await this.response(path, { method, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, fetcher)
     return response.status === 204 ? {} : this.json(response)
   }
-  protected async contractSections(cardId: string, attachments: unknown, signal?: AbortSignal, fetcher = this.fetcher) {
+  protected async contractSections(cardId: string, attachments: unknown, signal?: AbortSignal, fetcher = this.fetcher, cache?: Map<string, JiraSection[]>) {
     if (!Array.isArray(attachments)) throw new Error('Jira attachment inventory unavailable')
     const sections: JiraSection[] = []
     const contracts = attachments.filter(attachment => /^[1-9][0-9]*$/.test(attachment.id) &&
       /^tinstar-contract-[a-f0-9-]+\.json$/.test(attachment.filename))
       .sort((a, b) => Number(a.id) - Number(b.id))
     for (const attachment of contracts) {
+      const cacheKey = `${cardId}:attachment:${attachment.id}`
+      const cached = cache?.get(cacheKey)
+      if (cached) { sections.push(...cached); continue }
+      const batch: JiraSection[] = []
       const body = await this.json(await this.response(`attachment/content/${attachment.id}?redirect=false`, { signal }, fetcher))
       if (body.schema !== 'tinstar.contract-sections.v1' || !Array.isArray(body.sections)) throw new Error('Invalid Jira contract attachment')
       for (const [index, section] of body.sections.entries()) {
         if (typeof section.text !== 'string' || !['paragraph', 'heading_2', 'code'].includes(section.type)) throw new Error('Malformed Jira contract section')
-        sections.push({ id: `${cardId}:attachment:${attachment.id}:${index}`, type: section.type, text: section.text })
+        batch.push({ id: `${cacheKey}:${index}`, type: section.type, text: section.text })
       }
+      cache?.set(cacheKey, batch)
+      sections.push(...batch)
     }
     return sections
   }

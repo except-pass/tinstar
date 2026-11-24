@@ -299,14 +299,17 @@ describe('one-call approved implementation handoff', () => {
     expect(new Set(markers).size).toBe(markers.length)
   })
   it.each(['partial', 'offline'] as const)('never replays an uncertain %s append, and reports confirmed chunks/recovery identities', async failure => {
-    const f = await setup(), input = handoffInput({ target: { card_id: id } }); f.controls.append(failure)
+    const f = await setup()
+    f.raw.properties.Status.status.name = 'Backlog'
+    const input = handoffInput({ target: { card_id: id }, assignment: { owner: 'Firstmate', status: 'Queued', expected_owner: 'Firstmate', expected_status: 'Backlog' } })
+    f.controls.append(failure)
     const first: any = await f.workflow.submitHandoff(input, 'ChatGPT')
     expect(first).toMatchObject({ outcome: 'partially-saved', record: { full_spec_readback: 'incomplete' } })
     const appendCount = f.requests.filter(row => row.method === 'PATCH' && row.url.includes('/children')).length
     const second = await f.make().submitHandoff(input, 'ChatGPT')
     expect(second).toMatchObject({ recovery: { code: 'append-unconfirmed', pending_batch_hashes: expect.any(Array) } })
     expect(f.requests.filter(row => row.method === 'PATCH' && row.url.includes('/children'))).toHaveLength(appendCount)
-    expect((await f.reader.card(first.record.card_id)).properties.Status?.value).toBe(f.raw.properties.Status.status.name)
+    expect((await f.reader.card(first.record.card_id)).properties.Status?.value).toBe('Backlog')
   })
   it.each([1, 2, 3])('retries a handoff after owner release refuses append stage %s', async stage => {
     const f = await setup(), input = handoffInput({ target: { card_id: id } })

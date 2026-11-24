@@ -3,7 +3,7 @@ import { CardLeaseError, withSourceOperation } from './cardLeases'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import type { SubmitHandoffInput } from '../../shared/workflow'
 import { heading, paragraph, WorkflowContent, NotionWriteError, type WorkflowCreateBlock, createBlockText } from './workflowContent'
-import { JiraWriteError } from './jira'
+import { JiraAttachmentPreflightError, JiraWriteError } from './jira'
 import type { HandoffReceiptState } from './workflowReceipts'
 
 export const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
@@ -74,7 +74,9 @@ export class ImplementationContracts {
     return { sections, versions, current: approved.at(-1) }
   }
   async read(id: string, options: { revision?: string; offset: number; limit: number }) {
-    const inventory = await this.inventory(id)
+    return this.readInventory(await this.inventory(id), options)
+  }
+  readInventory(inventory: Awaited<ReturnType<ImplementationContracts['inventory']>>, options: { revision?: string; offset: number; limit: number }) {
     const manifest = options.revision ? inventory.versions.find(row => row.version === options.revision) : inventory.current
     if (!manifest) return { outcome: 'unavailable', reason: 'No completed contract with that version', versions: inventory.versions }
     if (inventory.sections.filter(block => block.text === completeText(manifest)).length !== 1)
@@ -149,7 +151,7 @@ export class ImplementationContracts {
     state.pending = children.map(block => digest(createBlockText(block))); await save()
     try { await this.content.appendBlocks(id, children, atStart, true) }
     catch (error) {
-      if (error instanceof CardLeaseError || error instanceof NotionWriteError && error.status < 500 ||
+      if (error instanceof CardLeaseError || error instanceof JiraAttachmentPreflightError || error instanceof NotionWriteError && error.status < 500 ||
         error instanceof JiraWriteError && error.method === 'POST' && error.status >= 400 && error.status < 500 && error.status !== 408) {
         delete state.pending
         await save()

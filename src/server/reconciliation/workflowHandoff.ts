@@ -5,11 +5,11 @@ import type { WorkflowChange } from './workflow'
 import type { WorkReader, WorkCard } from './workReader'
 import type { CreationReceipts, HandoffReceiptState } from './workflowReceipts'
 import { NotionWriteError } from './workflowContent'
-import { JiraWriteError } from './jira'
+import { JiraAttachmentPreflightError, JiraWriteError } from './jira'
 
 export interface HandoffDependencies {
   reader: WorkReader; readCard(id: string): Promise<WorkCard>; native(id: string): boolean; receipts: CreationReceipts; contracts: ImplementationContracts
-  create(input: CreateWorkInput, actor: string): Promise<StartWorkResult>
+  create(input: CreateWorkInput, actor: string, validateNative: () => void): Promise<StartWorkResult>
   update(input: UpdateWorkInput, actor: string): Promise<StartWorkResult>
   hasNote(cardId: string, actor: string, operationId: string): Promise<boolean>
   matches(card: WorkCard, desired: Record<string, unknown>): boolean
@@ -51,12 +51,20 @@ export class HandoffOperations {
         if (card) inventory = await this.deps.contracts.inventory(card.id).catch(() => undefined)
         const confirmed = contract.chunks.flatMap((text, index) => (inventory?.sections ?? []).filter(block => block.text === `Tin Star contract chunk: ${contract.manifest.version} ${index}\n${text}`).map(block => ({ index, block_id: block.id })))
         const delivery = card ? await this.deps.delivery(card.id, operation('contract')).catch(() => ({ state: 'unknown' })) : { state: 'unknown' }
-        const verified = spec?.outcome === 'available', complete = verified && !code
+        let verified = false
+        if (spec?.outcome === 'available' && inventory) {
+          try { verified = this.deps.contracts.readInventory(inventory, { revision: contract.manifest.version, offset: 0, limit: 1 }).outcome === 'available' }
+          catch (error) { if (!(error instanceof ContractError)) throw error }
+        }
+        if (spec?.outcome === 'available' && !verified && !code) {
+          code = 'contract-incomplete'; message = 'Final readback did not confirm the verified contract. Inspect this exact version.'
+        }
+        const complete = verified && !code
         return { submission_id: input.submission_id, outcome: complete ? 'saved' : card || attempted ? 'partially-saved' : 'not-saved',
           record: { state: verified ? wasRecorded ? 'already-recorded' : state.created ? 'created' : 'updated' : card ? 'partially-saved' : 'not-saved',
             ...(card ? { card_id: card.id, url: card.url ?? `https://www.notion.so/${card.id}`, fields_readback: current ? 'confirmed' : 'unavailable', verified_fields: current ? Object.fromEntries(Object.entries(current.properties).map(([name, property]) => [name, property.value])) : {} } : {}),
             spec_version: contract.manifest.version, spec_hash: contract.manifest.hash, spec_length: contract.manifest.length,
-            full_spec_readback: spec?.outcome === 'available' ? 'verified' : 'incomplete', confirmed_chunks: confirmed,
+            full_spec_readback: verified ? 'verified' : 'incomplete', confirmed_chunks: confirmed,
             missing_chunks: contract.chunks.map((_text, index) => index).filter(index => !confirmed.some(chunk => chunk.index === index)),
             references: 'Caller-declared durable links saved verbatim; linked media is not copied or independently verified',
             reader: { tool: 'get_work', card_id: card?.id, implementation_contract: { revision: contract.manifest.version, offset: 0, limit: 10 } } },
@@ -96,8 +104,6 @@ export class HandoffOperations {
               }))
               return { ...await response('needs-target', 'Candidate cards require an explicit card_id; no title match or overwrite was attempted'), candidates }
             }
-            // Validate the full native contract size before creating the ticket.
-            implementationContract(input, actor, true)
             const createId = `handoff-create-${digest(externalKey).slice(0, 48)}`
             const create: CreateWorkInput = { operation_id: createId, name: input.title, owner: input.owner, area: input.area, status: 'Backlog',
               properties: this.properties(input), content: { brief: input.objective } }
@@ -106,7 +112,7 @@ export class HandoffOperations {
             await this.deps.receipts.put(externalKey, externalIntent)
             // The provider records a durable creation latch before submission.
             // Reusing the external reference also reuses that creation identity.
-            const created = await this.deps.create(create, actor)
+            const created = await this.deps.create(create, actor, () => { implementationContract(input, actor, true) })
             attempted = created.outcome !== 'not-saved'
             if (!created.card) {
               if (created.outcome === 'not-saved') await this.deps.receipts.remove(externalKey)
@@ -162,7 +168,7 @@ export class HandoffOperations {
               const assignment = input.assignment ?? { owner: input.owner, status: 'Queued' as const, expected_owner: input.owner, expected_status: 'Backlog' }
               const assigned = await update('assignment', { kind: 'assign', card_id: card.id, operation_id: operation('assignment'), owner: assignment.owner, status: assignment.status,
                 expected: { Owner: assignment.expected_owner, Status: assignment.expected_status }, note: `Verified implementation contract ${contract.manifest.version}; SHA-256 ${contract.manifest.hash}` })
-              if (assigned.outcome !== 'saved') return response('assignment-conflict', assigned.message)
+              if (assigned.outcome !== 'saved') return response(assigned.code === 'audit-unconfirmed' ? assigned.code : 'assignment-conflict', assigned.message)
               state.assignment_done = true; await save()
             }
             card = await this.deps.readCard(card.id)
@@ -175,6 +181,7 @@ export class HandoffOperations {
             return response()
           } catch (error) {
             if (error instanceof CardLeaseError) return response(error.lease ? 'card-held' : 'claim-lost', error.message)
+            if (error instanceof JiraAttachmentPreflightError) return response('jira-preflight-unconfirmed', error.message)
             if (error instanceof JiraWriteError) return response(`jira-http-${error.status}`, `Jira returned HTTP ${error.status} while saving the handoff. Retry with the same submission ID.`)
             if (card) card = await this.deps.readCard(card.id).catch(() => card!)
             return response(error instanceof ContractError ? error.code : error instanceof NotionWriteError ? `notion-http-${error.status}` : 'save-unconfirmed',

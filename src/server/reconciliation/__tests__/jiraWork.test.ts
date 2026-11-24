@@ -850,7 +850,11 @@ it.each([false, true])('records and queues a verified Jira handoff after create 
   expect(f.requests.filter(({ method, path }) => method === 'POST' && path === 'issue')).toHaveLength(0)
   const firstAttempt = await first.call('submit_handoff', input)
   if (loseCreate) expect(firstAttempt).toMatchObject({ outcome: 'partially-saved' })
-  else expect(firstAttempt).toMatchObject({ outcome: 'saved', record: { state: 'created' } })
+  else {
+    expect(firstAttempt).toMatchObject({ outcome: 'saved', record: { state: 'created' } })
+    expect(f.requests.filter(({ path }) => path.startsWith('attachment/content/'))).toHaveLength(
+      f.requests.filter(({ method, path }) => method === 'POST' && path.endsWith('/attachments')).length)
+  }
   const { call } = await f.connect()
   const result = await call('submit_handoff', input)
   expect(result).toMatchObject({ outcome: 'saved', record: { full_spec_readback: 'verified' }, assignment: { status: 'Queued', owner: 'Avery' } })
@@ -866,6 +870,22 @@ it.each([false, true])('records and queues a verified Jira handoff after create 
   const queue = f.requests.findIndex(({ method, path }) => method === 'POST' && path.endsWith('/transitions'))
   expect(completion).toBeGreaterThan(0)
   expect(queue).toBeGreaterThan(completion)
+})
+
+it('keeps the external reference claimed after a contradictory Jira creation readback', async () => {
+  const f = await fixture()
+  f.controls.wrongCreate = true
+  const first = await f.connect()
+  const input = {
+    submission_id: 'approval', target: { external_ref: 'fixture:approval' }, title: 'Verify handoff', area: 'Engineering', owner: 'Avery',
+    objective: 'Verify native handoff', spec_markdown: 'Approved spec',
+    acceptance_criteria: ['Read back the contract'], decisions: [], forbidden_approaches: [], references: [],
+  }
+  expect(await first.call('submit_handoff', input)).toMatchObject({ outcome: 'partially-saved' })
+  f.controls.wrongCreate = false
+  const second = await f.connect('Other agent')
+  expect(await second.call('submit_handoff', input)).toMatchObject({ recovery: { code: 'create-unconfirmed' } })
+  expect(f.requests.filter(({ method, path }) => method === 'POST' && path === 'issue')).toHaveLength(1)
 })
 
 it('keeps the handoff in Backlog when the completion marker disappears before verification', async () => {
