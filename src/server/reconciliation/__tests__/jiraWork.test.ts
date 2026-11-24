@@ -86,7 +86,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const search = { pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
+  const search = { directoryUnavailable: false, pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
@@ -138,6 +138,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
     }
     if (path === 'myself') return response({ accountId: 'fixture-service' })
     if (path === 'user/assignable/search') {
+      if (search.directoryUnavailable) return response({}, 503)
       const name = url.searchParams.get('query')!.toLowerCase()
       expect(issues.has(url.searchParams.get('issueId')!)).toBe(true)
       return response(assignees.filter(user => user.displayName.toLowerCase().includes(name)))
@@ -380,9 +381,16 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   const review = f.make('60104', 'TSW-104', '10639', { status: { name: 'Ready for Review' }, [config.fields.owner]: { value: 'Clawson' },
     assignee: { displayName: 'Will', accountId: 'other-account' } })
   for (const card of [issue, queued, waiting, review]) f.issues.set(card.id, card)
+  f.search.directoryUnavailable = true
   const pickup = await call('search_work', { owner: 'Clawson', statuses: ['Queued', 'In Progress'] })
   expect(pickup.records.map((record: any) => record.card.source.url)).toEqual([f.notionCard.url, `${config.url}/browse/${issue.key}`, `${config.url}/browse/${queued.key}`])
   expect(buildQueue(await sources.snapshot(false, {}, false, true)).reviews.items).toEqual([])
+  expect(pickup.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete' })
+  expect((await call('search_work', { refresh: true })).total).toBe(5)
+  expect(f.requests.some(request => request.path === 'user/assignable/search')).toBe(false)
+  const unavailableReviewer = await sources.queue(owner, undefined, true, 'read')
+  expect(unavailableReviewer.needsWill?.flatMap(item => item.evidence.map(link => link.url))).toEqual([`${config.url}/browse/${waiting.key}`])
+  f.search.directoryUnavailable = false
   const authorized = await sources.queue(owner, undefined, false, 'read')
   const ownerUrls = [issue, waiting].map(card => `${config.url}/browse/${card.key}`).sort()
   const urls = (items: typeof authorized.items) => items.flatMap(item => item.evidence.map(link => link.url)).sort()
@@ -403,6 +411,12 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   expect(assigned(authorized)).toMatchObject({ title: 'Fixture', checkpoint: '2026-01-04', readiness: 'needs-readiness-verification', oneTouch: false,
     sources: [{ kind: 'jira', coverage: 'complete' }] })
   expect(authorized.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete', sources: [{ source: 'notion' }, { source: 'jira', coverage: 'complete' }] })
+  f.search.directoryUnavailable = true
+  const directoryReads = f.requests.filter(request => request.path === 'user/assignable/search').length
+  expect(await call('update_work', { kind: 'jira_edit', operation_id: 'directory-outage-comment',
+    card_id: 'jira:sample.atlassian.net:10639:60101', note: 'Pickup acknowledged.' })).toMatchObject({ outcome: 'saved' })
+  expect(f.requests.filter(request => request.path === 'user/assignable/search')).toHaveLength(directoryReads)
+  f.search.directoryUnavailable = false
   f.controls.rejectSearch = true
   const partial = await sources.queue(owner, undefined, false, 'read')
   expect(partial.coverage.intentions).toMatchObject({ status: 'partial', coverage: 'partial' })

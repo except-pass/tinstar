@@ -44,7 +44,7 @@ type Attempt = {
   marker: string
   dispatched: boolean
   dispatch: () => Promise<void>
-  confirm: (card: Issue) => Promise<ReturnType<JiraWork['saved']>>
+  confirm: (card: Issue) => ReturnType<JiraWork['saved']>
 }
 type WriteInput = JiraCreate | JiraEdit | JiraTransition | JiraLink
 export type JiraWorkCard = ReturnType<JiraWork['view']>
@@ -57,6 +57,7 @@ type BeforeWrite = (current: JiraWorkCard) => void
 export class JiraWork extends JiraClient {
   private readonly receipts: CreationReceipts
   private readonly site: string
+  private readonly reviewerCandidates = new WeakMap<WorkCard, string>()
   private readonly confirmed = new Map<string, { card: WorkCard; until: number }>()
   accessRevision = 0
   private readonly scoped = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
@@ -94,18 +95,15 @@ export class JiraWork extends JiraClient {
       externalBlocker: { type: fields[blockerType]?.value as string ?? null, target: text(fields[blockerTarget]), unblocks_when: text(fields[blockerCondition], 'omit') } }
   }
 
-  private async projectCard(issue: Pick<Issue, 'issue_id' | 'key' | 'name' | 'status' | 'updated_at' | 'owner' | 'due_date' | 'assignee' | 'assignee_id' | 'externalBlocker'>,
-    signal?: AbortSignal): Promise<WorkCard> {
+  private projectCard(issue: Pick<Issue, 'issue_id' | 'key' | 'name' | 'status' | 'updated_at' | 'owner' | 'due_date' | 'assignee' | 'assignee_id' | 'externalBlocker'>): WorkCard {
     const property = (id: string | null, type: string, value: unknown) => ({ id, type, value, hasMore: false })
     const request = issue.status === 'Waiting For' && issue.externalBlocker.type === 'Actor' &&
       issue.externalBlocker.target.trim().toLowerCase() === 'will'
     const id = this.qualified(issue.issue_id)
-    const assignedToReviewer = issue.assignee === tswReviewer && !!issue.assignee_id &&
-      issue.assignee_id === await this.findAssignableAccount(id, tswReviewer, signal)
-    return {
+    const card: WorkCard = {
       id, url: `${this.config.url}/browse/${encodeURIComponent(issue.key)}`,
       last_edited_time: issue.updated_at, archived: issue.status === 'Canceled', in_trash: false,
-      source: { provider: 'jira', instanceId: this.config.url, collectionId: this.config.projectId, itemId: issue.issue_id, displayKey: issue.key, synthetic: false, assignedToReviewer },
+      source: { provider: 'jira', instanceId: this.config.url, collectionId: this.config.projectId, itemId: issue.issue_id, displayKey: issue.key, synthetic: false },
       properties: {
         Name: property('summary', 'title', issue.name), Status: property('status', 'status', issue.status),
         Owner: property(this.config.fields.owner, 'select', issue.owner),
@@ -116,17 +114,21 @@ export class JiraWork extends JiraClient {
         'Last touched by': property(null, 'rich_text', null),
       },
     }
+    if (issue.assignee === tswReviewer && issue.assignee_id) this.reviewerCandidates.set(card, issue.assignee_id)
+    return card
   }
 
   private discardObservations() {
     this.accessRevision++
     this.confirmed.clear()
     this.observation.discard()
+    this.deskObservation.discard()
     for (const { observation } of this.scoped.values()) observation.discard()
     this.onAccessDenied?.()
   }
 
   readonly observation = this.observeProject()
+  readonly deskObservation = this.observeProject('', undefined, true)
 
   observationFor({ owner, statuses }: WorkScope) {
     if (!owner || !statuses?.length) return this.observation
@@ -142,7 +144,7 @@ export class JiraWork extends JiraClient {
     return observation
   }
 
-  private observeProject(filter = '', scope?: WorkScope) {
+  private observeProject(filter = '', scope?: WorkScope, verifyReviewer = false) {
     return new CachedObservation<WorkData>(async () => {
       const revision = this.accessRevision
       const cards = new Map<string, WorkCard>(), seen = new Set<string>()
@@ -160,9 +162,9 @@ export class JiraWork extends JiraClient {
             try {
               const projected = this.boardFieldsFrom(row)
               if (!Object.values(this.config.issueTypes).includes(row.fields.issuetype.id)) throw new Error('Unexpected Jira issue type in search')
-              const card = await this.projectCard(projected, signal)
+              const card = this.projectCard(projected)
               cards.set(card.id, card)
-            } catch (error) { if (accessDenied(error)) throw error; invalidRow = true }
+            } catch { invalidRow = true }
           }
           if (result.isLast === true) { complete = !invalidRow; break }
           cursor = result.nextPageToken
@@ -183,6 +185,19 @@ export class JiraWork extends JiraClient {
         if (indexed && Date.parse(indexed.last_edited_time) > Date.parse(card.last_edited_time)) continue
         if (!scope || scopeMatches(card, scope)) cards.set(id, card)
         else cards.delete(id)
+      }
+      if (verifyReviewer) for (const [id, card] of cards) {
+        const assignee = this.reviewerCandidates.get(card)
+        if (!assignee || !card.source) continue
+        try {
+          if (assignee === await this.findAssignableAccount(id, tswReviewer, signal)) {
+            const verified = { ...card, source: { ...card.source, assignedToReviewer: true } }
+            this.reviewerCandidates.set(verified, assignee)
+            cards.set(id, verified)
+          }
+        } catch {
+          complete = false
+        }
       }
       return { observedAt: new Date().toISOString(), coverage: complete ? 'complete' : 'partial',
         data: { dataSourceId: `jira:${this.site}:${this.config.projectId}`, schema: {}, cards: [...cards.values()], hasMore: !complete,
@@ -422,15 +437,20 @@ export class JiraWork extends JiraClient {
           pending = true
           sent = true
         },
-        confirm: async issue => {
-          const card = await this.projectCard(issue).catch(error => {
-            if (accessDenied(error) && revision === this.accessRevision) this.discardObservations()
-            throw error
-          })
+        confirm: issue => {
+          const card = this.projectCard(issue)
           if (revision !== this.accessRevision) throw new JiraWorkUnconfirmed('Jira access changed during the operation')
           if (this.confirmed.size >= 100) this.confirmed.delete(this.confirmed.keys().next().value!)
           this.confirmed.set(card.id, { card, until: Date.now() + 120_000 })
           this.observation.updateData(data => ({ ...data, cards: [...data.cards.filter(prior => prior.id !== card.id), card] }))
+          this.deskObservation.updateData(data => {
+            const previous = data.cards.find(prior => prior.id === card.id)
+            const retained = previous?.source?.assignedToReviewer && card.source &&
+              this.reviewerCandidates.get(previous) === this.reviewerCandidates.get(card)
+            const current = retained ? { ...card, source: { ...card.source!, assignedToReviewer: true } } : card
+            if (retained) this.reviewerCandidates.set(current, this.reviewerCandidates.get(card)!)
+            return { ...data, cards: [...data.cards.filter(prior => prior.id !== card.id), current] }
+          })
           for (const { scope, observation } of this.scoped.values()) observation.updateData(data => ({
             ...data, cards: [...data.cards.filter(prior => prior.id !== card.id), ...(scopeMatches(card, scope) ? [card] : [])],
           }))
@@ -784,7 +804,7 @@ export class JiraWork extends JiraClient {
           await this.checkComment(id, note)
         } catch (error) {
           if (!(error instanceof JiraWorkUnconfirmed)) throw error
-          return { ...await attempt.confirm(await readDestination(destination)), message: 'The audit note may be missing from Jira.' }
+          return { ...attempt.confirm(await readDestination(destination)), message: 'The audit note may be missing from Jira.' }
         }
         return attempt.confirm(await readDestination(destination))
       }

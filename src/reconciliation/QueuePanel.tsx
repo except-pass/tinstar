@@ -38,7 +38,7 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
   }, [cardId])
   const [unavailable, setUnavailable] = useState<string | null>(null)
   const unavailableItem = unavailable ? (queue?.needsWill ?? queue?.items)?.find(item => item.cardIds.includes(unavailable)) : undefined
-  const unavailableUrl = unavailableItem && unavailable ? deskCardSource(unavailable, unavailableItem).url : undefined
+  const unavailableUrl = unavailable ? deskCardSource(unavailable, unavailableItem).url : undefined
   const deskCards = (item: QueueItem, focused = false) => item.cardIds.length ? item.cardIds.map(id => {
     const card = scene?.cards.find(card => card.id === id)
     return <AskSurface as="div" subject={{ cardId: id }} key={id}><button type="button" className={`ov-desk-card${focused ? ' focused' : ''}`} key={id} data-desk-card-id={id} aria-current={state.navigation?.cardId === id ? 'true' : undefined} onClick={() => {

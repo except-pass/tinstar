@@ -1,3 +1,4 @@
+import { cardSourceUrl, jiraCardPrefix } from '../../shared/workIdentity'
 import { usePresentation } from '../usePresentation'
 import { afterEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react'
@@ -28,6 +29,17 @@ it('retains a disappeared selection while offering the remaining ready request',
   fireEvent.click(screen.getByRole('button', { name: new RegExp(ready[1]!.title) }))
   expect(send).toHaveBeenCalledWith({ type: 'navigate-card', cardId: ready[1]!.cardIds[0] })
   expect(state.queueItemId).toBe(ready[0]!.id)
+})
+
+it.each(['a'.repeat(32), `${jiraCardPrefix}60101`])('keeps a direct legacy link after its unavailable card leaves the queue', id => {
+  const now = Date.now(), queue = fixtureQueue(now), item = queue.items[0]!
+  item.cardIds = [id]
+  const props = { messages: [], submit: vi.fn(), workers: [], state: { ...initialPresentation(), queueItemId: item.id },
+    scene: { ...fixtureScene(), cards: [] }, send: vi.fn(), error: null, now }
+  const { rerender } = render(<QueuePanel {...props} queue={queue} />)
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(item.title) }))
+  rerender(<QueuePanel {...props} queue={{ ...queue, items: [] }} />)
+  expect(screen.getByRole('link', { name: 'Read source card ↗' }).getAttribute('href')).toBe(cardSourceUrl(id))
 })
 
 it('opens the projected native Jira card from the source inspector', () => {

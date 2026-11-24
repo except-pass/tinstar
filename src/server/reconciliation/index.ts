@@ -144,8 +144,8 @@ export class ReconciliationSources {
     return homes.map(row => ({ ...row, observation: ageObservation(row.observation) }))
   }
 
-  async snapshot(force = false, scope: WorkScope = {}, background = false, includeNative = false) {
-    const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force, background, includeNative)])
+  async snapshot(force = false, scope: WorkScope = {}, background = false, includeNative = false, ownerDesk = false) {
+    const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force, background, includeNative, ownerDesk)])
     // Scene refreshes read source properties only. Awaiting per-card comments
     // here makes a large board exceed the source deadline. Comment updates use
     // the existing rotating sweep and targeted search_work/get_work refreshes.
@@ -248,7 +248,7 @@ export class ReconciliationSources {
 
     // Start the normal cached property/fleet reads, but never make list delivery
     // wait for a slow source or for per-card history/reconciliation.
-    void this.snapshot(false, {}, true, authorized).catch(() => {})
+    void this.snapshot(false, {}, true, authorized, authorized).catch(() => {})
     const snapshot = this.knownSnapshot(authorized), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
     queue.readOnly = false // The shared refresh can finalize an already-recorded answer.
@@ -494,7 +494,7 @@ export class ReconciliationSources {
     const authorized = displayGrant ?? !!await this.authorizePulls?.(req)
     const accessRevision = this.jiraWork?.accessRevision
     // The native project is private. Desk reads use the existing owner grant.
-    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile', {}, false, authorized), authorized ? this.readPulls?.(req).catch(() => null) : null])
+    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile', {}, false, authorized, authorized), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => (!requestKey || item.id === requestKey) && item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))

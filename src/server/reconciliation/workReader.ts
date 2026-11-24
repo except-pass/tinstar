@@ -67,12 +67,12 @@ export class WorkReader {
     } else if (!force && entry.observation.isCached()) this.api.diagnostics.cacheHits++
     return entry.observation.get(force, background)
   }
-  async query(scope: WorkScope = {}, force = false, background = false, includeNative = false): Promise<Observation<WorkData>> {
+  async query(scope: WorkScope = {}, force = false, background = false, includeNative = false, ownerDesk = false): Promise<Observation<WorkData>> {
     if (!includeNative || !this.native) return this.board(scope, force, background)
     const revision = this.native.accessRevision
     const [board, jira] = await Promise.all([
       this.config || this.jira ? this.board(scope, force, background) : null,
-      this.native.observationFor(scope).get(force, background),
+      (ownerDesk ? this.native.deskObservation : this.native.observationFor(scope)).get(force, background),
     ])
     return this.combine(scope, board, revision === this.native.accessRevision ? jira : { ...jira, data: null, status: 'unknown', coverage: 'unknown', observedAt: null, expiresAt: null })
   }
@@ -94,7 +94,7 @@ export class WorkReader {
     }
     const board = this.queries.get(scopeKey({}))?.observation.peek() ?? pending
     return includeNative && this.native
-      ? this.combine({}, this.config || this.jira ? board : null, this.native.observation.peek() ?? pending) : board
+      ? this.combine({}, this.config || this.jira ? board : null, this.native.deskObservation.peek() ?? pending) : board
   }
   card(id: string, force = false, background = false, signal?: AbortSignal) {
     const cached = this.cards.get(id)
