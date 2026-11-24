@@ -31,6 +31,7 @@ import { SceneReconciler } from './scene'
 import { buildQueue } from './queue'
 import { QueuePullReader, queuePullReadBudget } from './queuePulls'
 import { buildWorkerLinkReport } from './workerLinkReport'
+import { tswProjectId } from './tswIdentity'
 import { SearchDocumentCollector } from './searchIndex'
 import { NotionApi } from './notionApi'
 import { WorkReader, type WorkCard } from './workReader'
@@ -457,7 +458,9 @@ export class ReconciliationSources {
     return verifyRetractions ? this.context.verifyRetractions(context) : context
   }
 
-  async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
+  workerLinkSnapshot() { return this.snapshot(false, {}, false, this.config.jiraWork?.projectId === tswProjectId) }
+
+  async workerLinkReport() { return buildWorkerLinkReport(await this.workerLinkSnapshot()) }
 
   /** Same canonical census/projection as get_work_views, without operational
    * reconciliation, PR readiness or network history reads on the display path. */

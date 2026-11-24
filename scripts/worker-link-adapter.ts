@@ -44,7 +44,7 @@ async function main() {
   try {
     await file.chmod(0o600)
     const audit = async (entry: unknown) => { await file.writeFile(`${JSON.stringify(entry)}\n`); await file.sync() }
-    const input = runNotion ? await sources.snapshot() : null
+    const input = runNotion ? await sources.workerLinkSnapshot() : null
     const transport = runNotion && values.apply && config.notion
       ? notionLinkTransport((await readFile(values['write-token-file']!, 'utf8')).trim(), config.notion.dataSourceId) : undefined
     const result = input ? await runWorkerLinkAdapter(input, { apply: values.apply, maxCards, cards: notionCards, transport, audit }) : null

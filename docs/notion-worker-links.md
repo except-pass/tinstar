@@ -455,6 +455,11 @@ conflicting, names an unknown card in a complete board read, or names an
 archived/Done card. Legacy metadata and free text do not satisfy this check.
 A stale or incomplete board read cannot prove that a card does not exist.
 
+Use `card: TSW-<n>` for Jira work. The worker-link report and scene match the
+key against observed TSW issues. An unresolved Jira key appears as unavailable
+in the report. Jira links from dispatch appear as confirmed with current source
+and worker identity evidence, and produce no Notion backfill proposal.
+
 A separate `terminal-in-flight` exception appears when the latest status event
 is `done` or `failed` for more than 15 minutes and the backlog row remains
 `in_flight`. The age comes from the status timestamp or its age at snapshot

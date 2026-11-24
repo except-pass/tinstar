@@ -11,7 +11,7 @@ async function main() {
     server: { type: 'string' }, 'config-home': { type: 'string' }, 'token-file': { type: 'string' }, help: { type: 'boolean' },
   } })
   if (values.help) {
-    console.log('Usage: npm run --silent worker-links:report -- [--config-home DIR] [--server URL] [--token-file FILE]\nWithout --server, reads configured homes and Notion directly. With --server, authenticates using the config home mcp-token (or --token-file). Prints report JSON; never writes links.')
+    console.log('Usage: npm run --silent worker-links:report -- [--config-home DIR] [--server URL] [--token-file FILE]\nWithout --server, reads configured homes, Notion and TSW Jira directly. With --server, authenticates using the config home mcp-token (or --token-file). Prints report JSON; never writes links.')
     return
   }
   const root = values['config-home'] ?? getConfigRoot()

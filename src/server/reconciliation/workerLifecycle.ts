@@ -1,6 +1,8 @@
 import type { SourceSnapshot } from './index'
 import type { Execution } from './scene'
-import { dispatchForTask } from './dispatchProvenance'
+import type { DispatchProvenance } from './dispatchProvenance'
+import type { WorkCard } from './workReader'
+import { tswKey } from './tswIdentity'
 
 export const TERMINAL_BACKLOG_GRACE_MS = 15 * 60_000
 export const lifecycleDetector = (detector: string) => detector === 'invalid-dispatch-card' || detector === 'terminal-in-flight'
@@ -8,7 +10,7 @@ type Backlog = NonNullable<SourceSnapshot['fleet'][number]['observation']['data'
 
 /** Snapshot-only exceptions: never assign a guessed card or edit a home backlog. */
 export function workerLifecycleFindings(execution: Execution, backlog: NonNullable<Backlog>[number] | undefined,
-  intentions: SourceSnapshot['intentions'], now: number) {
+  dispatch: DispatchProvenance, intentions: SourceSnapshot['intentions'], jiraCard: WorkCard | undefined, now: number) {
   const task = execution.source
   if (execution.kind === 'secondmate' || !['fresh', 'partial'].includes(execution.observation.status)) return []
   const identity = `home=${execution.home} task_id=${execution.identity.task_id ?? 'unknown'} spawn_gen=${execution.identity.spawn_gen ?? 'unknown'}`
@@ -16,20 +18,21 @@ export function workerLifecycleFindings(execution: Execution, backlog: NonNullab
   const state = backlog?.state ?? task.backlog.state
   // Closed historical rows no longer need spawn-time attention.
   if (!['done', 'failed', 'cancelled', 'canceled'].includes(String(state))) {
-    const dispatch = dispatchForTask(task, backlog)
     let reason: string | undefined
     if (dispatch.status === 'absent') reason = 'missing coordinator-authored backlog card: line'
     if (dispatch.status === 'independent') reason = 'card: none does not identify a real card'
     if (dispatch.status === 'conflict') reason = 'malformed or conflicting coordinator-authored backlog card: line'
-    if (dispatch.status === 'card' && ['fresh', 'partial'].includes(intentions.status)) {
-      const card = intentions.data?.cards.find(card => card.id === dispatch.cardId)
+    if (dispatch.status === 'card') {
+      const jiraKey = tswKey(dispatch.cardId)
+      const card = jiraKey ? jiraCard : ['fresh', 'partial'].includes(intentions.status)
+        ? intentions.data?.cards.find(card => card.id === dispatch.cardId) : undefined
       if (card?.archived || card?.in_trash || ['done', 'archived'].includes(String(card?.properties.Status?.value).toLowerCase())) {
         reason = `card ${dispatch.cardId} is archived/Done`
-      } else if (!card && intentions.status === 'fresh' && intentions.coverage === 'complete' && intentions.data && !intentions.data.hasMore) {
+      } else if (!card && !jiraKey && intentions.status === 'fresh' && intentions.coverage === 'complete' && intentions.data && !intentions.data.hasMore) {
         reason = `unknown card ${dispatch.cardId} in the complete board source`
       }
     }
-    if (reason) findings.push({ detector: 'invalid-dispatch-card', cardIds: dispatch.status === 'card' ? [dispatch.cardId] : [],
+    if (reason) findings.push({ detector: 'invalid-dispatch-card', cardIds: dispatch.status === 'card' ? [jiraCard?.id ?? dispatch.cardId] : [],
       reason: `Invalid spawn card: ${identity}: ${reason}; add a valid coordinator-authored card: line in its home backlog; do not guess or auto-repair a card` })
   }
   // The latest status event wins over pane/liveness and earlier terminal events.

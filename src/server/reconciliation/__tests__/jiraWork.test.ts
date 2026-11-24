@@ -18,6 +18,7 @@ import { JiraWork } from '../jiraWork'
 import { adfText, jiraText } from '../jira'
 import { runTswStatusSync } from '../../../coordinator/tswStatusSync'
 import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
+import { tswProjectId } from '../tswIdentity'
 
 const cloudId = '5bac40b8-c168-4931-90d1-2c8dfe15c6ea'
 const config = {
@@ -307,8 +308,8 @@ async function fixture(projectId = config.projectId, withNotion = false) {
     }
     throw new Error(`Unexpected fixture request ${method} ${path}`)
   }
-  async function connect(actor = 'Fixture agent') {
-    const sources = new ReconciliationSources(parsed, fetcher, undefined, root)
+  async function connect(actor = 'Fixture agent', fleet = parsed.fleet) {
+    const sources = new ReconciliationSources({ ...parsed, fleet }, fetcher, undefined, root)
     const mcp = new ReconciliationMcp(sources, root)
     const [remote, local] = InMemoryTransport.createLinkedPair()
     const server = mcp.createServer(actor)
@@ -712,6 +713,20 @@ const tswTask = (key: string, detail = '', yolo = 'off', overrides: Record<strin
   pr: { url: detail ? fixturePull : null, head: fixtureHead },
   hints: { last_event_text: detail && yolo === 'off' ? `done: PR ${fixturePull} checks green at head ${fixtureHead}` : '' },
   ...overrides,
+})
+
+it('reads the configured TSW board when reporting worker links through MCP', async () => {
+  const f = await fixture(tswProjectId)
+  const key = 'TSW-987654321', id = '987654321', home = '/fixture/crew'
+  f.issues.set(id, f.make(id, key, tswProjectId, { status: { name: 'In Progress' }, [config.fields.owner]: { value: 'Firstmate' } }))
+  const file = join(f.root, 'worker-link-snapshot.json')
+  await writeFile(file, JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: home, generated: new Date().toISOString(),
+    main_inventory: { valid: true }, tasks: [tswTask(key)], backlog: { present: true, records: [] } }))
+  const { call } = await f.connect('Fixture agent', [{ home, snapshotFile: file }])
+  const report = await call('get_worker_link_report', {})
+  expect(report.homes[0].tiers['already confirmed']).toMatchObject([{ task_id: `task-${key}`, cardIds: [expect.stringMatching(new RegExp(`:${id}$`))] }])
+  expect(report.findings).not.toContainEqual(expect.objectContaining({ detector: 'invalid-dispatch-card' }))
+  expect(report.merges).toEqual([])
 })
 
 it('blocks both card keys in conflicting dispatch copies even with separate live candidates', async () => {
