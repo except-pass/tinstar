@@ -90,9 +90,9 @@ Replay notices go to stderr so the JSON payloads stay identical.
 ## Observe linked GitHub pull requests
 
 Add an explicit repository allowlist to the First Mate configuration, for example
-`"github": { "repositories": ["example/project", "sample-org/*"] }`.
-Entries match an exact repository or all repositories under one owner, ignoring
-case. The adapter appears as unconnected when the allowlist is absent or empty.
+`"github": { "repositories": ["example/project", "sample-org/other-project"] }`.
+Entries match exact repositories, ignoring case. The adapter appears as
+unconnected when the allowlist is absent or empty.
 The publisher uses the service account's authenticated `gh` CLI on PATH only
 for allowlisted PRs with verified links in the accepted live backlog. During a
 fleet outage, prior relationships remain in journal history and cannot authorize

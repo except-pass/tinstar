@@ -83,7 +83,7 @@ async function readConfig(path) {
       (!config.github || typeof config.github !== 'object' || Array.isArray(config.github) ||
        repositories !== undefined && (!Array.isArray(repositories) ||
          repositories.some(value => typeof value !== 'string' || !repositoryPattern.test(value))))) {
-    throw new UsageError('github.repositories must list owner/repo or owner/* patterns')
+    throw new UsageError('github.repositories must list exact owner/repo entries')
   }
   const ids = new Set()
   const paths = new Set()

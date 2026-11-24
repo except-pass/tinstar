@@ -12,7 +12,7 @@ const run = promisify(execFile)
 const pullsPerPass = 4
 const coreReserve = 1000
 const pullUrl = /^https:\/\/github\.com\/([a-z0-9_-][a-z0-9._-]*\/(?!\.{1,2}\/)[a-z0-9._-]+)\/pull\/([1-9]\d{0,14})$/
-export const repositoryPattern = /^[a-z0-9_-][a-z0-9._-]*\/(?:\*|(?!\.{1,2}$)[a-z0-9._-]+)$/i
+export const repositoryPattern = /^[a-z0-9_-][a-z0-9._-]*\/(?!\.{1,2}$)[a-z0-9._-]+$/i
 const sha = /^[a-f0-9]{40}$/
 const checkStates = new Set(['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending'])
 const conclusions = new Set(['action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'startup_failure', 'success', 'timed_out'])
@@ -128,7 +128,7 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
     const targets = new Map()
     for (const { url, task_id } of journal.linkedPulls()) {
       const repository = pullUrl.exec(url)?.[1]
-      if (!repository || !allowed.has(repository) && !allowed.has(`${repository.split('/')[0]}/*`)) continue
+      if (!allowed.has(repository)) continue
       if (!targets.has(url)) targets.set(url, [])
       targets.get(url).push({
         relation: 'linked-task',

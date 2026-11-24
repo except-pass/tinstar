@@ -64,7 +64,7 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   journal.registerSources([githubSource])
   taskLinks(journal, openHome, { one: [pullUrl], removed: [pullUrl.replace('/12', '/21')] })
   taskLinks(journal, fixtureHome, { one: [pullUrl] })
-  taskLinks(journal, openHome, { one: [pullUrl, 'https://github.com/other-example/project/pull/99'] }, 5)
+  taskLinks(journal, openHome, { one: [pullUrl, 'https://github.com/example/other-project/pull/99'] }, 5)
   const secondary = { ...openHome, id: 'example-secondary', path: '/example/secondary' }
   taskLinks(journal, secondary, { two: [pullUrl] })
   const before = journal.tail()
@@ -173,7 +173,7 @@ test('GitHub rotates bounded pulls and stops at the shared reserve', async t => 
   let remaining = '4000'
   let requests = 0
   const observe = githubObserver({
-    repositories: ['example/*'],
+    repositories: ['example/project'],
     now: () => new Date(at(second++)),
     get: async path => {
       requests++
@@ -213,6 +213,18 @@ test('First Mate configuration leaves GitHub and deployment unconnected without 
     match(stdout, /github:linked-pulls unconnected/)
     match(stdout, /deployment:tinstar-floor:.* unconnected · Tin Star floor running revision/)
   }
+})
+
+test('the GitHub configuration rejects owner-wide allowlist entries', async t => {
+  const path = await journalPath(t)
+  const config = join(path, '..', 'config.json')
+  await writeFile(config, JSON.stringify({
+    homes: [{ id: 'example-unavailable', path: join(path, '..', 'missing-home') }],
+    github: { repositories: ['example/*'] },
+  }))
+  await rejects(exec(cli, ['observe', '--db', path, '--config', config]), {
+    stderr: /github\.repositories must list exact owner\/repo entries/,
+  })
 })
 
 test('deployment observes an exact running build through outages and restart without asserting ancestry or lifecycle transitions', async t => {
@@ -270,7 +282,7 @@ test('provider snapshots roll back together when an event append fails', async t
   taskLinks(journal, openHome, { one: [pullUrl] })
   let second = 10
   const observe = githubObserver({
-    repositories: ['example/*'],
+    repositories: ['example/project'],
     now: () => new Date(at(second++)),
     get: async path => githubResponse(path.includes('/pulls/') ? pull() : { total_count: 1, check_runs: [prCheck()] }),
   })
