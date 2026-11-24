@@ -91,7 +91,7 @@ export class HandoffOperations {
             if (input.revision_id || input.expected_contract_hash) return response('revision-conflict', 'A later revision needs the existing authoritative card ID or external reference receipt')
             if (input.target.candidate_ids.length) {
               const candidates = await Promise.all(input.target.candidate_ids.map(async id => {
-                const candidate = await this.deps.readCard(id)
+                const candidate = await this.deps.reader.card(id, true)
                 return { card_id: candidate.id, url: candidate.url, title: candidate.properties.Name?.value, status: candidate.properties.Status?.value }
               }))
               return { ...await response('needs-target', 'Candidate cards require an explicit card_id; no title match or overwrite was attempted'), candidates }

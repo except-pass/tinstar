@@ -822,6 +822,9 @@ it.each([false, true])('records and queues a verified Jira handoff after create 
   expect(handoff.description).not.toContain('Notion')
   const validate = addFormats(new Ajv({ strict: false })).compile(handoff.inputSchema)
   expect(validate(input)).toBe(true)
+  const nativeCandidate = { ...input, target: { ...input.target, candidate_ids: ['jira:sample.atlassian.net:10001:60001'] } }
+  expect(validate(nativeCandidate)).toBe(false)
+  expect(await first.client.callTool({ name: 'submit_handoff', arguments: nativeCandidate })).toMatchObject({ isError: true })
   for (const provider of ['jira', 'notion']) {
     const argumentsWithProvider = { ...input, target: { ...input.target, provider } }
     expect(validate(argumentsWithProvider)).toBe(false)
