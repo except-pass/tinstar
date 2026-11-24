@@ -193,7 +193,7 @@ Durable claims use the separate [session-scoped card lease contract](#session-sc
 | `search_work(...)` | Scoped, paginated work properties, UI search predicates, links, evidence and coverage without a browser |
 | `get_work(...)` | Exact configured-board card, bounded body/comments, linked worker/PR evidence and freshness without a browser |
 | `get_workflow_rules()` | Current code-enforced [workflow rules and operation contracts](workflow.md) |
-| `get_work_views()` | Shared [Needs Will and advisory execution warnings](workflow.md#slice-3-shared-operational-views-and-normal-use), without a browser; PR details retain the existing owner authorization boundary |
+| `get_work_views()` | Shared [Needs Will and advisory execution warnings](workflow.md#slice-3-shared-operational-views-and-normal-use), without a browser, plus the [owner-ready request grouping](reconciliation-queue.md#owner-ready-by-repository); PR details retain the existing owner authorization boundary |
 | `start_work(...)`, `update_work(...)` | [Shared workflow operations](workflow.md): contracts, enforced rules and partial-save handling |
 | `create_work(...)`, `transition_work(...)`, `link_work(...)` | [Native Jira work operations](jira-work.md#mcp-calls). See the same reference for Jira-specific `get_work` and `update_work` inputs. |
 | `submit_handoff(...)` | [Approved implementation handoffs](workflow.md#one-call-approved-implementation-handoffs): recording, assignment outcomes, full-contract retrieval and rollout requirements. |
@@ -204,6 +204,7 @@ Durable claims use the separate [session-scoped card lease contract](#session-sc
 | `get_queue(scene_id)` | Ordered readiness, exact per-source identities/readiness and response anchors, or `queue-source-unavailable`; see [queue reconciliation effects](workflow.md#first-mate-decision-reconciliation) |
 | `get_worker_link_report()` | Read-only [worker-link backfill report](../notion-worker-links.md#slice-b-backfill-and-deterministic-mismatch-report); no open window or `scene_id` required |
 | `list_prs(offset?, limit?)` | Shared PR Operations open inventory, captured heads, card links and coverage; requires a verified owner binding |
+| `list_prs(view: "owner-ready", recheck?)` | Returns the [owner-ready bundle with scoped PR evidence](reconciliation-queue.md#owner-ready-by-repository) in `ownerReady`. Pagination applies to ordinary inventory only. Requires the same verified owner binding. |
 | `get_pr(url, head, include_files?, offset?, limit?)` | Shared exact-head description, checks, reviews, optional file metadata and card/worker attribution; requires a verified owner binding |
 | `get_release_status(offset?, limit?)` | Shared Releases PR-first observations, links, production receipts/ancestry, dry-run eligibility and verification requirements; no owner/write authority |
 | `present_view(...)` | Enqueue a semantic action for one selected tab and wait up to two seconds for its acknowledgment |

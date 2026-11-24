@@ -16,7 +16,7 @@ const details = z.object({ head: z.object({ sha: z.string() }), state: z.string(
 const reviews = z.array(z.object({ user: z.object({ login: z.string() }).nullable(), state: z.string(), html_url: z.string() }))
 export interface PullScope { account: string; owners: string[]; associated: PullIdentity[]; repositories?: string[]; authenticatedActor?: string; credentialProfile?: string }
 type PullActor = Omit<PullScope, 'associated'>
-type RepoRead = { pulls: Omit<PullSummary, 'links'>[]; coverage: PullRepository }
+type RepoRead = { pulls: Omit<PullSummary, 'links'>[]; closedPulls: string[]; coverage: PullRepository }
 
 /** Demand cache, shared across clients. Four repo reads at once, bounded pages;
  * limits prevent an accidental large account crawl from exhausting the shared API budget. */
@@ -28,7 +28,7 @@ export class PullReader {
   private identityCache?: { until: number; data: PullActor }
   private identityPending?: Promise<PullActor>
   constructor(private read = githubJson, private now = Date.now, private readiness = new QueuePullReader()) {}
-  readinessFor(urls: string[]) { return this.readiness.get(urls) }
+  readinessFor(...args: Parameters<QueuePullReader['get']>) { return this.readiness.get(...args) }
   async identity(): Promise<PullActor> {
     if (this.identityCache && this.identityCache.until > this.now()) return this.identityCache.data
     if (!this.identityPending) this.identityPending = (async () => {
@@ -50,7 +50,7 @@ export class PullReader {
     })().finally(() => { this.identityPending = undefined })
     return this.identityPending
   }
-  async inventory(repositories: string[], scope: PullScope) {
+  async inventory(repositories: string[], scope: PullScope, force = false) {
     const result: RepoRead[] = []
     for (let index = 0; index < repositories.length; index += 4) {
       result.push(...await Promise.all(repositories.slice(index, index + 4).map(repository => {
@@ -59,9 +59,18 @@ export class PullReader {
         // Never reuse a broader inventory after identity or explicit links change.
         const key = JSON.stringify([repository, scope.account, owned, owned ? [] : [...new Set(associated.map(pull => pull.number))].sort((a, b) => a - b)])
         const cached = this.repos.get(key)
-        if (cached && cached.until > this.now()) return cached.data
+        if (!force && cached && cached.until > this.now()) return cached.data
         let pending = this.pending.get(key)
-        if (!pending) { pending = this.refresh(repository, key, owned, scope.account, associated).finally(() => this.pending.delete(key)); this.pending.set(key, pending) }
+        if (force || !pending) {
+          const refresh: Promise<RepoRead> = this.refresh(repository, key, owned, scope.account, associated).then(data => {
+            if (this.pending.get(key) !== refresh) return this.pending.get(key) ?? this.repos.get(key)?.data ?? data
+            this.repos.set(key, { until: this.now() + 60_000, data })
+            while (this.repos.size > 64) this.repos.delete(this.repos.keys().next().value!)
+            return data
+          }).finally(() => { if (this.pending.get(key) === refresh) this.pending.delete(key) })
+          pending = refresh
+          this.pending.set(key, refresh)
+        }
         return pending
       })))
     }
@@ -121,11 +130,9 @@ export class PullReader {
     // Failed pagination retains previous rows as stale, including rows beyond the successful page.
     const merged = new Map<string, Omit<PullSummary, 'links'>>((!complete && previous ? previous.pulls.filter(pull => !closed.has(pull.id)).map(pull => [pull.id, { ...pull, freshness: 'stale' as const }] as const) : []))
     for (const pull of pulls) merged.set(pull.id, pull)
-    const data: RepoRead = { pulls: [...merged.values()], coverage: { repository, scope: owned ? 'all-open' : 'authored-or-associated', complete,
+    const data: RepoRead = { pulls: [...merged.values()], closedPulls: [...closed], coverage: { repository, scope: owned ? 'all-open' : 'authored-or-associated', complete,
       observedAt: pulls.length || complete ? observedAt : previous?.coverage.observedAt ?? null,
       status: complete ? 'fresh' : pulls.length ? 'partial' : previous?.pulls.length ? 'stale' : 'unavailable', error } }
-    this.repos.set(key, { until: this.now() + 60_000, data })
-    while (this.repos.size > 64) this.repos.delete(this.repos.keys().next().value!)
     return data
   }
   /** One canonical origin, including a closed PR; never a repository history crawl. */

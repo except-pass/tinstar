@@ -49,8 +49,8 @@ export class CachedObservation<T> {
     private readonly mergePartial?: (previous: T, current: T) => T,
     private readonly acceptData?: (previous: T | null, current: T, coverage: ReadResult<T>['coverage']) => T) {}
 
-  get(force = false, background = false): Promise<Observation<T>> {
-    if (this.pending && (background || !this.pending.background)) return this.pending.value
+  get(force = false, background = false, replacePending = false): Promise<Observation<T>> {
+    if (this.pending && !replacePending && (background || !this.pending.background)) return this.pending.value
     if (!this.pending && !force && this.cached && this.now() < this.retryAt) return Promise.resolve(this.current())
     if (!this.pending) this.changes = []
     const value: Promise<Observation<T>> = Promise.resolve().then(() => this.refresh(background, value)).finally(() => {

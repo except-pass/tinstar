@@ -13,6 +13,7 @@ import { reconcileScene } from './scene'
 import { record, text } from './values'
 import type { PullReadiness } from './queuePulls'
 import type { NeedsWillItem } from './needsWill'
+import type { OwnerReadyRead } from '../../shared/ownerReady'
 import type { ExecutionWarning } from './workflowViews'
 import { cardWaitsForWill } from './claimPolicy'
 import { parseWaitLine } from '../../shared/waitingForPolicy'
@@ -433,6 +434,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       wholeFarm: 'not-certified' as const, cardBodies: 'not-collected' as const, emptyQueueMeansAllClear: false as const },
     warnings: [...input.warnings, 'Card-body-only next actions/evidence are not collected; verify candidates against the card. A checkpoint is not readiness proof.'],
     needsWill: undefined as NeedsWillItem[] | undefined, operationalExceptions: undefined as ExecutionWarning[] | undefined,
+    ownerReady: undefined as OwnerReadyRead | undefined,
     pullCoverage: undefined as Pick<import('../../shared/pulls').PullsRead, 'repositories' | 'warnings' | 'associationsComplete'> | undefined,
     reviews: reviewView(intentions, undefined, now),
     reviewRecoveries: [] as Array<{ cardId: string; result: import('../../shared/workflow').StartWorkResult }>,

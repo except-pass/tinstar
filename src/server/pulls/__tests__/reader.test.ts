@@ -17,6 +17,20 @@ describe('read-only PR inventory', () => {
     expect(read).toHaveBeenCalledTimes(2)
     expect(one[0]?.pulls[0]).toMatchObject({ id: 'owner/repo#1', author: 'author', head, title: 'Change 1\nwith multiline text' })
   })
+  it('starts a new inventory read on return and keeps its result after the earlier read finishes', async () => {
+    let release!: (rows: ReturnType<typeof row>[]) => void
+    const earlier = new Promise<ReturnType<typeof row>[]>(resolve => { release = resolve })
+    const read = vi.fn().mockReturnValueOnce(earlier).mockResolvedValueOnce([row(2)])
+    const reader = new PullReader(read)
+    const ordinary = reader.inventory(['owner/repo'], scope)
+    try {
+      const [returned] = await reader.inventory(['owner/repo'], scope, true)
+      expect(returned?.pulls.map(pull => pull.number)).toEqual([2])
+    } finally { release([row(1)]) }
+    await ordinary
+    expect((await reader.inventory(['owner/repo'], scope))[0]?.pulls.map(pull => pull.number)).toEqual([2])
+    expect(read).toHaveBeenCalledTimes(2)
+  })
   it('reports missing CLI immediately and retains prior inventory visibly stale after failure', async () => {
     let now = 0
     const read = vi.fn().mockResolvedValue([row(1)])

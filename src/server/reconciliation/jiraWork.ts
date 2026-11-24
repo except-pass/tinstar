@@ -6,6 +6,8 @@ import { isDeepStrictEqual } from 'node:util'
 import { acquireLock } from '../infra/lock'
 import type { JiraWorkConfig } from './config'
 import { adfText, JiraAttachmentPreflightError, JiraClient, JiraWriteError, jiraText, type JiraSection } from './jira'
+import { CachedObservation, retainMissing } from './observation'
+import { mergePublication } from './ownerRequestEvidence'
 import {
   checkJiraTransition, editJiraDecisions, formatJiraDecisions, jiraTransitionDestination, jiraWorkIdentity, JiraWorkInputError, readJiraDecisions,
   type JiraCreate, type JiraEdit, type JiraExternalBlocker, type JiraLink, type JiraTransition,
@@ -23,6 +25,19 @@ const nonempty = (value: unknown): value is string => typeof value === 'string' 
 const calendarDate = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
   Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value
 const nativeId = (id: unknown): id is string => typeof id === 'string' && /^[1-9]\d*$/.test(id)
+const reviewStatus = 'Ready for Review'
+type OwnerIssue = {
+  id: string; key: string; url: string
+  decisions: ReturnType<typeof readJiraDecisions>
+  reviewAssigned: boolean
+  merges: Array<NonNullable<ReturnType<typeof mergePublication>> & { comment: string; createdAt: number; coordinator?: boolean }>
+  notesUnavailable?: boolean
+  reviewAfter?: number
+  readComments?: Set<string>
+  warning?: string
+}
+type ReviewChange = { fieldId?: string; field?: string; fromString?: string; toString?: string }
+
 function text(value: unknown, unsupported: true | 'omit' = true) {
   if (typeof value === 'string') return value
   return adfText(value, unsupported)
@@ -50,7 +65,8 @@ type WriteInput = JiraCreate | JiraEdit | JiraTransition | JiraLink
 export type JiraWorkCard = ReturnType<JiraWork['view']>
 export type JiraHistoryCursor = { total: number; last: string | null }
 export type JiraTrackedChange = { field: 'status' | 'assignee'; from: string | null; to: string | null; byService: boolean; occurredAt: number | null; entryId: string }
-type BeforeWrite = (current: JiraWorkCard) => void
+const coordinatorReviewNote = (body: string) => /^Operation: tsw-[a-f0-9]{64}-edit-review(?:-(?:attempt-\d+|retry-1))*$/m.test(body)
+type BeforeWrite = (current: JiraWorkCard) => void | Promise<void>
 
 /** Native Jira work records share Tin Star's MCP and Jira transport. This
  * adapter only calls issue APIs and has no dispatch or Jira admin capability. */
@@ -60,6 +76,18 @@ export class JiraWork extends JiraClient {
   private readonly confirmed = new Map<string, { card: WorkCard; until: number }>()
   accessRevision = 0
   private readonly scoped = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
+  private reviewHistoryCursor?: string
+  readonly ownerRequests = new CachedObservation(() => this.readOwnerRequests(), 20_000, 60_000,
+    'Jira owner requests unavailable; retained records require verification.', Date.now, (previous: OwnerIssue[], current: OwnerIssue[]) =>
+      retainMissing(previous, current, issue => issue.id), (previous, current) => {
+    const known = new Map(previous?.map(issue => [issue.id, issue]))
+    return current.map(issue => {
+      if (!issue.notesUnavailable) return issue
+      const retained = (known.get(issue.id)?.merges ?? []).filter(merge =>
+        merge.createdAt > (issue.reviewAfter ?? -Infinity) && !issue.readComments?.has(merge.comment))
+      return { ...issue, merges: [...issue.merges, ...retained] }
+    })
+  })
   constructor(private readonly config: JiraWorkConfig, private readonly root: string, fetcher?: (input: string, init?: RequestInit) => Promise<Response>, private readonly onAccessDenied?: () => void) {
     super(`https://api.atlassian.com/ex/jira/${config.cloudId}`, `Bearer ${config.token}`, fetcher)
     this.site = new URL(config.url).hostname
@@ -126,6 +154,7 @@ export class JiraWork extends JiraClient {
     this.accessRevision++
     this.confirmed.clear()
     this.observation.discard()
+    this.ownerRequests.discard()
     for (const { observation } of this.scoped.values()) observation.discard()
     this.onAccessDenied?.()
   }
@@ -205,8 +234,8 @@ export class JiraWork extends JiraClient {
     return id.issueId
   }
 
-  private async checkProject(id: string) {
-    const issue = await this.request(`issue/${id}?fields=project`)
+  private async checkProject(id: string, signal?: AbortSignal) {
+    const issue = await this.request(`issue/${id}?fields=project`, 'GET', undefined, signal)
     if (issue.id !== id || issue.fields?.project?.id !== this.config.projectId) {
       throw new JiraWorkInputError('Ticket is outside the configured Jira project')
     }
@@ -276,15 +305,134 @@ export class JiraWork extends JiraClient {
       ...(blocker === undefined ? { external_blocker_fields: externalBlocker } : {}), ...(warnings.length ? { warnings } : {}) }
   }
 
-  private async notes(issueId: string, startAt = 0) {
-    await this.checkProject(issueId)
-    const body = await this.request(`issue/${issueId}/comment?startAt=${startAt}&maxResults=50&orderBy=-created`)
+  private async notes(issueId: string, startAt = 0, signal?: AbortSignal) {
+    await this.checkProject(issueId, signal)
+    const body = await this.request(`issue/${issueId}/comment?startAt=${startAt}&maxResults=50&orderBy=-created`, 'GET', undefined, signal)
     if (!Array.isArray(body.comments) || !Number.isSafeInteger(body.total) || body.total < 0 || body.startAt !== startAt ||
       body.comments.length > body.total - startAt || !body.comments.length && startAt < body.total) throw new Error('Incomplete Jira comment readback')
-    await this.checkProject(issueId)
+    await this.checkProject(issueId, signal)
     return { comments: body.comments.map((comment: Record<string, any>) => ({
       id: comment.id, body: comment.visibility == null ? text(comment.body) : undefined, created_at: comment.created, updated_at: comment.updated, author_id: comment.author?.accountId,
     })), total: body.total as number }
+  }
+
+  /** A review note can precede the move into review. Exclude notes from before
+   * the last exit from review so a new review cycle cannot revive an old ask. */
+  private async previousReviewExit(issueId: string, signal: AbortSignal) {
+    let after = -Infinity
+    let offset = 0
+    for (let page = 0; page < 5; page++) {
+      const history = await this.request(`issue/${issueId}/changelog?startAt=${offset}&maxResults=100`, 'GET', undefined, signal)
+      if (history.startAt !== offset || !Number.isSafeInteger(history.total) || !Array.isArray(history.values)) throw new Error('Incomplete Jira review history')
+      for (const row of history.values) {
+        if (!Array.isArray(row.items)) throw new Error('Incomplete Jira review history')
+        if (row.items.some((item: ReviewChange) => (item.fieldId ?? item.field) === 'status' &&
+            item.fromString === reviewStatus && item.toString !== reviewStatus)) {
+          if (!Number.isFinite(Date.parse(row.created))) throw new Error('Jira review history has no timestamp')
+          after = Math.max(after, Date.parse(row.created))
+        }
+      }
+      offset += history.values.length
+      if (offset >= history.total) return after
+      if (!history.values.length) break
+    }
+    throw new Error('Jira review history exceeds the read budget')
+  }
+
+  private async readOwnerRequests() {
+    const signal = AbortSignal.timeout(12_000)
+    const issues = new Map<string, OwnerIssue>()
+    const decisions = this.config.fields.decisions
+    const jql = `project = ${this.config.projectId} AND status NOT IN (Done, Canceled) AND (cf[${decisions.slice('customfield_'.length)}] IS NOT EMPTY OR status = "${reviewStatus}") ORDER BY id`
+    const fields = ['project', 'status', 'assignee', decisions]
+    const cursors = new Set<string>()
+    let nextPageToken: string | undefined, last = false
+    for (let page = 0; page < 10 && !last; page++) {
+      try {
+        const body = await this.request('search/jql', 'POST', { jql, maxResults: 100, fields, ...(nextPageToken ? { nextPageToken } : {}) }, signal)
+        if (!Array.isArray(body.issues) || typeof body.isLast !== 'boolean') throw new Error('Incomplete Jira owner census')
+        for (const raw of body.issues) {
+          const f = raw.fields
+          if (!nativeId(raw.id) || !/^[A-Z][A-Z0-9_]*-[1-9]\d*$/.test(raw.key) || f?.project?.id !== this.config.projectId ||
+              typeof f.status?.name !== 'string' || !Object.hasOwn(f, decisions) || !Object.hasOwn(f, 'assignee')) {
+            throw new Error('Jira search did not confirm issue identity, project and request fields')
+          }
+          if (['Done', 'Canceled'].includes(f.status.name)) continue
+          const issue: OwnerIssue = { id: this.qualified(raw.id), key: raw.key, url: `${this.config.url}/browse/${raw.key}`,
+            decisions: [], merges: [],
+            // Matches the native assignee used by the TSW status coordinator.
+            reviewAssigned: f.status.name === reviewStatus && f.assignee?.displayName === 'William Gathright' && !!f.assignee?.accountId && f.assignee.active !== false }
+          try { issue.decisions = readJiraDecisions(text(f[decisions])).filter(item => item.answer === undefined) }
+          catch { issue.warning = 'Decision Questions could not be read.' }
+          issues.set(raw.id, issue)
+        }
+        last = body.isLast
+        if (!last) {
+          if (typeof body.nextPageToken !== 'string' || cursors.has(body.nextPageToken)) throw new Error('Invalid Jira search cursor')
+          nextPageToken = body.nextPageToken
+          cursors.add(body.nextPageToken)
+        }
+      } catch (error) {
+        if (!issues.size) throw error
+        break
+      }
+    }
+    const candidates = [...issues].filter(([, issue]) => issue.reviewAssigned)
+    const start = candidates.findIndex(([id]) => id === this.reviewHistoryCursor) + 1
+    const reviews = [...candidates.slice(start), ...candidates.slice(0, start)]
+    let serviceAccount: Promise<string> | undefined
+    for (let offset = 0; offset < reviews.length; offset += 4) {
+      const batch = reviews.slice(offset, offset + 4)
+      if (!signal.aborted) this.reviewHistoryCursor = batch.at(-1)?.[0]
+      await Promise.all(batch.map(async ([id, issue]) => {
+        try {
+          signal.throwIfAborted()
+          const after = await this.previousReviewExit(id, signal)
+          issue.reviewAfter = after
+          const seen = issue.readComments = new Set<string>()
+          let startAt = 0
+          let total: number | undefined
+          let boundary: Awaited<ReturnType<JiraWork['notes']>>['comments'][number] | undefined
+          for (let page = 0; page < 5; page++) {
+            const notes = await this.notes(id, startAt, signal)
+            const overlaps = total !== undefined && isDeepStrictEqual(notes.comments[0], boundary)
+            let shifted = total !== undefined && (notes.total !== total || !overlaps)
+            const comments = overlaps ? notes.comments.slice(1) : notes.comments
+            total = notes.total
+            let reachedPreviousCycle = false
+            for (const note of comments) {
+              const createdAt = Date.parse(note.created_at)
+              if (!nativeId(note.id) || !Number.isFinite(createdAt) || seen.has(note.id)) {
+                shifted = true
+                continue
+              }
+              seen.add(note.id)
+              if (createdAt <= after) reachedPreviousCycle = true
+              if (!note.body || createdAt <= after) continue
+              for (const line of note.body.split(/\r?\n/)) {
+                const pull = mergePublication(line, true)
+                if (pull) {
+                  const coordinator = !!pull.head && !!note.author_id && coordinatorReviewNote(note.body) &&
+                    note.author_id === await (serviceAccount ??= this.serviceAccountId(signal))
+                  issue.merges.push({ ...pull, comment: note.id, createdAt, coordinator })
+                }
+              }
+            }
+            if (shifted) throw new Error('Jira comment history shifted between pages')
+            const end = startAt + notes.comments.length
+            if (end >= total || reachedPreviousCycle) return
+            if (!comments.length) throw new Error('Incomplete Jira comment history')
+            boundary = notes.comments.at(-1)
+            startAt = end - 1
+          }
+          throw new Error('Jira comment history exceeds the read budget')
+        } catch {
+          issue.notesUnavailable = true
+          issue.warning = [issue.warning, 'Current merge notes or review history could not be verified.'].filter(Boolean).join(' ')
+        }
+      }))
+    }
+    return { observedAt: new Date().toISOString(), coverage: last ? 'complete' as const : 'partial' as const, data: [...issues.values()] }
   }
 
   async get(cardId: string, details: boolean) {
@@ -489,8 +637,8 @@ export class JiraWork extends JiraClient {
     return note ? { update: { comment: [{ add: { body: jiraText(note) } }] } } : {}
   }
 
-  private async serviceAccountId(): Promise<string> {
-    const { accountId } = await this.request('myself')
+  private async serviceAccountId(signal?: AbortSignal): Promise<string> {
+    const { accountId } = await this.request('myself', 'GET', undefined, signal)
     if (typeof accountId !== 'string' || !accountId) throw new Error('Missing Jira service account identity')
     return accountId
   }
@@ -707,6 +855,44 @@ export class JiraWork extends JiraClient {
     return result
   }
 
+  async tswReviewNote(cardId: string, pull: string) {
+    const id = this.id(cardId)
+    const signal = AbortSignal.timeout(12_000)
+    await this.checkProject(id, signal)
+    const after = await this.previousReviewExit(id, signal)
+    const account = await this.serviceAccountId(signal)
+    let offset = 0
+    let boundary: Awaited<ReturnType<JiraWork['notes']>>['comments'][number] | undefined
+    let expectedTotal: number | undefined
+    const heads = new Set<string>()
+    let legacy = false
+    let newest: { head: string; createdAt: number; id: string } | undefined
+    for (let page = 0; page < 5; page++) {
+      const { comments, total } = await this.notes(id, offset, signal)
+      if (expectedTotal !== undefined && (expectedTotal !== total || !isDeepStrictEqual(comments[0], boundary))) {
+        throw new Error('Jira review comments shifted between pages')
+      }
+      for (const comment of page ? comments.slice(1) : comments) {
+        const body = comment.body
+        const createdAt = Date.parse(comment.created_at)
+        if (!body || comment.author_id !== account || !nativeId(comment.id) || !(createdAt > after) || !coordinatorReviewNote(body)) continue
+        const request = mergePublication(body.split('\n', 1)[0]!, true)
+        if (request?.url !== pull || request.conditional) continue
+        if (!request.head) { legacy = true; continue }
+        heads.add(request.head)
+        if (!newest || createdAt > newest.createdAt || createdAt === newest.createdAt && BigInt(comment.id) > BigInt(newest.id)) {
+          newest = { head: request.head, createdAt, id: comment.id }
+        }
+      }
+      if (offset + comments.length >= total) return { current: newest?.head ?? (legacy ? null : undefined), heads }
+      if (comments.length < 2) break
+      expectedTotal = total
+      boundary = comments.at(-1)
+      offset += comments.length - 1
+    }
+    throw new Error('Jira review comments exceed the read budget')
+  }
+
   edit(input: JiraEdit, actor: string, beforeWrite?: BeforeWrite) {
     return this.mutate('edit', input, actor, async attempt => {
       const id = this.id(input.card_id)
@@ -742,7 +928,7 @@ export class JiraWork extends JiraClient {
         fields[mapping.blockerCondition] = input.blocker ? jiraText(input.blocker.unblocks_when) : null
       }
       if (input.add_questions || input.answers) fields[mapping.decisions] = this.editDecisionDocument(current, input)
-      if (beforeWrite) beforeWrite(this.view(await this.read(id)))
+      if (beforeWrite) await beforeWrite(this.view(await this.read(id)))
       await attempt.dispatch()
       await this.request(`issue/${id}`, 'PUT', { fields, ...this.commentUpdate(note) })
       const saved = await this.read(id)
@@ -820,7 +1006,7 @@ export class JiraWork extends JiraClient {
       const to = destination(current)
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
       if (candidates?.length !== 1 || !nativeId(candidates[0]?.id)) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
-      if (beforeWrite) beforeWrite(this.view(current))
+      if (beforeWrite) await beforeWrite(this.view(current))
       await attempt.dispatch()
       await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id } }).catch(error => {
         if (!note || isWriteRejection(error)) throw error
