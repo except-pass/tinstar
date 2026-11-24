@@ -190,7 +190,7 @@ test('full configuration registration deconfigures removed sources without losin
 test('CLI rejects oversized intervals and JSON source health output', async () => {
   for (const command of ['watch', 'replay']) {
     await rejects(exec(cli, [command, '--type', '']),
-      error => error.code === 2 && /--type must be task, worker, ticket or mate/.test(error.stderr))
+      error => error.code === 2 && /--type must be task, worker, ticket, pr, deployment or mate/.test(error.stderr))
   }
   for (const interval of ['3601', '2147484']) {
     await rejects(exec(cli, ['serve', '--interval', interval]),

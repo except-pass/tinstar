@@ -1,8 +1,9 @@
 # Event Publisher
 
 A standalone publisher for First Mate task and worker observations, signed
-Jira ticket changes, and operator-recorded mate migrations. All sources share
-one SQLite journal and terminal reader.
+Jira ticket changes, GitHub pull requests, the running Tin Star floor revision,
+and operator-recorded mate migrations. All sources share one SQLite journal and
+terminal reader.
 
 ## Start on the farm host
 
@@ -83,8 +84,77 @@ events sources
 `--after` is exclusive. A watch without it starts at the current journal tip.
 Watch and replay both accept the same filters. The text view marks replays,
 First Mate fixture events, and controlled migration receipts. In JSON mode,
-`source.mode` identifies live and fixture data for First Mate and routing.
+`source.mode` identifies live and fixture data for polling sources and routing.
 Replay notices go to stderr so the JSON payloads stay identical.
+
+## Observe linked GitHub pull requests
+
+With a live First Mate home configured, the publisher uses the service
+account's existing authenticated `gh` CLI on PATH. Only PRs explicitly linked
+in the accepted active backlog are in scope. A missing fleet projection can
+retain the last verified links for tasks still present in tasks-axi. The
+journal identifies those relationships as `previously-linked-task` until
+another fleet read verifies them. Set `"github": false` to disable these reads.
+
+The collector rotates through at most four linked PRs per five-minute pass.
+Each PR uses at most two REST GETs, one for the PR and one for the check runs
+of its exact head SHA in the base repository. The collector keeps ETags in
+memory and sends conditional requests. It pauses when the shared core quota
+reaches a 1,000-request reserve and honors rate-limit retry instructions.
+`events sources` reports the linked, observed, failed and deferred PR counts.
+Long lists take multiple passes. A missing or incomplete check-run response
+leaves that PR's previous snapshot intact. Check statuses posted only through
+the legacy commit-status API or another repository are outside this coverage.
+The service checks every accepted sample's exact repository and PR number.
+
+```sh
+events watch --source github --type pr
+events replay --type pr --entity 'github:pr:example/project#12' --last 20
+events inspect '<event-id-from-watch>'
+```
+
+The first verified sample reports `pr.observed`. Later samples can report
+`pr.opened` (a closed PR observed open), `pr.closed`, `pr.merged`,
+`pr.updated`, and check-run changes. A head change starts a new head-scoped
+check observation. The envelope records the observed head SHA and includes
+the merge SHA only for a merged PR. Titles, bodies and check output stay out of
+the journal. Polls can miss changes between samples.
+
+GitHub webhook ingress requires an approved registration on each eligible
+repository, an HTTPS route restricted to the GitHub webhook pathname, and a
+distinct delivery secret held by the publisher. A future receiver must validate
+`X-Hub-Signature-256` over the exact request bytes, check the repository and
+event type, and deduplicate `X-GitHub-Delivery` in the same transaction as its
+events. Select `pull_request`, `check_run`, and `release` when that receiver is
+available. Registration requires each repository's webhook administration
+permission. The poller needs only pull request and check read access.
+[GitHub delivery verification](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
+
+## Observe the running floor deployment
+
+A live First Mate configuration also probes the existing loopback GET at
+`http://127.0.0.1:5281/api/deployment` on the First Mate polling cadence.
+Set `"deployment": true` to run it independently, or `"deployment": false`
+to disable it. The endpoint reports the exact running build SHA. The subject
+identifies the local floor target and the observation keeps environment,
+revision and lifecycle in separate fields. The first read emits
+`deployment.running.observed`. Later differences emit
+`deployment.revision.changed` with the previous and current SHA.
+
+```sh
+events sources
+events watch --source deployment --type deployment
+events replay --type deployment --last 10 --json
+```
+
+If the endpoint is unavailable or returns an unknown SHA, the journal retains
+the last verified revision and reports the failed read. An observer absent
+from configuration appears as unconnected. The endpoint supplies no native
+attempt ID, start/completion/failure/rollback receipt, image digest or PR
+ancestry. Those need read access to the floor's guarded deployment audit or
+an existing deployment receipt export with exact attempt, revision and
+outcome. This observer reports the running floor build only. It leaves PR
+membership unknown.
 
 ## Receive Jira ticket changes
 
@@ -267,12 +337,18 @@ The filter opens the journal read-only and leaves the activity ledger intact.
 ## Re-observe and troubleshoot
 
 Stop the publisher, run `events observe`, and check `events sources` before
-restarting it. This performs one fresh read of each configured First Mate home and updates
-the journal. Use `events serve` for Jira webhooks. The one-pass command requires
-at least one First Mate home and exits with status 1 if a source read fails or
-has incomplete coverage. The continuous collector retries on
-the next scheduled pass.
+restarting it. This performs one pass of the configured polling sources and
+updates the journal. Use `events serve` for Jira webhooks. The one-pass command
+exits with status 1 if a read fails or has incomplete coverage. It still uses
+the GitHub batch limit. The continuous collector retries on the next scheduled
+pass.
 
+- If GitHub reports unavailable, verify `gh auth status --hostname github.com`
+  as the service account, then check its pull request and check read access for
+  the affected repository. If the quota reserve was reached, wait for the shared
+  budget to replenish.
+- For deployment coverage, check the local floor endpoint before changing
+  service configuration. A healthy read shows the exact current build SHA.
 - For an unavailable task source, check that the service account can execute
   `bin/fm-tasks-axi.sh` and read its backlog, and that `tasks-axi` is on PATH.
   With `FM_HOME` explicitly set to that home, check the wrapper's `--help` and
@@ -363,10 +439,10 @@ gives conservative bounds from the start of the prior saved observation,
 when available, to the end of the read that witnessed the change.
 A replay returns the same event IDs and payloads after a restart.
 
-Slice A covers explicitly configured First Mate homes on the running host,
-including local second mates with a task ID and generation.
-Remote endpoints, archive inventories and GitHub, Jira and deployment event
-sources remain outside its coverage.
+First Mate coverage includes explicitly configured homes on the running host
+and local second mates with a task ID and generation. Remote endpoints and
+archive inventories are outside that coverage. Jira, GitHub and floor coverage
+use the separate source scopes described above.
 
 ```sh
 npm test
