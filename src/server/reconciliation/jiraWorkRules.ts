@@ -74,6 +74,7 @@ export const jiraCreateSchema = z.object({
 export const jiraEditSchema = z.object({
   kind: z.literal('jira_edit'), card_id: jiraWorkIdSchema, operation_id: operation,
   name: singleLine.max(255).optional(), description: multiline.nullable().optional(), owner: singleLine.nullable().optional(),
+  assignee: singleLine.optional(),
   add_questions: z.array(question.omit({ answer: true })).min(1).optional(),
   answers: z.array(z.object({ id: decisionId, answer: multiline }).strict()).min(1).optional(),
   blocker: externalBlocker.nullable().optional(), note: multiline.optional(),

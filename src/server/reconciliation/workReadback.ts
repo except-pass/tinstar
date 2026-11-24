@@ -15,10 +15,10 @@ function redactText(text: string, redact: (text: string) => string): string {
     return [redact(lines.slice(0, index).join('\n')), safeFooter, ...lines.slice(index + 1).map(redact)].join('\n')
   } catch { return redact(text) }
 }
-function redactReadback<T>(value: T, redact: (text: string) => string): T {
+function redactReadback<T>(value: T, redact: (text: string) => string, omitKey?: string): T {
   if (typeof value === 'string') return redactText(value, redact) as T
-  if (Array.isArray(value)) return value.map(item => redactReadback(item, redact)) as T
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactReadback(item, redact)])) as T
+  if (Array.isArray(value)) return value.map(item => redactReadback(item, redact, omitKey)) as T
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => key !== omitKey).map(([key, item]) => [key, redactReadback(item, redact, omitKey)])) as T
   return value
 }
 /** Apply the existing prose redaction at the conversational readback boundary.
@@ -65,5 +65,5 @@ function redactJiraText(input: string): string {
 }
 
 export function jiraWorkReadback<T>(value: T): T {
-  return redactReadback(value, redactJiraText)
+  return redactReadback(value, redactJiraText, 'assignee_id')
 }

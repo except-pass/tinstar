@@ -4,7 +4,8 @@ export type DispatchProvenance = { status: 'card'; cardId: string; sources: stri
   { status: 'independent' | 'conflict' | 'absent'; sources: string[] }
 
 /** Only the coordinator-authored backlog line is authority. Never retain prose. */
-export function parseDispatchProvenance(lines: unknown, source = 'backlog.body_lines'): DispatchProvenance {
+export function parseDispatchProvenance(lines: unknown, source = 'backlog.body_lines',
+  identify: (value: string) => string | null = notionPageId): DispatchProvenance {
   if (lines === undefined) return { status: 'absent', sources: [] }
   if (!Array.isArray(lines) || !lines.every(line => typeof line === 'string')) return { status: 'conflict', sources: [source] }
   const declarations = lines.flatMap(line => line.split('\n')).map(line => line.replace(/\r$/, ''))
@@ -13,7 +14,7 @@ export function parseDispatchProvenance(lines: unknown, source = 'backlog.body_l
   if (declarations.length !== 1) return { status: 'conflict', sources: [source] }
   const line = declarations[0]!
   if (line === 'card: none') return { status: 'independent', sources: [source] }
-  const id = line.startsWith('card: ') ? notionPageId(line.slice(6)) : null
+  const id = line.startsWith('card: ') ? identify(line.slice(6)) : null
   return id ? { status: 'card', cardId: id, sources: [source] } : { status: 'conflict', sources: [source] }
 }
 

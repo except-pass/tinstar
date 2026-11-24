@@ -370,8 +370,9 @@ be initialized by explicit apply.
 Changed generation and duplicate attempts require investigation, never an
 automatic anchor refresh. Existing confirmed links need no write.
 
-Report-only is the default and does not read a write credential or make any
-Notion calls beyond the shared source reads:
+The Notion adapter defaults to report-only, using the shared Notion source reads
+without opening the write-token file.
+For Jira invocations and write scope, see [First Mate status sync](features/jira-work.md#first-mate-status-sync).
 
 ```sh
 npm run --silent worker-links:adapter -- --config-home /example/tinstar-config --audit-file /example/worker-links.jsonl
