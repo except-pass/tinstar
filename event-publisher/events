@@ -6,7 +6,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { parseArgs } from 'node:util'
-import { deploymentLifecycleSource, deploymentSource, observeFloor } from './deployment.js'
+import { deploymentLifecycleSource, deploymentSource, observeDeploymentEndpoint } from './deployment.js'
 import { observeHome, sourcesFor } from './firstmate.js'
 import { githubInterval, githubObserver, githubSource, repositoryPattern } from './github.js'
 import { Journal, JournalConfigurationError } from './journal.js'
@@ -156,7 +156,7 @@ async function collect(journal, { homes, jira, repositories, deployment }, inter
     }
     if (deployment) {
       sources.push(deploymentSource)
-      providers.push([observeFloor, interval])
+      providers.push([observeDeploymentEndpoint, interval])
     }
     const taskCaches = new Map(homes.map(home => [home.id, {}]))
     journal.registerSources(sources, { reconcile: true })
@@ -293,8 +293,9 @@ function eventText(event, replay, health) {
   }
   if (source.provider === 'github' || source.provider === 'deployment') {
     const labels = [replay && 'replay', source.mode].filter(Boolean)
-    const compact = source.provider === 'github' ? `${reference.repository}#${reference.number}` : reference.target
-    const category = source.provider === 'github' ? 'github/pr' : 'floor/deployment'
+    const compact = source.provider === 'github' ? `${reference.repository}#${reference.number}` :
+      reference.endpoint ? `revision answering at ${reference.endpoint}` : reference.target
+    const category = source.provider === 'github' ? 'github/pr' : reference.endpoint ? 'deployment' : 'floor/deployment'
     const render = value => {
       if (change.field === 'checks') {
         const groups = Object.groupBy(value, run => run.conclusion ?? run.status)

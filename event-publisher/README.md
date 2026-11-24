@@ -1,7 +1,7 @@
 # Event Publisher
 
 A standalone publisher for First Mate task and worker observations, signed
-Jira ticket changes, GitHub pull requests, the running Tin Star floor revision,
+Jira ticket changes, GitHub pull requests, the revision answering at the deployment endpoint,
 and operator-recorded mate migrations. All sources share one SQLite journal and
 terminal reader.
 
@@ -141,12 +141,13 @@ secret, and a new authenticated public route. None was granted for this phase.
 
 [GitHub delivery verification](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 
-## Observe the running floor revision
+## Observe the revision answering at the deployment endpoint
 
 Set `"deployment": true` to enable the existing loopback GET at
 `http://127.0.0.1:5281/api/deployment`. It can run independently or beside First
-Mate. The endpoint reports the exact running build SHA for the local floor
-target. The first read emits `deployment.running.observed`. Later differences
+Mate. The source and subject identify the endpoint URL on the observing host.
+The first read emits `deployment.running.observed` for the build SHA answering
+at that URL. Later differences
 emit `deployment.revision.changed` with the previous and current SHA.
 
 ```sh
@@ -395,7 +396,7 @@ pass.
   as the service account, then check its pull request and check read access for
   the affected repository. If the quota reserve was reached, wait for the shared
   budget to replenish.
-- For deployment coverage, check the local floor endpoint before changing
+- For deployment coverage, check the configured deployment endpoint before changing
   service configuration. A healthy read shows the exact current build SHA.
 - For an unavailable task source, check that the service account can execute
   `bin/fm-tasks-axi.sh` and read its backlog, and that `tasks-axi` is on PATH.

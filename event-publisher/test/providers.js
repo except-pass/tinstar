@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { deploymentSource, observeFloor, parseFloorAudit } from '../deployment.js'
+import { deploymentSource, observeDeploymentEndpoint, parseFloorAudit } from '../deployment.js'
 import { entityId, sourcesFor } from '../firstmate.js'
 import { githubObserver, githubSource } from '../github.js'
 import { Journal } from '../journal.js'
@@ -346,7 +346,7 @@ test('First Mate configuration leaves GitHub and deployment unconnected without 
     await rejects(exec(cli, ['observe', '--db', path, '--config', config]), { code: 1 })
     const { stdout } = await exec(cli, ['sources', '--db', path])
     match(stdout, /github:linked-pulls unconnected/)
-    match(stdout, /deployment:tinstar-floor:.* unconnected · Tin Star floor running revision/)
+    match(stdout, /deployment:.*:http:\/\/127\.0\.0\.1:5281\/api\/deployment unconnected · revision answering at http:/)
   }
 })
 
@@ -405,27 +405,32 @@ test('deployment observes an exact running build through outages and restart wit
   let sha = revision
   const options = {
     now: () => new Date(at(second++)),
-    fetchFloor: async (url, options) => {
+    fetchEndpoint: async (url, options) => {
       equal(url, 'http://127.0.0.1:5281/api/deployment')
       equal(options.redirect, 'error')
       return Response.json({ ok: true, data: { sha, pr: pullUrl } })
     },
   }
-  equal(await observeFloor(journal, undefined, options), true)
+  equal(await observeDeploymentEndpoint(journal, undefined, options), true)
   const [first] = journal.events()
-  deepEqual(first.change.after, { environment: 'floor', lifecycle: 'running', revision, native_deployment_id: null })
+  deepEqual(first.change.after, { environment: null, lifecycle: 'running', revision, native_deployment_id: null })
+  const endpoint = 'http://127.0.0.1:5281/api/deployment'
+  equal(first.subject.id, deploymentSource.source_id)
+  ok(first.subject.id.endsWith(endpoint))
+  equal(first.evidence.source_reference.endpoint, endpoint)
+  equal(first.evidence.confidence_basis, `revision answering at ${endpoint}`)
   deepEqual(first.related, [])
   ok(!JSON.stringify(first).includes(pullUrl))
   sha = null
-  equal(await observeFloor(journal, undefined, options), false)
+  equal(await observeDeploymentEndpoint(journal, undefined, options), false)
   equal(journal.tail(), first.sequence)
   equal(journal.sources()[0].last_success_at, first.observed_at)
 
   journal.close()
   journal = new Journal(path)
   sha = nextRevision
-  equal(await observeFloor(journal, undefined, options), true)
-  equal(await observeFloor(journal, undefined, options), true)
+  equal(await observeDeploymentEndpoint(journal, undefined, options), true)
+  equal(await observeDeploymentEndpoint(journal, undefined, options), true)
   const [change] = journal.events({ after: first.sequence, type: 'deployment' })
   equal(change.event_type, 'deployment.revision.changed')
   deepEqual(change.related, [])
@@ -437,7 +442,9 @@ test('deployment observes an exact running build through outages and restart wit
   const detail = await exec(cli, ['inspect', '--db', path, change.event_id])
   deepEqual(JSON.parse(detail.stdout), change)
   const status = await exec(cli, ['sources', '--db', path])
-  match(status.stdout, /deployment:.* ok · Tin Star floor running revision/)
+  ok(status.stdout.includes(`${deploymentSource.source_id} [live] ok · revision answering at ${endpoint}`))
+  const replay = await exec(cli, ['replay', '--db', path, '--source', 'deployment', '--last', '2'])
+  equal(replay.stdout.trim().split('\n').filter(line => line.includes(`revision answering at ${endpoint}`)).length, 2)
   match(status.stdout, /deployment:lifecycle unconnected · deployment attempts, smoke, failure and rollback/)
   match(status.stdout, /github:linked-pulls unconnected/)
   match(status.stdout, /jira:ticket unconnected/)

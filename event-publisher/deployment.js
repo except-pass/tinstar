@@ -1,11 +1,11 @@
 import { hostname } from 'node:os'
 
 const shaPattern = /^[a-f0-9]{40}$/
-const floorUrl = 'http://127.0.0.1:5281/api/deployment'
-const floorTarget = `tinstar-floor:${encodeURIComponent(hostname())}:5281`
+const deploymentEndpoint = 'http://127.0.0.1:5281/api/deployment'
+const deploymentTarget = `${encodeURIComponent(hostname())}:${deploymentEndpoint}`
 export const deploymentSource = {
-  source_id: `deployment:${floorTarget}`, provider: 'deployment', type: 'deployment', mode: 'live', home_path: null,
-  coverage: 'Tin Star floor running revision',
+  source_id: `deployment:${deploymentTarget}`, provider: 'deployment', type: 'deployment', mode: 'live', home_path: null,
+  coverage: `revision answering at ${deploymentEndpoint}`,
   command: 'loopback GET /api/deployment',
 }
 
@@ -71,37 +71,36 @@ export function deploymentDiff(before, after) {
   }] }
 }
 
-export async function observeFloor(journal, signal, { fetchFloor = fetch, now = () => new Date() } = {}) {
+export async function observeDeploymentEndpoint(journal, signal, { fetchEndpoint = fetch, now = () => new Date() } = {}) {
   const startedAt = now().toISOString()
   const timeout = AbortSignal.timeout(5000)
   let revision, reason
   try {
-    const response = await fetchFloor(floorUrl, {
+    const response = await fetchEndpoint(deploymentEndpoint, {
       redirect: 'error', cache: 'no-store', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     })
     if (response.ok) {
       const body = await response.json()
       if (body?.ok === true && typeof body.data?.sha === 'string' && shaPattern.test(body.data.sha)) {
         revision = body.data.sha
-      } else reason = 'floor endpoint did not identify a running revision'
+      } else reason = 'deployment endpoint did not identify a running revision'
     } else {
       await response.body?.cancel()
-      reason = `floor endpoint returned HTTP ${response.status}`
+      reason = `deployment endpoint returned HTTP ${response.status}`
     }
   } catch {
-    reason = 'floor revision endpoint could not be read'
+    reason = 'deployment endpoint could not be read'
   }
   if (signal?.aborted) return
   const observedAt = now().toISOString()
   const entries = revision ? [{
-    // The endpoint identifies an exact target and build. It has no attempt ID.
-    id: `deployment:${floorTarget}`,
+    id: deploymentSource.source_id,
     startedAt, observedAt,
-    fields: { environment: 'floor', revision, lifecycle: 'running', native_deployment_id: null },
+    fields: { environment: null, revision, lifecycle: 'running', native_deployment_id: null },
     related: [],
     evidence: {
-      source_reference: { endpoint: floorUrl, target: floorTarget },
-      confidence_basis: 'build SHA reported by the running Tin Star floor',
+      source_reference: { endpoint: deploymentEndpoint, target: deploymentTarget },
+      confidence_basis: deploymentSource.coverage,
     },
   }] : []
   return journal.recordProviderPoll(deploymentSource, {
