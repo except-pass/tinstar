@@ -1,7 +1,7 @@
 import { homeName } from '../../cockpit/overviewQuery'
 import { firstMateRequestSchema, requestAnchor } from '../../shared/deskSource'
 import type { OwnerReadyRead, OwnerRequestSource, OwnerMergeAsk, OwnerDecisionAsk } from '../../shared/ownerReady'
-import { inventoryPullState, type PullsRead } from '../../shared/pulls'
+import type { PullsRead } from '../../shared/pulls'
 import { releasePull } from '../../shared/pullIdentity'
 import { cardSourceUrl, isJiraCard } from '../../shared/workIdentity'
 import { decisionRecordRows, decisionRequests, withdrawnDecisionIds } from '../../shared/workflowRequests'
@@ -236,15 +236,20 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
 
 export function verifyOwnerMerges(read: OwnerReadyRead, inventory: PullsRead | null, states: ReadonlyMap<string, PullReadiness>) {
   const pulls = new Map(inventory?.pulls.filter(pull => pull.freshness === 'fresh').map(pull => [pull.id, pull]))
+  const closed = new Set(inventory?.closedPulls)
   for (const group of read.repositories) group.merges = group.merges.filter(merge => {
     if (!merge.url) return true
-    const scope = inventoryPullState(merge.url, inventory)
-    if (scope === 'not-open') return false
-    const pull = scope === 'open' ? pulls.get(releasePull(merge.url)!.id) : undefined
-    const observed = pull ? states.get(merge.url) : undefined
+    const id = releasePull(merge.url)!.id
+    const pull = pulls.get(id)
+    if (!pull && closed.has(id)) return false
+    const observed = states.get(merge.url)
     const fresh = observed?.status === 'fresh' && (!observed.expiresAt || Date.parse(observed.expiresAt) > Date.now()) &&
       (!pull?.observedAt || Date.parse(observed.observedAt ?? '') >= Date.parse(pull.observedAt))
     if (fresh && (observed.state === 'merged' || observed.state === 'closed')) return false
+    if (!pull) {
+      merge.live = { head: null, observedAt: null, state: 'unverified' }
+      return true
+    }
     const liveHead = fresh ? observed.head : pull?.head ?? null
     const changed = !!liveHead && merge.requestedHeads.some(head => head !== liveHead)
     const ready = fresh && observed.state === 'open' && !observed.draft && observed.checks === 'passed' && observed.mergeability === 'ready'

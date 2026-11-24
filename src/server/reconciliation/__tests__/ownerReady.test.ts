@@ -16,6 +16,8 @@ import { DomainReadTools } from '../domainReads'
 import { ReconciliationMcp } from '../mcp'
 import { authorizePrReadGrant } from '../prReadGrant'
 import { mergePublication, readyHeadPublication } from '../ownerRequestEvidence'
+import { verifyOwnerMerges } from '../ownerReady'
+import { releasePull } from '../../../shared/pullIdentity'
 import { SceneReconciler } from '../scene'
 import { QueuePullReader } from '../queuePulls'
 import { PullReader } from '../../pulls/reader'
@@ -135,7 +137,8 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     if (outage) throw new Error('Controlled forge evidence outage')
     if (path.endsWith('/pulls/4')) return { state: 'open', merged: false, draft: false, head: sibling, mergeable: true, mergeable_state: 'clean' }
     if (path.endsWith('/pulls/1')) return { state: 'open', merged: false, draft: false, head: liveHeads.get(moving), mergeable: true, mergeable_state: 'clean' }
-    if (path.endsWith('/pulls/2')) return { state: 'open', merged: false, draft: false, head: sibling, mergeable: true, mergeable_state: 'clean' }
+    if (path.endsWith('/pulls/3')) return { state: 'open', merged: false, draft: false, head: original, mergeable: true, mergeable_state: 'clean' }
+    if (path.endsWith('/pulls/2')) return { state: liveHeads.has(closing) ? 'open' : 'closed', merged: false, draft: false, head: sibling, mergeable: true, mergeable_state: 'clean' }
     if (path.includes('/check-runs?')) return { total: 1, returned: 1, pending: 0, failed: 0 }
     if (path.includes('/status?')) return { total: 0, state: 'pending' }
     throw new Error('Unexpected readiness call')
@@ -229,6 +232,9 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(bundle(pending, null)?.decisions).toHaveLength(1)
     expect([historical, restricted, releaseWait].map(url => merge(pending, url))).toEqual([undefined, undefined, undefined])
     expect((await call(mate, 'list_prs', { view: 'owner-ready', recheck: true })).outcome).toBe('unauthorized')
+    for (const recheck of [true, false]) {
+      expect(await call(granted, 'list_prs', { recheck })).toMatchObject({ outcome: 'invalid-input', message: 'recheck requires view: "owner-ready".' })
+    }
     expect((await browse(false)).status).toBe(403)
     expect(inventory).not.toHaveBeenCalled()
 
@@ -243,6 +249,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
 
     liveHeads.set(moving, changed)
     liveHeads.delete(closing)
+    liveHeads.delete(legacy)
     review.fields[fields.decisions] = 'D1 [Answered]: Choose launch wording\n  Answer: Use the short wording\n\nD2 [Open]: Confirm the launch date'
     await snapshotFile(main!, [])
     const records = JSON.stringify({ tickets, notes: [...comments], notionNotes })
@@ -258,6 +265,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(returned.recheckedAt).toBeTruthy()
     expect(merge(returned, moving)).toMatchObject({ requestedHeads: [original], live: { head: changed, state: 'stale' } })
     expect(merge(returned, closing)).toBeUndefined()
+    expect(merge(returned, legacy)?.live).toMatchObject({ head: null, state: 'unverified' })
     expect(merge(returned, unchanged)?.live?.state).toBe('ready')
     expect(bundle(returned, 'owner/repo')?.decisions.map(row => row.question)).toEqual(['Confirm the launch date', 'Choose a deployment window?'])
     expect(inventory.mock.calls.filter(([path]) => path.includes('state=open')).map(([path]) => path).sort()).toEqual([
@@ -266,10 +274,13 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(readScalars.mock.calls.map(([path]) => path).sort()).toEqual([
       `/repos/owner/other/commits/${sibling}/check-runs?per_page=100`,
       `/repos/owner/other/commits/${sibling}/status?per_page=100`, '/repos/owner/other/pulls/4',
+      '/repos/owner/repo/pulls/2', '/repos/owner/repo/pulls/3',
     ])
     expect(sourceWrites).toEqual([])
     expect(sources.waitingOnMain).not.toHaveBeenCalled()
     expect(JSON.stringify({ tickets, notes: [...comments], notionNotes })).toBe(records)
+
+    liveHeads.set(legacy, original)
 
     // A genuine replacement can refresh the ask; failed check coverage holds it.
     comments.get('10')!.unshift(entry(moving, changed, '26', '2026-11-23T13:00:00Z'))
@@ -389,4 +400,22 @@ it('accepts worker checks-green notices and rejects Jira-style worker prose', ()
   expect(readyHeadPublication(`pr-ready: PR ${moving} checks green at head ${original}`)).toBeNull()
   expect(readyHeadPublication(`PR ${moving} checks green at head ${original}`)).toBeNull()
   expect(readyHeadPublication(`done: PR ${moving} checks green ${original}`)).toBeNull()
+})
+
+it('retains explicit closure when another associated PR summary fails', async () => {
+  const at = new Date().toISOString()
+  const reader = new PullReader(async path => {
+    if (path.startsWith('/search/issues')) return { total_count: 0, incomplete_results: false, items: [] }
+    if (path.endsWith('/pulls/2')) return { state: 'closed', number: 2, html_url: closing, title: 'Closed fixture',
+      user: { login: 'owner' }, draft: false, head: { sha: sibling }, base: { ref: 'main' }, created_at: at, updated_at: at }
+    throw new Error('Unrelated summary unavailable')
+  })
+  const [repo] = await reader.inventory(['owner/repo'], { account: 'member', owners: ['member'],
+    associated: [releasePull(closing)!, releasePull(moving)!] })
+  expect(repo!.coverage.complete).toBe(false)
+  const read: OwnerReadyRead = { observedAt: at, warnings: [], repositories: [{ repository: 'owner/repo', decisions: [],
+    merges: [closing, moving].map(url => ({ url, requestedHeads: [sibling], unverifiedRequest: false, fresh: true, sources: [] })) }] }
+  verifyOwnerMerges(read, { pulls: [], closedPulls: repo!.closedPulls, repositories: [repo!.coverage],
+    warnings: [], associationsComplete: true }, new Map())
+  expect(read.repositories[0]?.merges).toMatchObject([{ url: moving, live: { state: 'unverified' } }])
 })

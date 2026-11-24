@@ -46,13 +46,13 @@ export async function readGithubScalars(path: string, projection: string, onStar
   return await githubCliJson(path, projection, { timeout: 5_000, maxBuffer: 64 * 1024 }, true, onStart) as Record<string, unknown>
 }
 
-async function readPull(url: string, read = readGithubScalars, expectedHead?: string): Promise<Omit<PullReadiness, 'status' | 'observedAt' | 'expiresAt'>> {
+async function readPull(url: string, read = readGithubScalars, expectedHead?: string | null): Promise<Omit<PullReadiness, 'status' | 'observedAt' | 'expiresAt'>> {
   const pull = parsePullUrl(url)
   if (!pull) throw new Error('Unsupported PR URL')
   const info = await read(pull.apiPath, '{state,merged,draft,head:.head.sha,mergeable,mergeable_state}')
   if (!['open', 'closed'].includes(String(info.state)) || typeof info.merged !== 'boolean' || typeof info.draft !== 'boolean' || !/^[a-f0-9]{40,64}$/.test(String(info.head))) throw new Error('Incomplete PR response')
   const state = info.merged ? 'merged' : info.state as 'open' | 'closed'
-  if (state !== 'open' || expectedHead && info.head !== expectedHead) {
+  if (state !== 'open' || expectedHead !== undefined && info.head !== expectedHead) {
     return { state, head: String(info.head), draft: info.draft, checks: 'unknown', mergeability: 'unknown' }
   }
   const headPath = `/repos/${pull.repository}/commits/${info.head}`
@@ -82,7 +82,7 @@ export class QueuePullReader {
   private cursor = 0
   constructor(private readonly read = readGithubScalars, private readonly now = Date.now) {}
 
-  async get(urls: string[], options?: { force?: boolean; expectedHeads?: ReadonlyMap<string, string>; readBudget?: number }): Promise<Map<string, PullReadiness>> {
+  async get(urls: string[], options?: { force?: boolean; expectedHeads?: ReadonlyMap<string, string | null>; readBudget?: number }): Promise<Map<string, PullReadiness>> {
     const result = new Map<string, PullReadiness>()
     let budget = options?.readBudget ?? queuePullReadBudget
     const work: Promise<void>[] = []
@@ -91,13 +91,15 @@ export class QueuePullReader {
     for (let offset = 0; offset < candidates.length; offset++) {
       const index = (start + offset) % candidates.length
       const url = candidates[index]!
-      const cached = this.cache.get(url)
-      let pending = this.pending.get(url)
+      const expectedHead = options?.expectedHeads?.get(url)
+      const key = expectedHead === null ? `closure:${url}` : url
+      const cached = this.cache.get(key)
+      let pending = this.pending.get(key)
       if (!pending && (options?.force || !cached || this.now() >= cached.retryAt) && budget > 0 && this.pending.size < queuePullReadBudget) {
         budget--
         this.cursor = (index + 1) % candidates.length
-        pending = this.refresh(url, options?.expectedHeads?.get(url)).finally(() => { this.pending.delete(url) })
-        this.pending.set(url, pending)
+        pending = this.refresh(url, key, expectedHead).finally(() => { this.pending.delete(key) })
+        this.pending.set(key, pending)
       }
       if (pending) work.push(pending.then(value => { result.set(url, this.age(value)) }))
       else if (cached && !options?.force) result.set(url, this.age(cached.value))
@@ -110,19 +112,19 @@ export class QueuePullReader {
     return value.expiresAt && this.now() >= Date.parse(value.expiresAt) ? { ...value, status: 'stale' } : value
   }
 
-  private async refresh(url: string, expectedHead?: string): Promise<PullReadiness> {
+  private async refresh(url: string, key: string, expectedHead?: string | null): Promise<PullReadiness> {
     let value: PullReadiness
     try {
       const result = await readPull(url, this.read, expectedHead)
       const observedAt = new Date(this.now()).toISOString()
       value = { ...result, status: 'fresh', observedAt, expiresAt: new Date(this.now() + 60_000).toISOString() }
     } catch {
-      const previous = this.cache.get(url)?.value
+      const previous = this.cache.get(key)?.value
       value = previous ? { ...previous, status: 'stale' } : { status: 'unknown', observedAt: null, expiresAt: null,
         state: 'unknown', head: null, draft: false, checks: 'unknown', mergeability: 'unknown' }
     }
-    this.cache.delete(url)
-    this.cache.set(url, { value, retryAt: this.now() + 60_000 })
+    this.cache.delete(key)
+    this.cache.set(key, { value, retryAt: this.now() + 60_000 })
     while (this.cache.size > 64) this.cache.delete(this.cache.keys().next().value!)
     return value
   }
