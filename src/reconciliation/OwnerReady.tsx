@@ -28,7 +28,7 @@ export function OwnerReady({ read }: { read: OwnerReadyRead }) {
     setChecking(true)
     setFailed(false)
     try {
-      const response = await apiFetch('/api/reconciliation/owner-ready?recheck=1', {
+      const response = await apiFetch('/api/reconciliation/owner-ready', {
         headers: { 'X-Tinstar-UI': '1' }, signal: AbortSignal.timeout(60_000),
       })
       const body = await response.json()

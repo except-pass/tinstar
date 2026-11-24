@@ -724,7 +724,6 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
   const query = new URL(req.url!, 'http://localhost').searchParams
   if (path === '/api/reconciliation/owner-ready') {
     if (!await sources.authorizePulls?.(req)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required for the owner-ready bundle.', { headers })
-    if (query.get('recheck') !== '1') return fail(res, 'NOT_FOUND', 'Owner-ready recheck requires recheck=1.', { headers })
     return ok(res, await sources.ownerReadyWithPulls(true), { headers })
   }
   const refresh = query.get('refresh') === '1'

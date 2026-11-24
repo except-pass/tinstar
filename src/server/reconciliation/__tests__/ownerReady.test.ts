@@ -182,7 +182,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     }
     const granted = await connect(true), mate = await connect(false)
     const call = async (client: Client, name: string, args = {}) => JSON.parse(text(await client.callTool({ name, arguments: args })))
-    const browse = (recheck = true, owner = true) => fetch(`${base}/api/reconciliation/owner-ready${recheck ? '?recheck=1' : ''}`, {
+    const browse = (owner = true) => fetch(`${base}/api/reconciliation/owner-ready`, {
       headers: owner ? { 'Tailscale-User-Login': author } : undefined,
     })
 
@@ -229,8 +229,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(bundle(pending, null)?.decisions).toHaveLength(1)
     expect([historical, restricted, releaseWait].map(url => merge(pending, url))).toEqual([undefined, undefined, undefined])
     expect((await call(mate, 'list_prs', { view: 'owner-ready', recheck: true })).outcome).toBe('unauthorized')
-    expect((await browse(true, false)).status).toBe(403)
-    expect((await browse(false)).status).toBe(404)
+    expect((await browse(false)).status).toBe(403)
     expect(inventory).not.toHaveBeenCalled()
 
     // Reconstruct Tin Star with a stale Main file and the very same native records.
