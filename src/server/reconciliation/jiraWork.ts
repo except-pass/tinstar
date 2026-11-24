@@ -691,6 +691,7 @@ export class JiraWork extends JiraClient {
     let boundary: Awaited<ReturnType<JiraWork['notes']>>['comments'][number] | undefined
     let expectedTotal: number | undefined
     const heads = new Set<string>()
+    let legacy = false
     let newest: { head: string; createdAt: number; id: string } | undefined
     for (let page = 0; page < 5; page++) {
       const { comments, total } = await this.notes(id, offset, signal)
@@ -702,13 +703,14 @@ export class JiraWork extends JiraClient {
         const createdAt = Date.parse(comment.created_at)
         if (!body || comment.author_id !== account || !nativeId(comment.id) || !(createdAt > after) || !coordinatorReviewNote(body)) continue
         const request = mergePublication(body.split('\n', 1)[0]!, true)
-        if (request?.url !== pull || !request.head) continue
+        if (request?.url !== pull || request.conditional) continue
+        if (!request.head) { legacy = true; continue }
         heads.add(request.head)
         if (!newest || createdAt > newest.createdAt || createdAt === newest.createdAt && BigInt(comment.id) > BigInt(newest.id)) {
           newest = { head: request.head, createdAt, id: comment.id }
         }
       }
-      if (offset + comments.length >= total) return { current: newest?.head, heads }
+      if (offset + comments.length >= total) return { current: newest?.head ?? (legacy ? null : undefined), heads }
       if (comments.length < 2) break
       expectedTotal = total
       boundary = comments.at(-1)
