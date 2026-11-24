@@ -99,16 +99,19 @@ On Serena, verify that the active broker config has `sync_interval: always`
 in its `jetstream` block. If it is missing, add it, validate the config with
 `nats-server -t -c /etc/tinstar-jetstream/nats.conf`, restart
 `nats-server.service`, and confirm the existing file-backed stream is available.
-Keep the existing store directory. If the broker has had a disk fault or
-stream loss is suspected, use the checkpoint reset and replay procedure below
-before starting the permanent relay.
+Keep the existing store directory.
 
-Check replay from an isolated journal backup into an empty Serena stream with
-no deduplication history. After recording the proof, stop the test relay
-and recreate the stream before the permanent relay's initial replay. Keep
-Hulk's signed Jira ingress and publisher running throughout the cutover.
-Install and start the permanent Hulk relay as a
-supervised service with the live journal and supervised SSH forward.
+Stop the named live relay if it is running and keep it stopped throughout
+the isolated proof. Keep Hulk's signed Jira ingress and publisher running
+throughout the cutover. Prepare an empty Serena stream with no deduplication
+history, recreating it if needed after a broker disk fault or suspected
+stream loss. Check replay into that stream from an isolated journal backup.
+
+After recording the proof, stop the test relay and recreate the stream.
+With the live relay still stopped, [reset only its checkpoint in the live
+journal](#reset-the-relay-checkpoint). Then start the permanent Hulk relay as
+a supervised service with the live journal and supervised SSH forward so it
+replays eligible facts from zero.
 
 Once the supervised relay is running, read the current live journal tip
 immediately before triggering a controlled Jira status change.
@@ -180,6 +183,11 @@ Start with an empty stream and an empty deduplication history. When replay
 targets a populated stream, older facts can evict recent ones under the byte
 limit, and cached IDs can cause JetStream to acknowledge those recent facts
 without storing them again. If the destination changed, update the relay config.
+
+### Reset the relay checkpoint
+
+Keep the named relay stopped until the final stream recreation or replacement
+is complete and its checkpoint has been removed.
 As the journal owner on Hulk, remove only that relay's checkpoint from the
 live journal, then restart the relay to replay eligible facts from zero.
 For the shipped `hulk-jira` relay, run:
