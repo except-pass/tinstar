@@ -820,8 +820,14 @@ it.each([false, true])('records and queues a verified Jira handoff after create 
   const handoff = (await first.client.listTools()).tools.find(tool => tool.name === 'submit_handoff')!
   expect(handoff.description).toContain('create a Jira TSW ticket')
   expect(handoff.description).not.toContain('Notion')
-  const badTarget = await first.client.callTool({ name: 'submit_handoff', arguments: { ...input, target: { ...input.target, provider: 'notion' } } })
-  expect(badTarget).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('Jira is the only creation target') }] })
+  const validate = addFormats(new Ajv({ strict: false })).compile(handoff.inputSchema)
+  expect(validate(input)).toBe(true)
+  for (const provider of ['jira', 'notion']) {
+    const argumentsWithProvider = { ...input, target: { ...input.target, provider } }
+    expect(validate(argumentsWithProvider)).toBe(false)
+    const badTarget = await first.client.callTool({ name: 'submit_handoff', arguments: argumentsWithProvider })
+    expect(badTarget).toMatchObject({ isError: true })
+  }
   expect(f.requests.filter(({ method, path }) => method === 'POST' && path === 'issue')).toHaveLength(0)
   const firstAttempt = await first.call('submit_handoff', input)
   if (loseCreate) expect(firstAttempt).toMatchObject({ outcome: 'partially-saved' })

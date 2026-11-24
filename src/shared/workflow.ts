@@ -103,10 +103,8 @@ export const submitHandoffSchema = z.object({
   submission_id: identity.refine(value => value.length <= 128, 'Maximum 128 characters'),
   target: z.union([
     z.object({ card_id: handoffCardId }).strict(),
-    z.object({ provider: jiraCreationProvider.optional(), external_ref: identity.refine(value => value.length <= 512, 'Maximum 512 characters'), candidate_ids: z.array(handoffCardId).max(20).default([]) }).strict(),
-  ], { errorMap: (_issue, ctx) => ({
-    message: ctx.data?.provider !== undefined && ctx.data.provider !== 'jira' ? jiraCreationTargetMessage : ctx.defaultError,
-  }) }),
+    z.object({ external_ref: identity.refine(value => value.length <= 512, 'Maximum 512 characters'), candidate_ids: z.array(handoffCardId).max(20).default([]) }).strict(),
+  ]),
   title: label, area: label, owner: label,
   initiative: ordinaryPropertiesSchema.shape.Initiative, epic: ordinaryPropertiesSchema.shape.Epic,
   priority: label.optional(), parent_card_id: handoffCardId.optional(),
