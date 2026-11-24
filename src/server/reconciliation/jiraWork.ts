@@ -57,6 +57,7 @@ type Issue = {
 type Attempt = {
   marker: string
   dispatched: boolean
+  stage: (write: () => Promise<unknown>) => Promise<void>
   dispatch: () => Promise<void>
   confirm: (card: Issue) => ReturnType<JiraWork['saved']>
 }
@@ -600,6 +601,7 @@ export class JiraWork extends JiraClient {
     const marker = `tinstar.work.${digest(key)}`
     let pending = false
     let sent = false
+    let staged = false
     const cardId = 'card_id' in input ? input.card_id : undefined
     let unlock: Awaited<ReturnType<typeof acquireLock>> | undefined
     try {
@@ -622,12 +624,27 @@ export class JiraWork extends JiraClient {
       if (prior?.jiraWork?.outcome) return prior.jiraWork.outcome
       const dispatched = prior?.jiraWork?.dispatched === true
       pending = dispatched
+      staged = prior?.jiraWork?.staged === true
       if (preflight && !dispatched && !preflightComplete) throw new JiraWorkInputError('Jira dispatch changed during preflight. Retry the same operation.')
       if (!prior) await this.receipts.putJiraWork(key, verb, false)
       return await run({
         marker, dispatched,
+        stage: async write => {
+          const previouslyStaged = staged
+          await this.receipts.putJiraWork(key, verb, false, undefined, true)
+          staged = true
+          try {
+            await write()
+          } catch (error) {
+            if (isWriteRejection(error)) {
+              await this.receipts.putJiraWork(key, verb, false, undefined, previouslyStaged)
+              staged = previouslyStaged
+              throw error
+            }
+          }
+        },
         dispatch: async () => {
-          await this.receipts.putJiraWork(key, verb, true)
+          await this.receipts.putJiraWork(key, verb, true, undefined, staged)
           pending = true
           sent = true
         },
@@ -652,15 +669,16 @@ export class JiraWork extends JiraClient {
         return { outcome: 'partially-saved' as const, code: 'unconfirmed' as const, operation_id: input.operation_id, message: 'Jira rate-limited the handoff. Retry the same operation.' }
       }
       const rejected = sent && isWriteRejection(error)
-      const unconfirmed = pending && !rejected
+      const unconfirmed = (pending || staged) && !rejected
       const result = {
-        outcome: unconfirmed ? 'partially-saved' as const : 'not-saved' as const,
+        outcome: unconfirmed || staged ? 'partially-saved' as const : 'not-saved' as const,
         code: unconfirmed ? 'unconfirmed' as const : error instanceof JiraWorkInputError ? 'invalid-work' as const : 'jira-unavailable' as const,
         operation_id: input.operation_id, ...(!rejected && cardId ? { card_id: cardId } : {}),
-        message: unconfirmed ? `Unconfirmed. Check Jira. ${this.message(error)}` : this.message(error),
+        message: staged ? `Blocker and next check-in may have been saved. Check Jira. ${this.message(error)}`
+          : unconfirmed ? `Unconfirmed. Check Jira. ${this.message(error)}` : this.message(error),
       }
       if (rejected || error instanceof JiraCreateContradiction || error instanceof JiraAuditRejected) {
-        await this.receipts.putJiraWork(key, verb, true, result)
+        await this.receipts.putJiraWork(key, verb, true, result, staged)
       }
       return result
     } finally { await unlock?.() }
@@ -1057,9 +1075,9 @@ export class JiraWork extends JiraClient {
       if (wait && !waitMatches(current)) {
         // A screenless Jira transition accepts only the transition ID. Commit
         // and verify the complete wait while still in the source status.
-        await this.request(`issue/${id}`, 'PUT', { fields: { ...this.blockerFields(wait.data.blocker), duedate: wait.data.next_check_in } }).catch(error => {
-          if (isWriteRejection(error)) throw error
-        })
+        await attempt.stage(() => this.request(`issue/${id}`, 'PUT', {
+          fields: { ...this.blockerFields(wait.data.blocker), duedate: wait.data.next_check_in },
+        }))
         const staged = await this.read(id)
         if (!waitMatches(staged)) throw new JiraWorkUnconfirmed('Jira did not confirm the blocker and next check-in before Block')
         if (staged.status !== current.status || staged.owner !== current.owner || staged.assignee_id !== current.assignee_id) {
@@ -1068,9 +1086,6 @@ export class JiraWork extends JiraClient {
       }
       await attempt.dispatch()
       await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: transitionId } }).catch(error => {
-        if (wait && isWriteRejection(error)) {
-          throw new JiraWorkUnconfirmed(`The blocker and next check-in are saved. Jira rejected Block (HTTP ${error.status}).`)
-        }
         if (!note || isWriteRejection(error)) throw error
       })
       const saved = await readDestination(to)

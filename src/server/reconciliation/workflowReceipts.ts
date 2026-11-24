@@ -31,7 +31,7 @@ interface JiraWorkOutcome {
   card_id?: string
   message: string
 }
-interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState; review?: ReviewReceiptState; jiraWork?: { dispatched: boolean; outcome?: JiraWorkOutcome }; clawsonMerge?: { plan: ClawsonMergePlan; stagedCardId?: string } }
+interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState; review?: ReviewReceiptState; jiraWork?: { dispatched: boolean; staged?: boolean; outcome?: JiraWorkOutcome }; clawsonMerge?: { plan: ClawsonMergePlan; stagedCardId?: string } }
 const writers = new Map<string, Promise<unknown>>()
 
 /** Creation latches and handoff reconciliation state share this receipt store.
@@ -72,8 +72,8 @@ export class CreationReceipts {
   put(key: string, input: string, cardId?: string, handoff?: HandoffReceiptState) {
     return this.change(values => { values[key] = { input, ...(cardId ? { cardId } : {}), ...(handoff ? { handoff } : {}) } })
   }
-  putJiraWork(key: string, kind: string, dispatched: boolean, outcome?: JiraWorkOutcome) {
-    return this.change(values => { values[key] = { input: kind, jiraWork: { dispatched, ...(outcome ? { outcome } : {}) } } })
+  putJiraWork(key: string, kind: string, dispatched: boolean, outcome?: JiraWorkOutcome, staged = false) {
+    return this.change(values => { values[key] = { input: kind, jiraWork: { dispatched, ...(staged ? { staged } : {}), ...(outcome ? { outcome } : {}) } } })
   }
   putClawsonMerge(key: string, input: string, plan: ClawsonMergePlan, stagedCardId?: string) {
     return this.change(values => {

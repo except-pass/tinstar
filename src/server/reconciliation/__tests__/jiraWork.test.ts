@@ -701,9 +701,9 @@ async function tswFixture() {
       fm_home: '/fixture/fm-offline', generated: new Date().toISOString(),
       main_inventory: { valid: true }, tasks, backlog: { present: true, records: [] } }))
   }
-  const run = async (apply: boolean, maxCards = 5, interruptSubmit = false) => runTswStatusSync(await sources.fleetSnapshot(true), {
+  const run = async (apply: boolean, maxCards = 5, interruptSubmit: boolean | string = false) => runTswStatusSync(await sources.fleetSnapshot(true), {
     jira: f.jira(), stateFile: join(f.root, 'status-checkpoints.json'), apply, maxCards, audit: async entry => {
-      if (interruptSubmit && entry.result === 'write-planned' && entry.operationId?.endsWith('-ready-for-review')) throw new Error('Interrupted before submit')
+      if (interruptSubmit && entry.result === 'write-planned' && entry.operationId?.endsWith(typeof interruptSubmit === 'string' ? interruptSubmit : '-ready-for-review')) throw new Error('Interrupted before write')
     },
   })
   return { ...f, call, create, publish, publishBackup, run }
@@ -774,6 +774,63 @@ it('applies each TSW decision and external wait once even after an answer, wait 
   const afterResolve = writes()
   expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'event-already-applied' }))
   expect(writes()).toBe(afterResolve)
+})
+
+it('considers review and later wait requests while an answered decision remains open', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('open requests')
+  const decision = { verb: 'needs-decision', key: 'window', summary: 'Which release window?' }
+  const seen = { last_event_text: `done: PR ${fixturePull} checks green at head ${fixtureHead}` }
+  const publish = (open_decisions: unknown[], detail = '') => f.publish([
+    tswTask(key, detail, 'off', { hints: { ...seen, open_decisions } }),
+  ])
+  await publish([decision])
+  await f.run(true)
+  expect(await f.call('update_work', { kind: 'jira_edit', card_id, operation_id: 'answer', answers: [{ id: 'D1', answer: 'Tonight.' }] }))
+    .toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'resume', verb: 'Answer Decision', to: 'In Progress', evidence: 'Resuming.' }))
+    .toMatchObject({ outcome: 'saved' })
+  await publish([decision], 'checks green: PR ready for review')
+  expect((await f.run(false)).plans[0]?.event.target).toBe('Ready for Review')
+  await publish([decision, { verb: 'blocked', key: 'invalid', summary: 'wait {}' },
+    { verb: 'blocked', key: 'valid', summary: `wait ${JSON.stringify(typedWait)}` }])
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'external-wait-invalid' }))
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker })
+})
+
+it('replans an owner-only wait after a Jira move and definitive Block rejections', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('interrupted wait')
+  const wait = { verb: 'blocked', key: 'window', summary: `wait ${JSON.stringify(typedWait)}` }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [wait] } })])
+  expect((await f.run(true, 1, '-waiting-for')).stopped).toBe(true)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Backlog', owner: 'Firstmate fleet' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'prioritize', verb: 'Prioritize' })).toMatchObject({ outcome: 'saved' })
+  f.controls.refuseTransition = true
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'write-rejected' }))
+    expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'To Do', blocker: typedWait.blocker })
+  }
+  f.controls.refuseTransition = false
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker })
+})
+
+it('keeps a distinct wait actionable after a matching Jira wait resolves', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('matching wait')
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'To Do' }
+  issue.fields[config.fields.owner] = { value: 'Avery' }
+  expect(await f.call('transition_work', { card_id, operation_id: 'native-wait', verb: 'Block', ...typedWait })).toMatchObject({ outcome: 'saved' })
+  const wait = { verb: 'blocked', key: 'new-wait', summary: `wait ${JSON.stringify(typedWait)}` }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [wait] } })])
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'already-at-target' }))
+  expect(await f.call('update_work', { card_id, operation_id: 'clear-blocker', kind: 'jira_edit', blocker: null })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'resolve-wait', verb: 'Resolve Wait', to: 'To Do', evidence: 'Resolved.' }))
+    .toMatchObject({ outcome: 'saved' })
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker })
 })
 
 it('keeps existing Waiting For fields and skips a decision when Jira does not offer the move', async () => {
@@ -1864,7 +1921,7 @@ it('requires typed Block arguments and confirms the Jira wait before and after t
   expect(writes()).toHaveLength(0)
   f.controls.beforeWrite = 'PUT issue/60001'
   const input = { ...block, ...typedWait }
-  expect(await call('transition_work', input)).toMatchObject({ outcome: 'not-saved' })
+  expect(await call('transition_work', input)).toMatchObject({ outcome: 'partially-saved', code: 'unconfirmed' })
   expect(writes().map(request => request.path)).toEqual(['issue/60001'])
   f.controls.loseEdit = true
   expect(await call('transition_work', input)).toMatchObject({ outcome: 'saved', card: { status: 'Waiting For' } })

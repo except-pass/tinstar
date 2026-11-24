@@ -13,7 +13,7 @@ type CardState = Pick<JiraWorkCard, 'status' | 'assignee_id' | 'owner'>
 type Pending = { eventId: string; target?: StatusEvent['target']; input: Step; actor: string; before: CardState; unconfirmed?: number; retry?: boolean; rejectedAttempts?: number }
 type NoteRepair = { input: JiraTransition; actor: string; attempts: number; queuedAt?: number }
 type DecisionQuestion = { eventId: string; id: string }
-type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean; rejectedSteps?: Record<string, number>; handledEvents?: string[]; appliedEvents?: string[]; reviewNotes?: string[]; decisionQuestion?: DecisionQuestion }
+type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; target?: StatusEvent['target']; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean; rejectedSteps?: Record<string, number>; handledEvents?: string[]; appliedEvents?: string[]; reviewNotes?: string[]; decisionQuestion?: DecisionQuestion }
 type StatusAudit = { provider: 'jira'; time: string; cardId: string | null; result: string; home?: string; task?: string; eventId?: string; operationId?: string; detail?: string }
 type Options = {
   jira?: Pick<JiraWork, 'readTswCard' | 'statusHistory' | 'tswReviewNote' | 'edit' | 'transition' | 'findAssignableAccount' | 'repairTransitionAudit' | 'offersTransition'>
@@ -170,7 +170,8 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
       await audit(finding.key ?? null, finding.reason, { home: finding.home, task: finding.task })
     }
     if (!jira) {
-      for (const event of events.filter(event => allowed(event.key))) {
+      for (const [event] of events.values()) {
+        if (!event || !allowed(event.key)) continue
         plans.push({ event })
         await audit(event.key, 'tsw-jira-unconfigured', { home: event.home, task: event.task, eventId: event.id })
       }
@@ -211,14 +212,14 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
         })
       }
     }
-    const byKey = new Map<string, StatusEvent | undefined>(events.map(event => [event.key, event]))
     for (const [key, checkpoint] of Object.entries(state)) {
       const input = checkpoint.pending?.input
-      if (!byKey.has(key) && input && (isSideState(checkpoint.pending?.target) || linearVerbs.some(verb => !isEdit(input) && input.verb === verb))) byKey.set(key, undefined)
+      if (!events.has(key) && input && (isSideState(checkpoint.pending?.target) || linearVerbs.some(verb => !isEdit(input) && input.verb === verb))) events.set(key, [])
     }
-    for (const [key, event] of byKey) {
+    for (const [key, candidates] of events) {
       const previous = state[key]
-      const eventId = event?.id ?? previous?.pending?.eventId ?? ''
+      let event = candidates.find(candidate => candidate.id === previous?.pending?.eventId) ?? candidates[0]
+      let eventId = event?.id ?? previous?.pending?.eventId ?? ''
       const log = (result: string, operationId?: string, detail?: string) =>
         audit(key, result, { home: event?.home, task: event?.task, eventId, operationId, detail })
       if (!allowed(key)) continue
@@ -230,11 +231,21 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
         if (previous && previous.cardId !== card.id) { await log('issue-identity-changed'); continue }
         let history = await jira.statusHistory(card.id, previous?.cursor)
         let checkpoint: Checkpoint = previous ?? { cardId: card.id, cursor: history.cursor, eventId, completed: [] }
+        const previousTarget = () => checkpoint.target ?? candidates.find(candidate => candidate.id === checkpoint.eventId)?.target ??
+          (checkpoint.pending?.eventId === checkpoint.eventId ? checkpoint.pending?.target : undefined)
         if (history.changes.length && (!checkpoint.pending || !confirms(checkpoint.pending, card, history.changes))) {
           const { pending, ...prior } = checkpoint
           const handledEvents = new Set(prior.handledEvents)
-          if (prior.completed.length) handledEvents.add(prior.eventId)
-          if (pending) handledEvents.add(pending.eventId)
+          const priorTarget = previousTarget()
+          if (prior.completed.length && priorTarget !== 'Waiting For') handledEvents.add(prior.eventId)
+          if (pending) {
+            if (!isEdit(pending.input) && pending.input.verb === 'Block') {
+              const change = history.changes.find(change => change.field === 'status')
+              if (change?.byService && change.from === pending.before.status && change.to === 'Waiting For') handledEvents.add(pending.eventId)
+            } else if (pending.target !== 'Waiting For') {
+              handledEvents.add(pending.eventId)
+            }
+          }
           checkpoint = { ...prior, cursor: history.cursor, statusVersion: statusVersion(history.changes, prior.statusVersion),
             preserveAssignee: prior.preserveAssignee || history.changes.some(change => change.field === 'assignee'),
             handledEvents: [...handledEvents] }
@@ -292,7 +303,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
             return false
           }
           const attempts = (pending.rejectedAttempts ?? 0) + 1 + Number(!!pending.retry)
-          if (outcome.outcome === 'not-saved' && outcome.code === 'jira-unavailable' && outcome.card_id === undefined) {
+          if (outcome.code === 'jira-unavailable' && outcome.card_id === undefined) {
             const { pending: _pending, ...prior } = checkpoint
             checkpoint = { ...prior, rejectedSteps: { ...prior.rejectedSteps, [original.operation_id]: attempts } }
             await save(key, checkpoint)
@@ -310,16 +321,17 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
               // A superseded question may already have an owner answer, even
               // if its separate Request Decision transition never landed.
               if (prior.decisionQuestion?.eventId === prior.eventId) handledEvents.add(prior.eventId)
-              else appliedEvents.add(prior.eventId)
+              else if (previousTarget() !== 'Waiting For') appliedEvents.add(prior.eventId)
             }
             const target = pending.target ?? (event?.id === pending.eventId ? event.target : undefined)
             if (card.status === target) {
-              if (isSideState(target)) handledEvents.add(pending.eventId)
-              else appliedEvents.add(pending.eventId)
+              if (isSideState(target)) {
+                if (target !== 'Waiting For' || !isEdit(original)) handledEvents.add(pending.eventId)
+              } else appliedEvents.add(pending.eventId)
             }
             const questionId = target === 'Decision' && isEdit(original) ? original.add_questions?.[0]?.id : undefined
             if (missingNote) lastQueuedAt = Math.max(now(), lastQueuedAt + 1)
-            checkpoint = { ...prior, cursor: history.cursor, eventId: pending.eventId,
+            checkpoint = { ...prior, cursor: history.cursor, eventId: pending.eventId, target,
               reviewNotes: isEdit(original) && /-edit-review$/.test(original.operation_id)
                 ? [...new Set([...prior.reviewNotes ?? [], pending.eventId])] : prior.reviewNotes,
               appliedEvents: [...appliedEvents].slice(-50),
@@ -368,62 +380,65 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           resumed = true
           if (!await execute(checkpoint.pending)) continue
         }
-        if (!event) continue
-        if (checkpoint.handledEvents?.includes(eventId) ||
-            checkpoint.appliedEvents?.includes(eventId)) {
-          await log('event-already-applied')
-          continue
-        }
-        const existing = event.target === 'Ready for Review' && event.head
-          ? await jira.tswReviewNote(card.id, event.pull) : undefined
-        if (apply && event.target === 'Ready for Review' && event.head && existing?.heads.has(event.head) &&
-            !checkpoint.reviewNotes?.includes(eventId)) {
-          checkpoint = { ...checkpoint, reviewNotes: [...checkpoint.reviewNotes ?? [], eventId] }
-          await save(key, checkpoint)
-        }
-        const recorded = checkpoint.reviewNotes?.includes(eventId) ||
-          checkpoint.eventId === eventId && checkpoint.completed.some(operation => operation.endsWith('-edit-review'))
-        const stagedId = checkpoint.decisionQuestion?.eventId === eventId ? checkpoint.decisionQuestion.id : undefined
-        const proposed = plan(event, card, existing, !!recorded, stagedId)
-        if (typeof proposed === 'string') {
-          if (apply && (proposed === 'preserve-current-decision' || event.target === 'Waiting For' && card.status === event.target &&
-              isDeepStrictEqual(card.blocker, event.blocker) && card.due_date === event.next_check_in)) {
-            await save(key, { ...checkpoint, handledEvents: [...checkpoint.handledEvents ?? [], eventId] })
-          }
-          await log(proposed)
-          continue
-        }
-        const steps = proposed.filter(step => checkpoint.eventId !== eventId ||
-          !checkpoint.completed.includes(identify(step, event, card.status, checkpoint.statusVersion).operation_id))
-        if (!steps.length) { await log('event-already-applied'); continue }
-        if (event.target === 'Ready for Review' && card.status !== event.target) {
-          const reviewerId = await jira.findAssignableAccount(card.id, reviewer)
-          if (!reviewerId || checkpoint.preserveAssignee && card.assignee_id !== reviewerId) {
-            await log('reviewer-blocked')
+        for (const candidate of candidates) {
+          event = candidate
+          eventId = candidate.id
+          if (checkpoint.handledEvents?.includes(eventId) ||
+              checkpoint.appliedEvents?.includes(eventId)) {
+            await log('event-already-applied')
             continue
           }
-        }
-        const sideTransition = isSideState(event.target) && steps.find((step): step is JiraTransition => !isEdit(step))
-        if (sideTransition && !await jira.offersTransition(sideTransition)) {
-          await log('side-state-transition-unavailable')
-          continue
-        }
-        plans.push({ event, from: card.status, steps: steps.map(step => identify(step, event, card.status, checkpoint.statusVersion)) })
-        if (!apply) { await log('planned'); continue }
-        if (!resumed) processed++
-        for (const step of steps) {
-          const input = identify(step, event, card.status, checkpoint.statusVersion)
-          const rejectedAttempts = checkpoint.rejectedSteps?.[input.operation_id] ?? 0
-          if (rejectedAttempts >= stepAttemptLimit) {
-            await log('rejected-cap-reached', input.operation_id)
-            stopped = true
-            break
+          const existing = event.target === 'Ready for Review' && event.head
+            ? await jira.tswReviewNote(card.id, event.pull) : undefined
+          if (apply && event.target === 'Ready for Review' && event.head && existing?.heads.has(event.head) &&
+              !checkpoint.reviewNotes?.includes(eventId)) {
+            checkpoint = { ...checkpoint, reviewNotes: [...checkpoint.reviewNotes ?? [], eventId] }
+            await save(key, checkpoint)
           }
-          const pending = { eventId, target: event.target, input, actor: event.actor, before: cardState(card), rejectedAttempts }
-          checkpoint = { ...checkpoint, cursor: history.cursor, pending }
-          history = { ...history, changes: [] }
-          await save(key, checkpoint)
-          if (!await execute(pending)) break
+          const recorded = checkpoint.reviewNotes?.includes(eventId) ||
+            checkpoint.eventId === eventId && checkpoint.completed.some(operation => operation.endsWith('-edit-review'))
+          const stagedId = checkpoint.decisionQuestion?.eventId === eventId ? checkpoint.decisionQuestion.id : undefined
+          const proposed = plan(event, card, existing, !!recorded, stagedId)
+          if (typeof proposed === 'string') {
+            if (apply && proposed === 'preserve-current-decision') {
+              await save(key, { ...checkpoint, handledEvents: [...checkpoint.handledEvents ?? [], eventId] })
+            }
+            await log(proposed)
+            continue
+          }
+          const steps = proposed.filter(step => checkpoint.eventId !== eventId ||
+            !checkpoint.completed.includes(identify(step, event, card.status, checkpoint.statusVersion).operation_id))
+          if (!steps.length) { await log('event-already-applied'); continue }
+          if (event.target === 'Ready for Review' && card.status !== event.target) {
+            const reviewerId = await jira.findAssignableAccount(card.id, reviewer)
+            if (!reviewerId || checkpoint.preserveAssignee && card.assignee_id !== reviewerId) {
+              await log('reviewer-blocked')
+              continue
+            }
+          }
+          const sideTransition = isSideState(event.target) && steps.find((step): step is JiraTransition => !isEdit(step))
+          if (sideTransition && !await jira.offersTransition(sideTransition)) {
+            await log('side-state-transition-unavailable')
+            continue
+          }
+          plans.push({ event, from: card.status, steps: steps.map(step => identify(step, event, card.status, checkpoint.statusVersion)) })
+          if (!apply) { await log('planned'); break }
+          if (!resumed) processed++
+          for (const step of steps) {
+            const input = identify(step, event, card.status, checkpoint.statusVersion)
+            const rejectedAttempts = checkpoint.rejectedSteps?.[input.operation_id] ?? 0
+            if (rejectedAttempts >= stepAttemptLimit) {
+              await log('rejected-cap-reached', input.operation_id)
+              stopped = true
+              break
+            }
+            const pending = { eventId, target: event.target, input, actor: event.actor, before: cardState(card), rejectedAttempts }
+            checkpoint = { ...checkpoint, cursor: history.cursor, pending }
+            history = { ...history, changes: [] }
+            await save(key, checkpoint)
+            if (!await execute(pending)) break
+          }
+          break
         }
       } catch {
         // Transport errors and project mismatch can carry remote details. Keep
