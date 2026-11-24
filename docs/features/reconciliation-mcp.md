@@ -67,10 +67,15 @@ No version-rewriting proxy is needed in front of the facade.
 Tool input schemas are published directly from the registered Zod schemas, with
 shared schemas inlined and an object root for every tool. `update_work` exposes
 all operation kinds and their required fields as discriminated `oneOf` branches.
-The object root also exposes the [wait inputs](workflow.md#waiting-for-writes)
-for clients that inspect only root properties. The branches define which inputs
-are required for each kind.
-no-argument tools publish a closed empty object. SDK/Zod validation of calls is
+For clients that inspect only root properties, the root exposes the
+[wait inputs](workflow.md#waiting-for-writes) in shared workflow mode or the
+`jira_edit` inputs when native Jira is configured. In both cases, the root
+`card_id` accepts every ID supported by the registered branches. With native
+Jira configured, that includes 32-character hexadecimal Notion IDs and native
+TSW ticket IDs. Each branch still defines the accepted ID and required fields
+for its operation kind.
+
+Tools with no arguments publish a closed empty object. SDK/Zod validation of calls is
 unchanged. Tools omit optional task-execution metadata: these tools do not
 support task execution, and `execution` is absent from the `2026-07-28` Tool
 shape (it was optional in `2025-11-25`).
