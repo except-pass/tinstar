@@ -1,5 +1,4 @@
 import { releasePull } from '../../shared/pullIdentity'
-import { isPublishedReviewDetail } from './workerLinkReport'
 
 export const requestedHead = (text: unknown) =>
   typeof text === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(text) ? text.toLowerCase() : null
@@ -34,14 +33,17 @@ export function workerReviewPublication(task: {
   last_event: { raw?: unknown }
 }) {
   const pull = typeof task.pr.url === 'string' ? releasePull(task.pr.url) : null
-  if (!pull) return null
   const snapshotHead = requestedHead(task.pr.head)
+  if (!pull || !snapshotHead) return null
   const last = task.lastEventText ?? (typeof task.last_event.raw === 'string' ? task.last_event.raw : '')
   const publication = readyHeadPublication(last)
   if (publication) {
-    return publication.id === pull.id && (!snapshotHead || publication.head === snapshotHead) ? publication : null
+    return publication.id === pull.id && publication.head === snapshotHead ? publication : null
   }
-  if (!snapshotHead || task.current_state.freshness !== 'fresh' || !isPublishedReviewDetail(task.current_state.detail)) return null
+  const { freshness, detail } = task.current_state
+  if (freshness !== 'fresh' || typeof detail !== 'string' ||
+      !/^checks green: PR (?:held for merge|ready for review)\b/.test(detail) ||
+      !/^done(?: \[at=\d+\])?: checks green$/.test(last)) return null
   return { ...pull, head: snapshotHead }
 }
 

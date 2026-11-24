@@ -404,6 +404,20 @@ it('blocks both card keys in conflicting dispatch copies even with separate live
   expect(f.issues.get('60002')!.fields.status.name).toBe('In Progress')
 })
 
+it('does not request review for an open PR without checks-green evidence', async () => {
+  const f = await tswFixture()
+  await f.create('open PR')
+  await f.publish([tswTask('TSW-1', 'run passed: PR open', 'off', {
+    hints: { last_event_text: 'done [at=1]: PR open' },
+  })])
+  const result = await f.run(true)
+  expect(result.plans).toEqual([])
+  expect(result.audits).toContainEqual(expect.objectContaining({ result: 'review-head-unverified' }))
+  const issue = f.issues.get('60001')!
+  expect(issue.fields.status.name).toBe('Backlog')
+  expect(issue.comments).toEqual([])
+})
+
 it('walks TSW from Backlog through review and merge, preserves idempotence and skips another project', async () => {
   const f = await tswFixture()
   await f.create('delivery')
