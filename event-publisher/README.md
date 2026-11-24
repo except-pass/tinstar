@@ -1,8 +1,9 @@
 # Event Publisher
 
 A standalone publisher for First Mate task and worker observations, signed
-Jira ticket changes, and operator-recorded mate migrations. All sources share
-one SQLite journal and terminal reader.
+Jira ticket changes, GitHub pull requests, the revision answering at the deployment endpoint,
+and operator-recorded mate migrations. All sources share one SQLite journal and
+terminal reader.
 
 ## Start on the farm host
 
@@ -52,8 +53,8 @@ passes and checks the journal binding before reading them.
 events serve --interval 20
 ```
 
-The polling interval defaults to 20 seconds and accepts whole seconds from
-15 through 3600.
+The First Mate and deployment endpoint polling interval defaults to 20 seconds
+and accepts whole seconds from 15 through 3600. GitHub has its own cadence.
 
 Leave one publisher running per journal. In a second terminal, add the
 `event-publisher` directory to `PATH` and export the same `EVENTS_DB` before
@@ -82,9 +83,129 @@ events sources
 
 `--after` is exclusive. A watch without it starts at the current journal tip.
 Watch and replay both accept the same filters. The text view marks replays,
-First Mate fixture events, and controlled migration receipts. In JSON mode,
-`source.mode` identifies live and fixture data for First Mate and routing.
+fixture events, and controlled migration receipts. In JSON mode,
+`source.mode` identifies live and fixture data for polling sources and routing.
 Replay notices go to stderr so the JSON payloads stay identical.
+
+## Observe linked GitHub pull requests
+
+Add an explicit repository allowlist to the publisher configuration, for example
+`"github": { "repositories": ["example/project", "sample-org/other-project"] }`.
+Entries match exact repositories, ignoring case. The adapter appears as
+unconnected when the allowlist is absent or empty.
+The publisher uses the service account's authenticated `gh` CLI on PATH. It
+selects PRs from verified links in the latest accepted live First Mate task
+inventory and filters them by the allowlist. During a fleet outage, prior links
+remain in journal history and cannot authorize fresh reads.
+
+The collector rotates through at most four linked PRs per pass and waits five
+minutes after each pass. It requests one REST endpoint for the PR and one for
+the check runs of its exact head SHA in the base repository. The collector keeps ETags in
+memory and sends conditional requests. It pauses when the shared core quota
+reaches a 1,000-request reserve, receives HTTP 429, or receives a positive
+`Retry-After` delay in seconds.
+`events sources` reports the linked, observed, failed and deferred PR counts.
+Long lists take multiple passes. Unavailable task-link discovery or check reads
+are reported in source health. Verified PR fields are journaled even when check
+reads fail, and the last verified check baseline is retained for the same head.
+Paginated or incomplete check inventories are reported as unavailable. Check
+statuses posted only through the legacy commit-status API or another repository
+are outside this coverage.
+The service checks every accepted sample's exact repository and PR number.
+PR identity is `owner/repo#number`, so a rename or transfer that changes the
+slug starts a new identity.
+
+```sh
+events watch --source github --type pr
+events replay --type pr --entity 'github:pr:example/project#12' --last 20
+events inspect '<event-id-from-watch>'
+```
+
+The first verified sample reports `pr.observed`. Later samples can report
+`pr.opened` (a closed PR observed open), `pr.closed`, `pr.merged`,
+`pr.updated`, and check-run changes. A head change starts a new head-scoped
+check observation. The envelope records the observed head SHA and includes
+the merge SHA only for a merged PR. Titles, bodies and check output stay out of
+the journal. Polls can miss changes between samples.
+
+GitHub webhook ingestion is deferred. Registering a repository or organization
+webhook requires repository or organization admin permission, a new shared
+secret, and a new authenticated public route. None was granted for this phase.
+
+1. Provision a dedicated public HTTPS POST route for GitHub deliveries and
+   give the receiver a new shared secret through its runtime configuration.
+2. Have an admin register the route and secret on the approved repositories or
+   organization with JSON payloads for `pull_request`, `check_run`, and `release`.
+3. Verify `X-Hub-Signature-256` over the exact request bytes before parsing.
+   Enforce the approved repository allowlist and event types, including for
+   organization-wide deliveries.
+4. Deduplicate `X-GitHub-Delivery` in the same transaction as the normalized events.
+
+[GitHub delivery verification](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
+
+## Observe the revision answering at the deployment endpoint
+
+Set `"deployment": true` to enable the existing loopback GET at
+`http://127.0.0.1:5281/api/deployment`. It can run independently or beside First
+Mate. The source and subject identify the endpoint URL on the observing host.
+The first read emits `deployment.running.observed` for the build SHA answering
+at that URL. Later differences
+emit `deployment.revision.changed` with the previous and current SHA.
+
+```sh
+events sources
+events watch --source deployment --type deployment
+events replay --type deployment --last 10 --json
+```
+
+A verified read gives the running-revision source `ok` health. An unavailable
+endpoint or unknown SHA leaves the last verified revision in the journal.
+Deployment lifecycle (attempts, smoke, failure and rollback) stays unconnected
+because the deploy audit is an owner-only file on the deployment host and
+the publisher has no read-only reader there. Connecting lifecycle coverage
+requires an approved read-only path to the deployment host's audit and failure
+marker. See [floor deploy failure recovery](../docs/features/floor-deploy.md#failure-recovery)
+for their locations. PR membership remains unknown.
+
+### Synthetic deployment lifecycle fixture
+
+Run from the repository root. The parser reads synthetic audit JSONL and the
+separate failure marker format. It emits `deployment.started` for deployment
+receipts, `deployment.smoke_passed` for passing smoke, and `deployment.gate_failed`
+with the phase and revision from the failure marker. A passing smoke can come
+from a check-only run, so the audit cannot establish deployment completion.
+Every replayed event is labeled `fixture`.
+
+```sh
+fixture_dir=$(mktemp -d)
+node --input-type=module - "$fixture_dir/journal.sqlite" <<'EOF'
+import { readFileSync } from 'node:fs'
+import { parseFloorAudit } from './event-publisher/deployment.js'
+import { Journal } from './event-publisher/journal.js'
+
+const journal = new Journal(process.argv[2])
+const source = {
+  source_id: 'deployment:lifecycle-fixture', provider: 'deployment',
+  type: 'deployment', mode: 'fixture', home_path: null,
+  coverage: 'synthetic deployment audit and failure marker', command: 'fixture',
+}
+const fixtures = './event-publisher/test/fixtures'
+const observations = parseFloorAudit(readFileSync(`${fixtures}/deployment-audit.synthetic.jsonl`, 'utf8'), {
+  target: 'fixture-floor',
+  failureMarker: readFileSync(`${fixtures}/deployment-failure.synthetic.txt`, 'utf8'),
+})
+const observedAt = new Date().toISOString()
+journal.registerSources([source])
+for (const { event_type, ...record } of observations) {
+  journal.recordProviderPoll(source, {
+    startedAt: observedAt, observedAt, health: 'ok', reason: null, counts: { observed: 1 },
+    entries: [{ ...record, startedAt: observedAt, observedAt, related: [] }],
+  }, (_before, after) => ({ changes: [{ event_type, change: { after } }] }))
+}
+journal.close()
+EOF
+event-publisher/events replay --db "$fixture_dir/journal.sqlite" --source deployment --last 10 --json
+```
 
 ## Receive Jira ticket changes
 
@@ -267,12 +388,18 @@ The filter opens the journal read-only and leaves the activity ledger intact.
 ## Re-observe and troubleshoot
 
 Stop the publisher, run `events observe`, and check `events sources` before
-restarting it. This performs one fresh read of each configured First Mate home and updates
-the journal. Use `events serve` for Jira webhooks. The one-pass command requires
-at least one First Mate home and exits with status 1 if a source read fails or
-has incomplete coverage. The continuous collector retries on
-the next scheduled pass.
+restarting it. This performs one pass of the configured polling sources and
+updates the journal. The one-pass command requires a configured First Mate home
+or `"deployment": true` and exits with status 1 if a read fails or has incomplete
+coverage. It still uses the GitHub batch limit. Use `events serve` for Jira
+webhooks and scheduled retries of polling sources.
 
+- If GitHub reports unavailable, verify `gh auth status --hostname github.com`
+  as the service account, then check its pull request and check read access for
+  the affected repository. If the quota reserve was reached, wait for the shared
+  budget to replenish.
+- For deployment coverage, check the [loopback endpoint](#observe-the-revision-answering-at-the-deployment-endpoint).
+  A healthy read returns the exact current build SHA.
 - For an unavailable task source, check that the service account can execute
   `bin/fm-tasks-axi.sh` and read its backlog, and that `tasks-axi` is on PATH.
   With `FM_HOME` explicitly set to that home, check the wrapper's `--help` and
@@ -363,10 +490,10 @@ gives conservative bounds from the start of the prior saved observation,
 when available, to the end of the read that witnessed the change.
 A replay returns the same event IDs and payloads after a restart.
 
-Slice A covers explicitly configured First Mate homes on the running host,
-including local second mates with a task ID and generation.
-Remote endpoints, archive inventories and GitHub, Jira and deployment event
-sources remain outside its coverage.
+First Mate coverage includes explicitly configured homes on the running host
+and local second mates with a task ID and generation. Remote endpoints and
+archive inventories are outside that coverage. Jira, GitHub and floor coverage
+use the separate source scopes described above.
 
 ```sh
 npm test

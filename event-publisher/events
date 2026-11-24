@@ -6,7 +6,9 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { parseArgs } from 'node:util'
+import { deploymentLifecycleSource, deploymentSource, observeDeploymentEndpoint } from './deployment.js'
 import { observeHome, sourcesFor } from './firstmate.js'
+import { githubInterval, githubObserver, githubSource, repositoryPattern } from './github.js'
 import { Journal, JournalConfigurationError } from './journal.js'
 import { jiraConfig, JiraWebhookConfigurationError, startJiraWebhook } from './jira.js'
 import { migrationReceipt, MigrationReceiptError, routingReplayCheck } from './routing.js'
@@ -22,7 +24,8 @@ const usage = `Usage
   events routing-metrics-input < routing-observations.jsonl
 
 Filters
-  --source firstmate|jira|routing    --type task|worker|ticket|mate    --entity <entity-id>
+  --source firstmate|jira|github|deployment|routing
+  --type task|worker|ticket|pr|deployment|mate    --entity <entity-id>
 All commands accept --db <path>. The default is ~/srv/event-publisher/journal.sqlite.
 EVENTS_DB and EVENTS_CONFIG provide defaults for --db and --config.`
 
@@ -69,8 +72,18 @@ async function readConfig(path) {
   }
   const jira = config?.jira === undefined ? null : jiraConfig(config.jira)
   const configuredHomes = config?.homes ?? []
-  if (!Array.isArray(configuredHomes) || (!configuredHomes.length && !jira)) {
-    throw new UsageError('configuration must contain at least one home or a Jira project')
+  if (!Array.isArray(configuredHomes) || (!configuredHomes.length && !jira && config?.deployment !== true)) {
+    throw new UsageError('configuration must contain at least one home, a Jira project or deployment: true')
+  }
+  if (config.deployment !== undefined && typeof config.deployment !== 'boolean') {
+    throw new UsageError('deployment must be true or false')
+  }
+  const repositories = config.github?.repositories
+  if (config.github !== undefined &&
+      (!config.github || typeof config.github !== 'object' || Array.isArray(config.github) ||
+       repositories !== undefined && (!Array.isArray(repositories) ||
+         repositories.some(value => typeof value !== 'string' || !repositoryPattern.test(value))))) {
+    throw new UsageError('github.repositories must list exact owner/repo entries')
   }
   const ids = new Set()
   const paths = new Set()
@@ -93,7 +106,7 @@ async function readConfig(path) {
     homes.push({ id: home.id, path, configuredPath, codeRoot: home.codeRoot && resolve(home.codeRoot), mode: home.mode ?? 'live',
       markdownFastPath: home.markdownFastPath ?? false })
   }
-  return { homes, jira }
+  return { homes, jira, repositories: repositories ?? [], deployment: config.deployment === true }
 }
 
 function signalController() {
@@ -103,6 +116,7 @@ function signalController() {
   process.on('SIGTERM', stop)
   return {
     signal: controller.signal,
+    abort: stop,
     close() {
       process.off('SIGINT', stop)
       process.off('SIGTERM', stop)
@@ -118,15 +132,35 @@ async function pause(ms, signal) {
   }
 }
 
-async function collect(journal, { homes, jira }, interval, secret, readToken) {
+async function pollProvider(observe, journal, interval, controller) {
+  do {
+    const healthy = await observe(journal, controller.signal)
+    if (!interval) return healthy
+    await pause(interval * 1000, controller.signal)
+  } while (!controller.signal.aborted)
+}
+
+async function collect(journal, { homes, jira, repositories, deployment }, interval, secret, readToken) {
   const controller = signalController()
+  const jobs = []
+  let providerError
   let scratch, listener
+  const startProvider = (observe, seconds) => {
+    jobs.push(pollProvider(observe, journal, interval ? seconds : null, controller).catch(error => {
+      providerError ??= error
+      controller.abort()
+    }))
+  }
   try {
     if (homes.length) scratch = await mkdtemp(join(tmpdir(), 'event-publisher-'))
     const sources = homes.flatMap(sourcesFor)
     if (jira) sources.push(jira.source)
+    let observeGitHub = repositories.length ? githubObserver({ repositories }) : null
+    if (observeGitHub) sources.push(githubSource)
+    if (deployment) sources.push(deploymentSource)
     const taskCaches = new Map(homes.map(home => [home.id, {}]))
     journal.registerSources(sources, { reconcile: true })
+    if (deployment && !controller.signal.aborted) startProvider(observeDeploymentEndpoint, interval)
     if (jira && interval) {
       listener = await startJiraWebhook(journal, jira, secret, readToken)
       console.error(`Jira webhook listening on ${listener.url}`)
@@ -154,11 +188,24 @@ async function collect(journal, { homes, jira }, interval, secret, readToken) {
         const observations = await observeHome(home, scratch, { taskCache: taskCaches.get(home.id) })
         if (!journal.recordAttempts(observations).every(result => result.complete)) complete = false
       }
+      // The first forge pass uses accepted task links. Later network reads run
+      // on their own cadence so timeouts never delay First Mate or block Jira.
+      if (observeGitHub && !controller.signal.aborted) {
+        startProvider(observeGitHub, githubInterval)
+        observeGitHub = null
+      }
       // Always pause after a slow pass as well. Never overlap collector passes.
       if (interval) await pause(Math.max(1000 * interval - (performance.now() - start), 5000), controller.signal)
     } while (interval && !controller.signal.aborted)
-    if (!interval) return !controller.signal.aborted && complete
+    if (!interval) {
+      const providerResults = await Promise.all(jobs)
+      if (providerError) throw providerError
+      return !controller.signal.aborted && complete && providerResults.every(Boolean)
+    }
+    if (providerError) throw providerError
   } finally {
+    controller.abort()
+    await Promise.all(jobs)
     await listener?.close()
     controller.close()
     if (scratch) await rmdir(scratch)
@@ -181,6 +228,25 @@ function healthText(source) {
   return `${source.source_id}${source.mode ? ` [${source.mode}]` : ''} ${source.health} · ${source.coverage}${reason}${coverage}`
 }
 
+function publishedSources(journal) {
+  const sources = journal.sources().filter(source =>
+    source.source_id !== githubSource.source_id || source.health !== 'deconfigured')
+  const defaults = [
+    { source_id: 'firstmate:task', type: 'task', coverage: 'configured active backlogs' },
+    { source_id: 'firstmate:worker', type: 'worker', coverage: 'configured local worker incarnations' },
+    { source_id: 'jira:ticket', type: 'ticket', coverage: 'signed project webhooks' },
+    githubSource, deploymentSource,
+  ]
+  for (const source of defaults) {
+    const present = sources.some(current => source.type === 'deployment'
+      ? current.source_id === source.source_id : current.type === source.type)
+    if (!present) {
+      sources.push({ ...source, mode: null, health: 'unconnected', reason: 'observer is not configured' })
+    }
+  }
+  return [...sources, deploymentLifecycleSource]
+}
+
 function valueText(value) {
   if (value === null) return '—'
   if (Array.isArray(value)) return value.length ? value.map(item => item.id ? `${item.type} ${item.id}` : item).join(', ') : '—'
@@ -200,6 +266,15 @@ function jiraEventLabel(event) {
   return `${change.field} ${printable(change.before)} → ${printable(change.after)}`
 }
 
+function checkTransitions(before, after) {
+  const earlier = new Map(before.map(run => [run.id, run]))
+  const later = new Map(after.map(run => [run.id, run]))
+  const label = run => run ? [run.status, run.conclusion].filter(Boolean).join('/') : '—'
+  return [...new Set([...earlier.keys(), ...later.keys()])].sort((a, b) => a - b)
+    .filter(id => label(earlier.get(id)) !== label(later.get(id)))
+    .map(id => `#${id} ${label(earlier.get(id))} → ${label(later.get(id))}`).join(', ')
+}
+
 function eventText(event, replay, health) {
   const time = new Date(event.observed_at).toLocaleTimeString()
   const { source, subject, change, evidence } = event
@@ -214,6 +289,26 @@ function eventText(event, replay, health) {
     const labels = [replay && 'replay', source.mode === 'fixture' && 'controlled proof'].filter(Boolean)
     const prefix = labels.length ? `[${labels.join('/')}] ` : ''
     return `${time} ${prefix}routing/mate ${subject.id} · ${context(change.before)} → ${context(change.after)} · effective ${event.effective_start_at} · #${event.sequence} ${event.event_id}`
+  }
+  if (source.provider === 'github' || source.provider === 'deployment') {
+    const labels = [replay && 'replay', source.mode].filter(Boolean)
+    const compact = source.provider === 'github' ? `${reference.repository}#${reference.number}` :
+      reference.endpoint ? `revision answering at ${reference.target}` : reference.target
+    const category = source.provider === 'github' ? 'github/pr' : reference.endpoint ? 'deployment' : 'floor/deployment'
+    const render = value => {
+      if (change.field === 'checks') {
+        const groups = Object.groupBy(value, run => run.conclusion ?? run.status)
+        return Object.keys(groups).sort().map(result => `${result}=${groups[result].length}`).join(', ') || 'no checks'
+      }
+      if (change.field?.endsWith('sha') || change.field === 'revision') return value?.slice(0, 12) ?? '—'
+      return change.field ? valueText(value) : value.state ?? [value.lifecycle, value.revision?.slice(0, 12)].filter(Boolean).join(' ')
+    }
+    const after = render(change.after)
+    const before = Object.hasOwn(change, 'before') ? render(change.before) : null
+    const detail = before === null ? after : change.field === 'checks' && before === after
+      ? checkTransitions(change.before, change.after) : `${before} → ${after}`
+    const meaning = [event.event_type, change.field, detail].filter(Boolean).join(' · ')
+    return `${time} [${labels.join('/')}] ${category} ${compact} · ${meaning} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
   }
   const compact = [reference.task_id, reference.spawn_gen].filter(Boolean).join('@')
   let meaning = change.field
@@ -249,7 +344,7 @@ async function watch(journal, after, filters, json) {
   console.error(`Watching from sequence ${cursor}${after !== undefined ? ` (replay through ${attach})` : ''}`)
   try {
     while (!controller.signal.aborted) {
-      const statuses = new Map(journal.sources().filter(source =>
+      const statuses = new Map(publishedSources(journal).filter(source =>
         (!filters.type || filters.type === source.type) &&
         (!filters.provider || source.source_id.startsWith(`${filters.provider}:`)))
         .map(source => [source.source_id, source]))
@@ -323,11 +418,11 @@ async function main() {
       throw new UsageError(`--${key} is unsupported for ${command}`)
     }
   }
-  if (values.type !== undefined && !['task', 'worker', 'ticket', 'mate'].includes(values.type)) throw new UsageError('--type must be task, worker, ticket or mate')
+  if (values.type !== undefined && !['task', 'worker', 'ticket', 'pr', 'deployment', 'mate'].includes(values.type)) throw new UsageError('--type must be task, worker, ticket, pr, deployment or mate')
   if (values.after !== undefined && values.last !== undefined) throw new UsageError('choose --after or --last')
   const after = values.after === undefined ? undefined : integer(values.after, '--after', 0)
   const last = integer(values.last ?? '100', '--last', 1)
-  if (values.source !== undefined && !['firstmate', 'jira', 'routing'].includes(values.source)) throw new UsageError('--source must be firstmate, jira or routing')
+  if (values.source !== undefined && !['firstmate', 'jira', 'github', 'deployment', 'routing'].includes(values.source)) throw new UsageError('--source must be firstmate, jira, github, deployment or routing')
   const filters = { type: values.type, entity: values.entity, provider: values.source }
   const defaultPath = join(homedir(), 'srv/event-publisher/journal.sqlite')
   const configuredPath = resolve(process.env.EVENTS_DB ?? defaultPath)
@@ -348,7 +443,7 @@ async function main() {
   if (config?.jira && command === 'serve' && !secret?.trim()) {
     throw new UsageError('set EVENTS_JIRA_WEBHOOK_SECRET from the Jira admin webhook secret')
   }
-  if (command === 'observe' && !config.homes.length) throw new UsageError('use events serve to receive Jira webhooks')
+  if (command === 'observe' && !config.homes.length && !config.deployment) throw new UsageError('use events serve to receive Jira webhooks')
   const journal = new Journal(path, { readOnly: !collector && !migration })
   try {
     if (collector) {
@@ -365,9 +460,10 @@ async function main() {
       if (!event) throw new UsageError('event id not found')
       console.log(JSON.stringify(event, null, 2))
     } else if (command === 'sources') {
-      for (const source of journal.sources()) {
+      for (const source of publishedSources(journal)) {
         const last = source.provider === 'jira' ? 'last signed delivery' : source.provider === 'routing'
-          ? 'last recorded migration' : 'last accepted inventory'
+          ? 'last recorded migration' : ['github', 'deployment'].includes(source.provider)
+            ? 'last accepted observation' : 'last accepted inventory'
         console.log(`${healthText(source)} · last attempt ${age(source.last_attempt_at)} · ${last} ${age(source.last_success_at)}`)
       }
     } else {

@@ -290,6 +290,91 @@ export class Journal {
     }
   }
 
+  linkedPulls(url = null) {
+    return this.db.prepare(`
+      SELECT DISTINCT e.entity_id AS task_id, link.value AS url
+      FROM entities e JOIN sources s USING (source_id),
+        json_each(e.fields, '$.pull_requests') AS link
+      WHERE s.source_id GLOB 'firstmate:home:*'
+        AND json_extract(s.description, '$.type') = 'task'
+        AND json_extract(s.description, '$.mode') = 'live'
+        AND COALESCE(json_extract(s.description, '$.configured'), 1) = 1
+        AND s.health = 'ok' AND e.last_seen_snapshot = s.last_snapshot_id
+        AND json_extract(e.evidence, '$.pr_link_source') = ?
+        AND (? IS NULL OR link.value = ?)
+      ORDER BY url, task_id
+    `).all(prLinkSource, url, url)
+  }
+
+  recordProviderPoll(source, { startedAt, observedAt, entries, health, reason, counts }, diff) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const previous = this.db.prepare('SELECT last_attempt_at FROM sources WHERE source_id = ?').get(source.source_id)
+      if (!previous) throw new Error('observation source was not registered')
+      let accepted = 0
+      if (observedAt >= startedAt && (!previous.last_attempt_at || startedAt >= previous.last_attempt_at)) {
+        const snapshot = entries.length ? randomUUID() : null
+        const append = this.db.prepare(insertEvent)
+        const select = this.db.prepare('SELECT fields, snapshot_id, started_at FROM entities WHERE source_id = ? AND entity_id = ?')
+        const save = this.db.prepare(`
+          INSERT INTO entities (source_id, entity_id, last_seen_snapshot, snapshot_id, started_at, observed_at, fields, evidence)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(source_id, entity_id) DO UPDATE SET last_seen_snapshot = excluded.last_seen_snapshot,
+            snapshot_id = excluded.snapshot_id, started_at = excluded.started_at, observed_at = excluded.observed_at,
+            fields = excluded.fields, evidence = excluded.evidence
+        `)
+        for (const entry of entries) {
+          const prior = select.get(source.source_id, entry.id)
+          const result = diff(prior ? JSON.parse(prior.fields) : null, entry.fields,
+            { snapshot, startedAt: entry.startedAt })
+          // A provider can recognize an older source revision after restart.
+          if (result === null) continue
+          const { changes, fields = entry.fields } = result
+          const related = source.provider === 'github' ?
+            this.linkedPulls(entry.evidence.source_reference.url).map(({ task_id }) => ({
+              relation: 'linked-task', subject: { type: 'task', id: task_id },
+            })) : entry.related
+          accepted++
+          for (const { previous = prior, ...difference } of changes) {
+            const event_id = `event:${randomUUID()}`
+            const event = {
+              schema: 'event-publisher.event.v1', event_id, ...difference,
+              source: { provider: source.provider, source_id: source.source_id, mode: source.mode },
+              subject: { type: source.type, id: entry.id },
+              observed_at: entry.observedAt, occurred_at: entry.occurredAt ?? null,
+              observation: {
+                method: entry.occurredAt ? 'audit-record' : 'snapshot-diff', read_method: source.command, coverage: source.coverage,
+                batch_id: snapshot, current_snapshot: snapshot,
+                ...(previous ? { previous_snapshot: previous.snapshot_id } : {}),
+                observed_between: { after: previous?.started_at ?? null, by: entry.observedAt },
+              },
+              related, evidence: entry.evidence,
+            }
+            append.run(event_id, source.source_id, source.type, entry.id, JSON.stringify(event))
+          }
+          save.run(source.source_id, entry.id, snapshot, snapshot, entry.startedAt, entry.observedAt,
+            JSON.stringify(fields), JSON.stringify(entry.evidence))
+        }
+        if (accepted < entries.length) {
+          health = accepted ? 'partial' : 'stale'
+          reason = 'some provider revisions predate their accepted snapshots'
+          counts = { ...counts, observed: accepted, stale: entries.length - accepted }
+        }
+        this.db.prepare(`
+          UPDATE sources SET last_attempt_at = ?, health = ?, reason = ?, counts = ?,
+            last_snapshot_id = COALESCE(?, last_snapshot_id), last_success_at = COALESCE(?, last_success_at)
+          WHERE source_id = ?
+        `).run(observedAt, health, reason, JSON.stringify(counts), accepted ? snapshot : null,
+          accepted ? observedAt : null, source.source_id)
+      } else health = 'stale'
+      this.db.exec('COMMIT')
+      return health === 'ok' || health === 'unconnected'
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   recordAttempt(observation) {
     return this.recordAttempts([observation])[0]
   }
