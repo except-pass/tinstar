@@ -32,7 +32,7 @@ async function main() {
   const root = values['config-home'] ?? getConfigRoot()
   const config = loadReconciliationConfig(root)
   const sources = new ReconciliationSources(config, fetch, undefined, root)
-  const runNotion = (!notionCards || notionCards.length > 0) && (!values.apply || !!config.notion || !!notionCards?.length)
+  const runNotion = !notionCards || notionCards.length > 0
   const runTsw = !tswCards || tswCards.length > 0
   if (values.apply && runNotion && (!config.notion || !values['write-token-file'])) throw new Error('Notion write-token file and board required')
   const file = await open(auditFile, 'a', 0o600)

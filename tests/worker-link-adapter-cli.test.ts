@@ -25,6 +25,19 @@ describe('coordinator adapter CLI', () => {
       code: 1, stderr: 'Worker-link adapter failed; check arguments, audit path, source coverage and credential access.\n',
     })
   })
+  it('requires a Notion board for unfiltered apply and allows TSW-only apply without one', async () => {
+    const dir = await mkdtemp(resolve('.tinstar-adapter-cli-')); dirs.push(dir)
+    await writeFile(join(dir, 'config.json'), JSON.stringify({ reconciliation: { fleet: [] } }))
+    const audit = join(dir, 'audit.jsonl')
+    const token = join(dir, 'write-token')
+    await writeFile(token, 'fixture-token')
+    const args = ['--config-home', dir, '--audit-file', audit, '--apply', '--max-cards', '1']
+    await expect(cli([...args, '--write-token-file', token])).rejects.toMatchObject({ code: 1 })
+    await expect(readFile(audit, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const { stdout } = await cli([...args, '--card', 'TSW-1'])
+    expect(JSON.parse(stdout)).toMatchObject({ mode: 'apply', stopped: false, tsw: [] })
+  })
   it('exposes usage through the executable interface', async () => {
     const { stdout } = await cli(['--help'])
     expect(stdout).toContain('--apply --max-cards 1..5 --write-token-file FILE')
