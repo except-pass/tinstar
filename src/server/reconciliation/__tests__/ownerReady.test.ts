@@ -12,7 +12,7 @@ import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { DomainReadTools } from '../domainReads'
 import { ReconciliationMcp } from '../mcp'
 import { authorizePrReadGrant } from '../prReadGrant'
-import { mergePublication } from '../ownerRequestEvidence'
+import { mergePublication, readyHeadPublication } from '../ownerRequestEvidence'
 import { QueuePullReader } from '../queuePulls'
 import { PullReader } from '../../pulls/reader'
 import { PullsApi } from '../../pulls/routes'
@@ -27,6 +27,8 @@ const historical = 'https://github.com/owner/repo/pull/5'
 const restricted = 'https://github.com/owner/repo/pull/6'
 const releaseWait = 'https://github.com/owner/repo/pull/7'
 const outsider = 'https://github.com/outside/repo/pull/8'
+const workerRecord = 'https://workers.example.test/records/delivery-0'
+const mergeComment = '12345678-1234-1234-1234-123456789abc'
 const author = 'owner@example.test'
 const project = '10639'
 const fields = { owner: 'customfield_101', decisions: 'customfield_102', blockerType: 'customfield_103',
@@ -52,6 +54,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
   // Two independently published ready notices corroborate the same durable ask.
   for (const [index, source] of mates.entries()) await snapshotFile(source, [{
     id: `delivery-${index}`, kind: 'ship', spawn_gen: `attempt-${index}`, backlog: { body_lines: ['card: TSW-10'] },
+    ...(index === 0 ? { record_url: workerRecord } : {}),
     pr: { url: moving, head: original }, hints: { last_event_text: `done: PR ${index === 0 ? moving : moving + '?source=mate'} checks green at head ${original}` },
   }])
   const liveHeads = new Map([[moving, original], [closing, sibling], [legacy, original], [unchanged, sibling], [releaseWait, sibling]])
@@ -91,7 +94,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     if (init?.method && init.method !== 'GET') sourceWrites.push(`${init.method} ${path}`)
     if (path === '/v1/comments') {
       if (boardHistoryUnavailable) return new Response(null, { status: 503 })
-      return Response.json({ results: notionNotes.map((note, index) => ({ id: `native-${index}`, rich_text: [{ plain_text: note }] })), has_more: false })
+      return Response.json({ results: notionNotes.map((note, index) => ({ id: index === 0 ? mergeComment : `native-${index}`, rich_text: [{ plain_text: note }] })), has_more: false })
     }
     const [, id, resource] = /\/issue\/(\d+)(?:\/(comment|changelog))?$/.exec(path) ?? []
     if (resource === 'comment') {
@@ -182,8 +185,10 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(bundle(pending, 'owner/repo')?.merges.filter(ask => ask.url === moving)).toHaveLength(1)
     expect(merge(pending, moving)).toMatchObject({ requestedHeads: [original], unverifiedRequest: false,
       sources: [expect.objectContaining({ kind: 'jira', url: expect.stringContaining('focusedCommentId=21') }),
-        expect.objectContaining({ kind: 'jira', url: expect.stringContaining('focusedCommentId=20') }), expect.objectContaining({ kind: 'notion' }),
-        expect.objectContaining({ kind: 'firstmate' }), expect.objectContaining({ kind: 'firstmate' })] })
+        expect.objectContaining({ kind: 'jira', url: expect.stringContaining('focusedCommentId=20') }), expect.objectContaining({
+          kind: 'notion', url: `https://www.notion.so/${native!.id}#${mergeComment.replaceAll('-', '')}`, requestedHead: original,
+        }), expect.objectContaining({ kind: 'firstmate', url: workerRecord, requestedHead: original }),
+        expect.objectContaining({ kind: 'firstmate', url: null, requestedHead: original })] })
     expect(merge(pending, moving)).not.toHaveProperty('live')
     expect(bundle(pending, 'owner/repo')?.decisions.map(row => row.question)).toEqual(['Choose launch wording', 'Confirm the launch date', 'Choose a deployment window?'])
     expect(bundle(pending, null)?.decisions).toHaveLength(1)
@@ -265,9 +270,13 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     ]))
     shiftCommentBoundary = true
     const shifted = (await (await browse()).json()).data as OwnerReadyRead
-    expect(merge(shifted, moving)).toMatchObject({ unverifiedRequest: true, sources: expect.arrayContaining([
-      expect.objectContaining({ url: expect.stringContaining('focusedCommentId=28'), requestedHead: original }),
-    ]) })
+    expect(merge(shifted, moving)).toMatchObject({
+      unverifiedRequest: true, live: { head: changed, state: 'unverified' },
+      requestedHeads: expect.arrayContaining([original, changed]),
+      sources: expect.arrayContaining([
+        expect.objectContaining({ url: expect.stringContaining('focusedCommentId=28'), requestedHead: original }),
+      ]),
+    })
     expect(sourceWrites).toEqual([])
   } finally {
     await Promise.all(clients.map(client => client.close()))
@@ -298,4 +307,9 @@ it('holds unrecognized head spellings as conditional merge requests', () => {
   for (const suffix of [`@ ${original}`, `head sha= ${original}`, `(head ${original})`]) {
     expect(mergePublication(`Will: merge ${moving} ${suffix}`, true)).toMatchObject({ head: null, conditional: true })
   }
+})
+
+it('accepts worker checks-green notices and rejects Jira-style worker prose', () => {
+  expect(readyHeadPublication(`done: PR ${moving} checks green at head ${original}`)).toMatchObject({ head: original })
+  expect(readyHeadPublication(`done: Will: merge ${moving} head ${original}`)).toBeNull()
 })

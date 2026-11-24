@@ -22,7 +22,7 @@ export function mergePublication(line: string, jira = false) {
 export function readyHeadPublication(event: string) {
   const line = event.replace(/^(?:pr-ready|done):\s*/i, '')
   const notice = /^PR (https:\/\/\S+) checks green(?:\s+(.*))?$/i.exec(line)
-  return mergePublication(notice ? `Will: merge ${notice[1]} ${notice[2] ?? ''}` : line, true)
+  return notice ? mergePublication(`Will: merge ${notice[1]} ${notice[2] ?? ''}`, true) : null
 }
 
 export function declaredRepository(value: unknown) {
