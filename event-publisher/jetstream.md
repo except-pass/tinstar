@@ -68,8 +68,8 @@ EVENTS_NATS_NKEY_SEED="$(clavis get tinstar/jetstream-hulk.seed)" \
 ```
 
 The [Hulk config](deploy/hulk-jira-relay.json) selects only Jira status change
-facts. Review each event type and its audience before adding one, since
-journal envelopes can contain restricted source information. Fixture events
+facts. Adding an event type to the relay selection requires an approved
+publisher change that covers the event type and its audience. Fixture events
 always stay local. The relay name also sets the reply prefix
 `_INBOX.tinstar_relay.<name>` and must agree with the broker permission.
 
@@ -79,6 +79,24 @@ approved cutover starts there. An existing named relay continues from its
 saved cursor. It skips events excluded by the selection. When changing event
 coverage, select an intentional historical cursor with a new relay name and
 provision its reply permission if earlier matching events should be sent.
+
+### Verify the permanent cutover
+
+After the PR merges with green checks, use `events replay --source jira --json`
+against Hulk's live journal to record the sequence and event ID of an existing
+signed Jira status fact. Check replay to Serena from an isolated journal backup
+before starting the permanent relay. Keep Hulk's signed Jira ingress and
+publisher running throughout the cutover. Install and start the permanent Hulk
+relay as a supervised service with the live journal and supervised SSH forward.
+
+After cutover, arrange one new authentic Jira status change that triggers a
+signed delivery. Replay the live journal after the recorded sequence with
+`events replay --source jira --after <sequence> --json` and confirm signed
+delivery evidence. Check `events sources` for relay progress and use Serena's
+JetStream management API to replay the stored fact and match its event ID to
+the live journal. Keep stage 1 open until the before-and-after replay and the
+new delivery through Hulk ingress, the live journal, the relay and Serena
+are recorded. Perform this rollout after merge.
 
 ## Facts and recovery
 
@@ -103,5 +121,28 @@ retries. Compare it with `events replay --db <path>` to locate pending facts.
 Check the SSH forward, broker credentials and stream permissions for persistent
 failures. Repair the failed dependency and restart the relay to resume from
 the saved cursor. The source publisher and journal CLI remain available
-through a broker outage. The broker retains a bounded recent window, and the
-journal remains the source for historical replay.
+through a broker outage.
+
+Access to full Jira envelopes, including issue metadata, status transitions
+and any actor account ID, is restricted to the authenticated Tin Star
+engineering account's approved audience. That audience comprises Tin Star
+and the owner's First Mate bridges, all owner-operated with the same TSW
+visibility as Hulk journal readers. This restriction applies to management
+API retrieval and replay as well as live delivery. Keep broker history for
+replay and recovery within the stream's 30-day and 256 MiB limits. Use the
+journal for replay beyond that window.
+
+When replacing the broker or stream, stop the named relay, provision the
+replacement stream and update the relay config with `startAfter` set to `0`.
+As the journal owner on Hulk, remove only that relay's checkpoint from the
+live journal, then restart the relay to replay eligible facts from zero.
+For the shipped `hulk-jira` relay, run:
+
+```sh
+sqlite3 -cmd '.timeout 5000' /home/farm/srv/event-publisher/data/journal.sqlite \
+  "DELETE FROM jetstream_relays WHERE name = 'hulk-jira';"
+```
+
+Replay uses the original event IDs. JetStream suppresses duplicate IDs within
+its configured window, and consumers use those IDs to deduplicate logical
+effects beyond that window.
