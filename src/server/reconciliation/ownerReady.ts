@@ -10,7 +10,7 @@ import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from '
 import { deferredDecisionCard } from './claimPolicy'
 import { dispatchForTask } from './dispatchProvenance'
 import type { JiraWork } from './jiraWork'
-import { declaredRepository, mergePublication, readyHeadPublication, repositoryPublication, requestedHead } from './ownerRequestEvidence'
+import { declaredRepository, mergePublication, readyHeadPublication, requestedHead } from './ownerRequestEvidence'
 import { buildQueue } from './queue'
 import type { PullReadiness } from './queuePulls'
 import { tswEvidence } from './tswSnapshot'
@@ -46,6 +46,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
   const warnings: string[] = []
   const groups = new Map<string | null, Bundle>()
   const merges = new Map<string, OwnerMergeAsk>()
+  const activeRequests = new Map<OwnerMergeAsk, { source: OwnerMergeAsk['sources'][number]; at: number; fresh: boolean; jiraComment?: string }>()
   const incompleteJiraPulls = new Set<string>()
   const decisions = new Map<string, { ask: OwnerDecisionAsk; repositories: string[] }>()
   const group = (repository: string | null) => {
@@ -53,7 +54,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     if (!value) { value = { repository, merges: [], decisions: [] }; groups.set(repository, value) }
     return value
   }
-  const addMerge = (source: OwnerRequestSource, url: string | null, head: string | null, fresh: boolean, superseded = false) => {
+  const addMerge = (source: OwnerRequestSource, url: string | null, head: string | null, fresh: boolean, request?: { at: number; jiraComment?: string }) => {
     const pull = url ? releasePull(url) : null
     const id = pull?.id ?? JSON.stringify([source.kind, source.id])
     let ask = merges.get(id)
@@ -62,11 +63,17 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       merges.set(id, ask)
       group(pull?.repository ?? null).merges.push(ask)
     }
-    addSource(ask.sources, { ...source, requestedHead: head, ...(superseded ? { superseded: true as const } : {}) })
-    if (superseded) return
-    if (head && !ask.requestedHeads.includes(head)) ask.requestedHeads.push(head)
-    if (head && fresh) ask.unverifiedRequest = false
-    ask.fresh ||= fresh
+    const witness: OwnerMergeAsk['sources'][number] = { ...source, requestedHead: head }
+    if (ask.sources.some(item => item.kind === source.kind && item.id === source.id)) return
+    ask.sources.push(witness)
+    if (!request) return
+    const at = Number.isFinite(request.at) ? request.at : -Infinity
+    const active = activeRequests.get(ask)
+    if (!active || at > active.at || (at === active.at && request.jiraComment && active.jiraComment &&
+        BigInt(request.jiraComment) > BigInt(active.jiraComment))) {
+      if (active) active.source.superseded = true
+      activeRequests.set(ask, { source: witness, at, fresh, jiraComment: request.jiraComment })
+    } else witness.superseded = true
   }
   const addDecision = (id: string, question: string, repository: string | null, fresh: boolean, source: OwnerRequestSource) => {
     let entry = decisions.get(id)
@@ -93,7 +100,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
   const jiraIssues = new Map(jira?.data?.map(issue => [issue.key, issue]))
   const repositoriesByDispatch = new Map<string, string[]>()
   for (const { task, row, fresh } of fleetRows) {
-    const repository = declaredRepository(row?.repo) ?? declaredRepository(task.project)
+    const repository = first([declaredRepository(row?.repo), declaredRepository(task.project)].filter((value): value is string => value !== null))
     if (!fresh || !repository) continue
     for (const dispatch of [dispatchForTask(task, row), dispatchForTask(task[tswEvidence] ?? {}, row?.[tswEvidence])]) {
       if (dispatch.status === 'card') {
@@ -103,17 +110,10 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       }
     }
   }
-  type JiraMerge = NonNullable<JiraRead['data']>[number]['merges'][number]
-  const latestJira = new Map<string, JiraMerge>()
-  for (const issue of jiraIssues.values()) for (const merge of issue.merges) {
-    const latest = latestJira.get(merge.id)
-    if (!latest || merge.createdAt > latest.createdAt ||
-        (merge.createdAt === latest.createdAt && BigInt(merge.comment) > BigInt(latest.comment))) latestJira.set(merge.id, merge)
-  }
   for (const issue of jiraIssues.values()) {
     const fresh = !!jira && current(jira.status)
     if (issue.warning) warnings.push(`${issue.key} · ${issue.warning}`)
-    const repository = issue.repository ?? first([...issue.merges.map(merge => merge.repository), ...(repositoriesByDispatch.get(issue.key) ?? [])])
+    const repository = first([...issue.merges.map(merge => merge.repository), ...(repositoriesByDispatch.get(issue.key) ?? [])])
     for (const decision of issue.decisions) {
       const id = JSON.stringify(['jira', issue.id, decision.id])
       addDecision(id, jiraWorkReadback(decision.question), repository, fresh, { kind: 'jira', id, label: `${issue.key} ${decision.id}`, url: issue.url })
@@ -122,7 +122,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       if (issue.notesUnavailable) incompleteJiraPulls.add(merge.id)
       const id = JSON.stringify([issue.id, merge.comment, merge.head])
       addMerge({ kind: 'jira', id, label: issue.key, url: `${issue.url}?focusedCommentId=${merge.comment}` },
-        merge.url, merge.head, fresh && !issue.notesUnavailable && !merge.conditional, latestJira.get(merge.id)?.comment !== merge.comment)
+        merge.url, merge.head, fresh && !issue.notesUnavailable && !merge.conditional, { at: merge.createdAt, jiraComment: merge.comment })
     }
   }
 
@@ -134,7 +134,8 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     const notes = history ? requestHistory(history.blocks) : []
     const actions = tags(card)
     const native = decisionRequests(notes, { multilineQuestion: true }).filter(request => request.requestedFrom?.trim().toLowerCase() === 'will')
-    const repository = declaredRepository(card.properties.Repository?.value) ?? first(repositoriesByDispatch.get(card.id) ?? [])
+    const repository = first([declaredRepository(card.properties.Repository?.value), ...(repositoriesByDispatch.get(card.id) ?? [])]
+      .filter((value): value is string => value !== null))
     const fresh = historyVerified && current(snapshot.intentions.status) && !card.properties['Will action']?.hasMore
     const url = cardSourceUrl(card.id)
     const withdrawn = withdrawnDecisionIds(notes)
@@ -161,16 +162,16 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       const question = request.question ?? request.action
       if (action === 'merge') {
         const publication = mergePublication(question)
-        addMerge(source, publication?.url ?? cardPull(card), publication?.head ?? null, fresh && publication?.conditional === false)
+        addMerge(source, publication?.url ?? cardPull(card), publication?.head ?? null, fresh && publication?.conditional === false, { at: Date.parse(request.since ?? '') })
       } else {
-        addDecision(id, question, repository ?? repositoryPublication(question), fresh, source)
+        addDecision(id, question, repository, fresh, source)
       }
     }
     const action = card.properties['Next action']?.value ?? card.properties['Next Action']?.value
     if (actions.includes('merge') && !publishedActions.has('merge')) {
       const publication = typeof action === 'string' ? mergePublication(action) : null
       addMerge({ kind: 'notion', id: card.id, label: 'Merge action', url }, publication?.url ?? cardPull(card), publication?.head ?? null,
-        fresh && publication?.conditional === false)
+        fresh && publication?.conditional === false, { at: Date.parse(card.last_edited_time ?? '') })
     }
     if (actions.includes('decision') && !publishedActions.has('decision') && typeof action === 'string' && action.trim() && !mergePublication(action)) {
       const id = JSON.stringify(['notion', card.id, 'Decision action'])
@@ -193,7 +194,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
   // Source-local readiness/response bindings come from the existing queue.
   // Its cross-source grouping alone is too broad to identify a decision.
   for (const item of buildQueue(snapshot).items) for (const source of item.sources) {
-    if (!source.request?.home || source.request.id === null || !source.question || !source.responseAnchor || source.readiness === 'future-or-conditional') continue
+    if (!source.request?.home || source.request.id === null || !source.question || !source.responseAnchor) continue
     const { home, taskId } = source.request
     const worker = workers.get(JSON.stringify([home, taskId]))
     const binding = JSON.stringify([source.responseAnchor, source.question, source.generation ?? null])
@@ -202,9 +203,9 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     const record: OwnerRequestSource = { kind: 'firstmate', id: source.responseAnchor, label: source.request.id, url: workerLink(home, taskId) }
     const merge = mergePublication(source.question)
     const fresh = current(source.status)
-    const repository = declaredRepository(worker?.row?.repo) ?? declaredRepository(worker?.task.project)
-    if (merge) addMerge(record, merge.url, merge.head, fresh && !merge.conditional)
-    else if (source.request.kind === 'decision') addDecision(id, source.question, repository, fresh, record)
+    const repository = first([declaredRepository(worker?.row?.repo), declaredRepository(worker?.task.project)].filter((value): value is string => value !== null))
+    if (merge) addMerge(record, merge.url, merge.head, fresh && !merge.conditional && source.readiness !== 'future-or-conditional', { at: NaN })
+    else if (source.request.kind === 'decision' && source.readiness !== 'future-or-conditional') addDecision(id, source.question, repository, fresh, record)
   }
 
   for (const { task, row, home, fresh } of fleetRows) {
@@ -212,20 +213,22 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     const dispatch = dispatchForTask(task[tswEvidence] ?? {}, row?.[tswEvidence])
     const issue = dispatch.status === 'card' ? jiraIssues.get(dispatch.cardId) : undefined
     if (!issue || !current(jira?.status ?? '') || !issue.reviewAssigned || issue.notesUnavailable) continue
-    // A registration can change while a Jira request remains open. Only the
-    // snapshot's explicit publication, agreeing with its registered head and
-    // ticket/URL, can attest the requested revision.
     const publication = readyHeadPublication(task.lastEventText ?? '')
     if (!publication?.head || publication.conditional || publication.head !== requestedHead(task.pr.head) ||
         publication.id !== releasePull(String(task.pr.url))?.id) continue
-    const latest = latestJira.get(publication.id)
-    if (!latest || latest.conditional || (latest.head && latest.head !== publication.head) ||
-        !issue.merges.includes(latest)) continue
+    if (!issue.merges.some(merge => merge.id === publication.id)) continue
     addMerge({ kind: 'firstmate', id: JSON.stringify([home, task.id, task.identity.spawn_gen]), label: `${issue.key} · worker publication`, url: task.identity.task_id ? workerLink(home, task.identity.task_id) : null },
       publication.url, publication.head, fresh)
   }
 
-  for (const [id, ask] of merges) if (incompleteJiraPulls.has(id)) ask.unverifiedRequest = true
+  for (const [id, ask] of merges) {
+    const active = activeRequests.get(ask)
+    if (!active) continue
+    const head = active.source.requestedHead
+    ask.requestedHeads = head ? [head] : []
+    ask.fresh = active.fresh
+    ask.unverifiedRequest = !head || !active.fresh || incompleteJiraPulls.has(id)
+  }
   for (const { ask, repositories } of decisions.values()) group(first(repositories)).decisions.push(ask)
   return { observedAt: snapshot.generatedAt, repositories: [...groups.values()].sort((a, b) => (a.repository ?? '\uffff').localeCompare(b.repository ?? '\uffff')), warnings: [...new Set(warnings)] }
 }

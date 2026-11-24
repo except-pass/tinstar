@@ -2,7 +2,8 @@
   "name": "tinstar",
   "version": "6.0.1",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "event-publisher"
   ],
   "description": "A visual cockpit for a First Mate worker fleet.",
   "type": "module",
