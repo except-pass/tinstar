@@ -1,6 +1,6 @@
 import type { RetractionAnswerSources } from '../shared/workflowRequests'
 import { CardLeaseStatus } from './CardLeaseStatus'
-import { cardSourceUrl, isJiraCard } from '../shared/workIdentity'
+import { deskCardSource } from './deskCardSource'
 import { SessionConnection } from './SessionConnection'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
@@ -253,7 +253,10 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
         {controls?.deskVisible && controls.expanded ? <p className="rec-basis">Continue in the open Discuss conversation.</p> : <AskContextComposer key={draft?.key ?? item.id} compact subject={{ ...subject, ...(draft ? { question: draft.question } : {}) }} />}
       </section>
       <section className="evidence"><h3 className="small-cap">Sources and evidence</h3><div className="evidence-links">
-        {item.cardIds.map(id => <a key={id} href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗</a>)}
+        {item.cardIds.map(id => {
+          const source = deskCardSource(id, item, scene?.cards.find(card => card.id === id)?.source)
+          return <a key={id} href={source.url} target="_blank" rel="noreferrer">Read {source.provider} card ↗</a>
+        })}
         {item.evidence.filter(e => e.kind !== 'card').map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Related PR' : 'Evidence'} ↗</a>)}
         {proposal?.value.references.filter(ref => !item.evidence.some(e => e.url === ref.url)).map(ref => <a key={ref.url} href={ref.url} target="_blank" rel="noreferrer">{ref.label} ↗</a>)}
       </div><p className="source-basis">{sourceStatus}</p>
@@ -284,8 +287,10 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
 /** Prepared review renders evidence only; its packet controller owns answer and
  * lease actions. The workbench keeps its original interactive context by default. */
 export function DecisionCardContext({ id, showLink = true, readOnly = false }: { id: string; showLink?: boolean; readOnly?: boolean }) {
-  const { scene, refreshAfterMutation, send } = useDeskWorkspace()
+  const { scene, queue, refreshAfterMutation, send } = useDeskWorkspace()
   const card = scene?.cards.find(card => card.id === id)
+  const item = (queue?.needsWill ?? queue?.items)?.find(item => item.cardIds.includes(id))
+  const source = deskCardSource(id, item, card?.source)
   const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }>; answerSources?: RetractionAnswerSources } | null>(null)
   useEffect(() => {
     const controller = new AbortController()
@@ -296,7 +301,7 @@ export function DecisionCardContext({ id, showLink = true, readOnly = false }: {
   }, [id])
   return <section className="decisions-evidence" aria-label={card ? cardTitle(card) : 'Supporting card'}>
     {!readOnly && <CardLeaseStatus key={id} cardId={id} />}
-    {showLink && <a href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>}
+    {showLink && source.url && <a href={source.url} target="_blank" rel="noreferrer">Read {source.provider} card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>}
     {context?.outcome === 'unavailable' && <p>Source details are unavailable. Use the source link.</p>}
     {!!context?.blocks?.length && <details className="decisions-evidence" open><summary>Question, choices and evidence</summary>{context.blocks.map(block => <p key={block.id}>{displayRequestText(block.text, 'Additional source details are available in Technical details.')}</p>)}</details>}
     {card && !readOnly && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} answerSources={context?.answerSources} onSaved={refreshAfterMutation} /></details></>}

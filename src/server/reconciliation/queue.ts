@@ -1,3 +1,4 @@
+import { legacyWorkObservation } from './workReader'
 import { reviewView } from './reviews'
 import { decisionCard } from './decisionCard'
 import { isReviewStatus } from '../../shared/reviews'
@@ -19,6 +20,7 @@ import { requestText, isCoordinationRequest, displayRequestText } from '../../sh
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
+  url?: string
   question?: string
   generation?: string | null
   actions?: string[]
@@ -138,7 +140,7 @@ function context(item: QueueItem, card: Card, observation: Pick<Observation<unkn
     }
   }
   if (word(card, 'Waiting For ID') && !cardWaitsForWill(card)) lower(item, 'future-or-conditional', 'Published structured dependency must clear before the decision is immediate')
-  if (!fresh(observation)) lower(item, 'needs-readiness-verification', 'Notion observation is stale or unavailable; last-known action only')
+  if (!fresh(observation)) lower(item, 'needs-readiness-verification', `${card.source?.provider === 'jira' ? 'Jira' : 'Notion'} observation is stale or unavailable; last-known action only`)
   if (card.properties['Will action']?.hasMore || !word(card, 'Owner') || !word(card, 'Status')) {
     lower(item, 'needs-readiness-verification', 'Owner, status or action context is incomplete')
   }
@@ -147,6 +149,7 @@ function context(item: QueueItem, card: Card, observation: Pick<Observation<unkn
 /** Read-only, deterministic projection; a checkpoint is ordering context, never readiness proof. */
 export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string, PullReadiness> = new Map(), now = Date.now(), inventory: PullsRead | null = null) {
   const intentions = ageObservation(input.intentions, now)
+  const legacy = ageObservation(legacyWorkObservation(intentions), now)
   const fleet = input.fleet.map(home => ({ ...home, observation: ageObservation(home.observation, now) }))
   const scene = reconcileScene({ ...input, intentions, fleet }, now)
   const cards = new Map((intentions.data?.cards ?? []).map(card => [card.id, card]))
@@ -199,7 +202,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       if (request.kind !== 'decision' || !request.id || !request.taskId || entry.card.type === 'blocked') continue
       const task = home.observation.data?.tasks.find(task => task.id === request.taskId)
       const hold = home.observation.data?.backlog?.find(row => row.id === entry.matchedHoldId)
-      const canonical = decisionCard(request, [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])], intentions, now)
+      const canonical = decisionCard(request, [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])], legacy, now)
       if (!canonical.cardId) continue
       const taskHolds = homeRequests[index]!.filter(candidate => candidate.ownerReady && candidate.request.kind === 'hold' &&
         candidate.request.taskId === request.taskId)
@@ -225,7 +228,10 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   }
 
   for (const card of cards.values()) {
-    if (fresh(intentions) && (card.archived || card.in_trash || complete(word(card, 'Status')))) continue
+    const provider = card.source?.synthetic === false ? 'jira' : card.source?.synthetic ? 'jira-pilot' : 'notion'
+    const observed = intentions.sources?.find(source => source.source === provider)
+    const cardObservation = observed ? { ...intentions, ...observed } : intentions
+    if (fresh(provider === 'jira' ? cardObservation : legacy) && (card.archived || card.in_trash || complete(word(card, 'Status')))) continue
     const actions = prop(card, 'Will action')
     let tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
     const owner = normalize(word(card, 'Owner') ?? '')
@@ -240,23 +246,24 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       if (!tags.length && !waitingForWill) continue
     }
     if ((owner !== 'will' || isReviewStatus(word(card, 'Status'))) && !tags.length && !waitingForWill) continue
+    const nativeRequest = card.source?.synthetic === false && waitingForWill
     const action = word(card, 'Next action') ?? word(card, 'Next Action')
     const merge = tags.some(tag => normalize(tag) === 'merge')
     const remainingAction = resolvedMerge && (!action || /^(?:please\s+)?merge\b/i.test(action))
       ? [tags.join(', '), waitingForWill ? word(card, 'Waiting For') : null].filter(Boolean).join('; ') : action
     const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, remainingAction, merge ? 'merge' : 'decision')
     if (resolvedMerge) resolvedMerges.add(item)
-    context(item, card, intentions, now, ownerDecisions.has(card.id), cardWaitsForWill(card))
+    context(item, card, cardObservation, now, ownerDecisions.has(card.id), cardWaitsForWill(card))
     if (resolvedMerge && remainingAction !== action) lower(item, 'needs-readiness-verification', 'Merge request resolved; verify the concrete next action for the remaining asks')
-    item.sources.push({ ...source(card.id.startsWith('jira:') ? 'jira' : 'notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', intentions),
-      actions: tags, request: { home: null, taskId: null, id: card.id, kind: card.id.startsWith('jira:') ? 'jira-card' : 'notion-card' } })
+    item.sources.push({ ...source(card.id.startsWith('jira:') ? 'jira' : 'notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', cardObservation),
+      url: safeUrl(card.url) ?? undefined, actions: tags, request: { home: null, taskId: null, id: card.id, kind: card.id.startsWith('jira:') ? 'jira-card' : 'notion-card' } })
     identities.set(item, [item.id, ...(ownerDecisions.has(card.id) ? [ownerDecisions.get(card.id)!.queueId] : [])])
     explicitPulls.set(item, pullIds([word(card, 'Link'), word(card, 'Evidence')]))
     if (ownerDecisions.has(card.id)) tagOnlyCandidates.add(item)
     // Workbench executes only actions for which the source published text.
-    if (!action && !ownerDecisions.has(card.id)) {
+    if (nativeRequest || !action && !ownerDecisions.has(card.id)) {
       tagOnlyCandidates.add(item)
-      lower(item, 'needs-readiness-verification', 'The source has no action text to review in Workbench')
+      lower(item, 'needs-readiness-verification', nativeRequest ? 'Verify the owner request in Jira' : 'The source has no action text to review in Workbench')
     }
     if (!merge && !cardWaitsForWill(card) && tags.some(tag => !['decision'].includes(normalize(tag)))) {
       tagOnlyCandidates.delete(item)
@@ -281,7 +288,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const exactBinding = request.kind === 'hold' ? [...ownerDecisions].find(([, binding]) =>
         binding.request.home === request.home && binding.taskHoldId === request.id &&
         (request.taskId === null || request.taskId === binding.request.taskId)) : undefined
-      const canonical = exactBinding ? { cardId: exactBinding[0] } : decisionCard(request, refs, intentions, now)
+      const canonical = exactBinding ? { cardId: exactBinding[0] } : decisionCard(request, refs, legacy, now)
       const known = canonical.cardId ? [cards.get(canonical.cardId)].filter((card): card is Card => !!card) : []
       const canonicalRelationship = known.length === 1
       const binding = canonical.cardId ? ownerDecisions.get(canonical.cardId) : undefined
@@ -304,7 +311,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
         ...(entry.ownerReady && request.id ? { responseAnchor: requestAnchor(request) } : {}) })
       // Readiness also depends on the Notion feed staying fresh enough to
       // verify that this request has not already been answered in its context.
-      item.sources.push(source('notion', intentions.data?.dataSourceId ?? 'configured-source', 'request-readiness-context', intentions))
+      item.sources.push(source('notion', legacy.data?.dataSourceId ?? 'configured-source', 'request-readiness-context', legacy))
       // Request ids are scoped. A shared bare key on two workers is never identity.
       identities.set(item, [call.key, ...(ownerDecision ? [binding!.queueId] : []), ...(entry.matchedHoldId ? [JSON.stringify(['hold', request.home, entry.matchedHoldId])] : [])])
       link(item, text(task?.pr.url)); link(item, text(hold?.pr_url))
@@ -313,14 +320,14 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const questionLinks = (call.headline.match(/https:\/\/[^\s<>"']+/g) ?? []).map(url => url.replace(/[),.;!?]+$/, '')).filter(url => parsePullUrl(url))
       for (const url of questionLinks) link(item, url)
       explicitPulls.set(item, pullIds([text(hold?.pr_url), ...questionLinks]))
-      if (canonicalRelationship) for (const card of known) context(item, card, intentions, now, ownerDecision, cardWaitsForWill(card))
+      if (canonicalRelationship) for (const card of known) context(item, card, legacy, now, ownerDecision, cardWaitsForWill(card))
       if (canonicalRelationship && known.some(card => !accountable(card, request.home))) {
         lower(item, 'needs-readiness-verification', 'Card owner is outside the reconciled First Mate/Will request; verify accountability')
       }
       if (!canonicalRelationship) {
         lower(item, 'needs-readiness-verification', canonical.reason ?? 'Canonical card is outside the readable source; verify context')
       }
-      if (!fresh(observation) || !fresh(intentions)) lower(item, 'needs-readiness-verification', 'Fleet/Notion context is stale or unavailable; absence of an answered action cannot be verified')
+      if (!fresh(observation) || !fresh(legacy)) lower(item, 'needs-readiness-verification', 'Fleet/Notion context is stale or unavailable; absence of an answered action cannot be verified')
       if (call.type === 'blocked' || !item.action || !ownerReady) {
         lower(item, 'needs-readiness-verification', 'No owner-actionable record explicitly matches this request ID')
       }
@@ -373,7 +380,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   for (const item of candidates) {
     for (const pull of queuePulls(item, inventory)) link(item, pull.url)
     if (restrictAction(item, item.action, actionContexts.get(item))) tagOnlyCandidates.delete(item)
-    const merge = !resolvedMerges.has(item) && item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
+    const native = item.cardIds.some(id => cards.get(id)?.source?.synthetic === false)
+    const merge = !resolvedMerges.has(item) && item.kind !== 'blocked' &&
+      (item.kind === 'merge' || (!native && !!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
     if (merge) item.kind = 'merge'
     if (!verifyPull(item)) continue
     for (const source of item.sources) if (source.request) Object.assign(source, { readiness: item.readiness, action: item.action, reasons: [...item.reasons] })

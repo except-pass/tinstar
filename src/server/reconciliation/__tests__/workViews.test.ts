@@ -29,7 +29,7 @@ it('returns the full fresh census with bounded history while shared operational 
   const history = vi.spyOn(CardContextReader.prototype, 'commentDetails').mockResolvedValue({ outcome: 'available', blocks: [] })
   try {
     const first = await sources.workViews()
-    expect(read).toHaveBeenCalledWith(true)
+    expect(read).toHaveBeenNthCalledWith(1, true, {}, false, false)
     expect(first.needsWill).toHaveLength(78)
     expect(first.reviews.items).toHaveLength(14)
     expect(first.reviews.complete).toBe(true)

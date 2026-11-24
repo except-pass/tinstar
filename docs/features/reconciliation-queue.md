@@ -2,7 +2,7 @@
 
 `GET /api/reconciliation/queue` returns `{ok:true,data:{generatedAt,scope,readOnly,coverage,warnings,items,counts,needsWill,claimCards,operationalExceptions,pullCoverage,reviews,reviewRecoveries,reviewExceptions,refreshing}}` through the [reconciliation source configuration](reconciliation-floor.md#run-and-configure). The [review contract](workflow.md#deployed-feature-review) and [deployment handoff contract](floor-deploy.md#tin-star-review-handoff) own the review fields and their reconciliation rules. It shares the existing source caches, local/tailnet origin policy, GET/OPTIONS restriction and `Cache-Control: no-store`. There are no new approval, dismissal, merge, reorder or presentation-defer endpoints. A read or moving to another item cannot choose a source answer. Bounded refresh can reconcile an already-recorded explicit answer through the [shared workflow](workflow.md#first-mate-decision-reconciliation); operational queue reads therefore report `readOnly: false`. The pure source projection remains read-only.
 
-Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. Every request source retains its own `request` tuple (`home`, `taskId`, `id`, `kind`). First Mate kinds are `hold` and `decision`; Notion uses `notion-card`, its exact card ID, and null home/task. Each request source has its own `readiness`, `action`, and `reasons`. A First Mate source may carry a `responseAnchor` for that exact tuple; aggregate ID arrays and the queue item ID are never response targets. GitHub observations and the Notion feed observation used to verify request context are supporting evidence rather than request identities. Their expiry still suspends actionable presentation. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
+Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. Every request source retains its own `request` tuple (`home`, `taskId`, `id`, `kind`). First Mate kinds are `hold` and `decision`. Notion and Jira use `notion-card` and `jira-card` respectively, with the exact card ID and null home/task. Each request source has its own `readiness`, `action`, and `reasons`. A First Mate source may carry a `responseAnchor` for that exact tuple; aggregate ID arrays and the queue item ID are never response targets. GitHub observations and the Notion feed observation used to verify request context are supporting evidence rather than request identities. Their expiry still suspends actionable presentation. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
 The response also includes `claimCards`, a strict-candidate property projection
 for claim filtering: Owner, Status, Will action, Waiting For, Waiting For Type/ID,
@@ -66,7 +66,8 @@ results use separate caches. Selection still uses fresh request-scoped validatio
 
 The display cache lasts 20 seconds after completion; concurrent reads share its
 pending refresh. `?refresh=1` invalidates that display cache, scheduling a subsequent
-refresh if one is already pending. It does not bypass underlying source caches.
+refresh if one is already pending. If it starts a new operational read, that read
+requests fresh source observations.
 The UI polls one second after a response with `refreshing: true`, otherwise 20
 seconds after each read, with a 60-second request deadline. A confirmed or partial
 local workflow save triggers an immediate `?refresh=1` read and supersedes any
@@ -80,6 +81,8 @@ card selection can replace the pending selection. MCP queue reads and action val
 continue to use the operational queue rather than this progressive HTTP display.
 
 ## Source limits and prerequisites
+
+The owner-authorized Desk includes native Jira requests for Will. A Jira ticket in Waiting For with an Actor blocker targeting Will contributes the blocker condition as its proposed action and requires verification in Jira. When present, `sources[].url` supplies the link for opening the native Jira issue from Desk.
 
 The queue retains only the snapshot's published open-decision keys/summaries, hold kind/completion and task-origin ID. It does not return raw backlog bodies, briefs, pane transcripts or operator command suggestions. Existing worker/message/terminal controls and receipt delivery remain unchanged; Decisions binds to them per source.
 

@@ -40,18 +40,31 @@ Inject the scoped Jira service-account token as `TINSTAR_JIRA_TOKEN` through the
 
 Owner is one Jira single select with approved names and no default. Decision Questions and Waiting For Condition are multiline fields. Waiting For Type is a single select with Actor and Event. Waiting For ID is a single-line field. For a Jira blocker, use one inward Blocks link from the blocked ticket. Jira's own project permissions and workflow rules apply to native UI edits.
 
+Admin-merge handoffs set Due date on the Task work type. Enable that field and grant the service account permission to schedule work items. [Jira due-date configuration](https://support.atlassian.com/jira-software-cloud/docs/add-the-due-date-field-to-your-issues) · [Jira scheduling permission](https://support.atlassian.com/jira-software-cloud/docs/schedule-an-issue/)
+
 ## MCP calls
 
 Tin Star requests English status names from Jira Cloud for transition matching and readback, regardless of the service account's language preference.
 
 | Tool | Arguments and result |
 | --- | --- |
+| `search_work` | Clawson pickup requests `owner: "Clawson"`, `statuses: ["Queued", "In Progress"]` and `limit: 100`. See the Jira pickup response contract below. |
 | `create_work` | Creates a ticket in the configured work project. Supply `name` and `operation_id`. If supplied, `provider` must be `"jira"`. Task is the default. Optionally include `issue_type: "Epic"`, `description`, or `owner`. Jira must confirm Backlog on create readback. |
 | `get_work` | Pass the returned immutable `card.id` as `card_id` for get, edit, transition, and link calls. The ID has the form `jira:<site hostname>:<project ID>:<issue ID>`. The result includes the display key, native fields and links. The default detailed read includes up to 50 recent comments. Request `implementation_contract` to read verified chunks of an approved handoff. Set `details: false` to skip comments. |
 | `submit_handoff` | See [approved implementation handoffs](workflow.md#one-call-approved-implementation-handoffs). |
 | `update_work` | Use `kind: "jira_edit"` and the ticket ID. Edit `name`, `description`, `owner`, or `assignee`. Assignee must match the exact display name of one active, assignable Jira account. MCP readback exposes the display name and omits the account ID. Use `null` to clear description or Owner where allowed. Send `add_questions` with `id`, `question` and optional `options`, or `answers` with `id` and `answer`. Set `blocker` with `type`, `target` and `unblocks_when`, clear it with `null`, or add a Jira comment with `note`. |
 | `transition_work` | Supply `verb` and give `to` for verbs with several destinations. Supply `evidence` and `reason` where relevant. Use `disposition` only for Park, Cancel, and Stop and Requeue. Entry into Verify in Prod requires identical `required_revision` and `live_revision`. The [transition rules](../../src/server/reconciliation/jiraWorkRules.ts) define allowed routes and required evidence, reasons and dispositions. |
 | `link_work` | Set `action: "add"` with `target_key`, native link type `type`, and `direction` as displayed on this ticket. Set `action: "remove"` with the native `link_id`. |
+
+In each Jira search record, `records[].card.source` contains the qualified Jira
+`id`, browser `url` and Jira update timestamp in `last_edited_time`. The
+`archived` flag is true for Canceled tickets, and `in_trash` is false.
+Read Owner, Status, Name, Next check-in and Last touched by from
+`properties[<name>].value`. Next check-in holds the Jira due date in its
+date-only `start` field, or is null when no due date is set. Last touched by
+is null. Require fresh, complete `coverage.intentions` before pickup. The verdict
+includes the configured work sources. An unread Jira result page or incomplete
+issue record prevents complete coverage.
 
 Direct Jira mutations use an `operation_id`. Retry with the same arguments and authenticated caller. The receipt records the operation ID, kind, dispatch state, and any definitive Jira write rejection or initial create readback contradiction. An identical retry returns a recorded failure unchanged. An undispatched retry re-evaluates preconditions and can send a write once they pass. A dispatched retry without a recorded failure only checks Jira. That check confirms the requested fields, destination status, link, or comment as they exist now, even if a different writer or an earlier comment accounts for the match, and does not reconstruct the original transition path. Create retries check the operation property in the configured project. If the requested state cannot be confirmed, the result is `unconfirmed`. Check Jira before using a new operation ID. Keep Tin Star's private config directory across restarts so it retains caller-scoped receipts. Authenticated Tin Star tunnel callers share read and write access to the configured Jira project. Cross-project issues are used only as link targets by key and are represented only by the key Jira returns. TSW is the owner's private project. Authenticated MCP callers inherit the service account's TSW visibility. They may receive restricted comment IDs, creation times and author account IDs. Restricted comment bodies are omitted.
 
@@ -62,6 +75,8 @@ On a dispatched transition retry, if the destination matches but the recent comm
 A human can move a ticket between Tin Star’s pre-write project check and Jira applying the request. Restrict the service account’s write permissions to TSW to enforce the boundary at write time, while Tin Star reports an error if post-write readback finds the ticket in another project.
 
 The main path is Backlog → To Do → Queued → In Progress. Review and release paths use Ready for Review, Waiting for Prod Release and Verify in Prod before Done. Fast-track goes directly to Queued. Complete Directly goes from In Progress to Done for verified work without remaining review or release. Decision and Waiting For pause active work. Answer Decision and Resolve Wait choose an explicit destination. Recovery verbs return work to To Do or Queued. Cancel records the reason and disposition for live work, Park returns work to Backlog, and Reopen returns a terminal ticket to To Do or Queued.
+
+See the [Desk queue](reconciliation-queue.md#source-limits-and-prerequisites) for Jira owner requests and the [admin-merge handoff](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge) for Pulls and Ask. Clawson can use `jira_edit` to comment and return Owner to Firstmate or the requesting mate.
 
 Decision Questions uses headings such as `D1 [Open]: Which option should we adopt?`. Options and answers follow on indented lines, for example `  Answer: Use the first option.` Change the heading to `[Answered]` when answering in Jira. MCP edits reread the field before applying targeted changes, preserve untouched ADF content, and leave field history in Jira. Jira has no conditional field write, so a native edit between the reread and the write can still race with the MCP edit. Before entering Queued, provide an owner, instructions and a clear success condition, with the primary blocker removed. Start rechecks instructions and blockers, including blockers staged before Block. Return a Queued ticket to To Do before clearing its instructions. Tin Star checks the declared evidence and Jira readback. Jira remains the place to inspect the underlying work and its history.
 

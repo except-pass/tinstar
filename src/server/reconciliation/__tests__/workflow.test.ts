@@ -5,8 +5,6 @@ import { buildWorkerLinkReport } from '../workerLinkReport'
 import { CardLeases, withLeaseCaller } from '../cardLeases'
 import { reconcileDecision } from '../decisionResolution'
 import { queueSignals } from '../queueInputs'
-import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
-import { readerRepositories } from '../../../shared/actions'
 import { checkInReport } from '../checkInWatchdog'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -1636,155 +1634,27 @@ it('requests readiness for active association-only PRs through the shared queue'
   expect(view.needsWill?.find(item => item.cardIds.includes(card.id))?.pulls).toEqual([expect.objectContaining({ url, readiness: null })])
 })
 
-it('creates one Clawson merge card with the owner click properties and deduplicates concurrent/restarted clicks', async () => {
-  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-card-')); roots.push(root)
-  const workflow = new WorkflowOperations(f.reader, async () => [], root)
-  const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [1, 2].map(number => ({ url: `https://github.com/owner/repo/pull/${number}`, head: 'a'.repeat(40) })) }
-  const at = '2026-11-10T12:00:00.000Z'
-  const prepared = vi.fn(async () => ({ at, name: 'Admin merge 2 PRs: owner/repo', brief: 'Owner gave the merge word for the two exact PR heads.', script: 'set -euo pipefail\n# Two exact PR heads' }))
-  const results = await Promise.all([workflow.createClawsonMerge(input, 'owner@example.test', prepared), workflow.createClawsonMerge(input, 'owner@example.test', prepared)])
-  for (const result of results) expect(result).toMatchObject({ outcome: 'saved', card: { properties: { Owner: { value: 'Clawson' }, Status: { value: 'In Progress' }, 'Will action': { value: ['Merge'] }, 'Next check-in': { value: { start: at } }, 'Last touched by': { value: 'owner@example.test' } } } })
-  const restarted = new WorkflowOperations(f.reader, async () => [], root)
-  expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepared)).toMatchObject({ outcome: 'saved', code: 'already-saved' })
-  expect(prepared).toHaveBeenCalledTimes(1)
-  expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
-  expect(f.blocks.some(block => JSON.stringify(block).includes('Owner gave the merge word'))).toBe(true)
-  const createdBlocks = f.requests.find(request => request.method === 'POST' && request.url.endsWith('/pages'))!.body.children
-  expect(createdBlocks.filter((block: any) => block.type === 'heading_2').map((block: any) => block.heading_2.rich_text.map((r: any) => r.text.content).join(''))).toEqual(['Authority', 'Step 1 (run once)', 'Return'])
-  expect(createdBlocks.find((block: any) => block.type === 'code').code).toEqual({ language: 'bash', rich_text: [{ type: 'text', text: { content: 'set -euo pipefail\n# Two exact PR heads' } }] })
-  expect(createdBlocks.some((block: any) => block.paragraph?.rich_text.some((r: any) => r.text.content.includes('a red or pending check): STOP and post the output')))).toBe(true)
-  expect(await restarted.createClawsonMerge({ ...input, targets: [input.targets[0]!] }, 'owner@example.test', prepared)).toMatchObject({ code: 'operation-conflict' })
-})
-
-
-it('writes one guarded Clawson card for a suggested merge at the head read when the owner clicks', async () => {
-  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-suggested-')); roots.push(root)
-  const workflow = new WorkflowOperations(f.reader, async () => [], root)
-  const head = 'c'.repeat(40)
-  const pr = 'https://github.com/owner/repo/pull/7'
-  const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [{ url: pr, head }] }
-  const read = async (path: string): Promise<unknown> => {
-    if (/\/pulls\/\d+$/.test(path)) return { head: { sha: head }, base: { ref: 'main' }, state: 'open', merged: false, draft: false, mergeable: true }
-    if (path.includes('/rules/')) return []
-    if (path.includes('/branches/')) return { protection: { required_status_checks: { contexts: ['CI'] } } }
-    if (path.includes('/check-runs')) return { total_count: 1, check_runs: [{ name: 'CI', head_sha: head, status: 'completed', conclusion: 'success', app: { id: 1 } }] }
-    if (path.includes('/status?')) return { total_count: 0, sha: head, statuses: [] }
-    throw new Error(`Unexpected read: ${path}`)
-  }
-  const prepare = () => prepareClawsonMerge(input, 'owner@example.test', read)
-  const [first, second] = await Promise.all([
-    workflow.createClawsonMerge(input, 'owner@example.test', prepare),
-    workflow.createClawsonMerge(input, 'owner@example.test', prepare),
-  ])
-  for (const result of [first, second]) expect(result).toMatchObject({ outcome: 'saved' })
-  const creates = f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))
-  expect(creates).toHaveLength(1)
-  const text = JSON.stringify(creates[0]!.body.children)
-  expect(text).toContain(`Exact head SHA: ${head}`)
-  expect(text).toContain(`gh pr merge ${pr} --squash --admin --match-head-commit ${head}`)
-  expect(text).toContain('headRefOid')
-  expect(text).toContain('MERGEABLE')
-})
-
-it.each([
-  ['red', { conclusion: 'failure', status: 'completed', draft: false, merged: false, mergeable: true }, 'CI is failure'],
-  ['pending', { conclusion: null, status: 'in_progress', draft: false, merged: false, mergeable: true }, 'CI is pending'],
-  ['draft', { conclusion: 'success', status: 'completed', draft: true, merged: false, mergeable: true }, 'still a draft'],
-  ['merged', { conclusion: 'success', status: 'completed', draft: false, merged: true, mergeable: true }, 'already merged'],
-  ['conflict', { conclusion: 'success', status: 'completed', draft: false, merged: false, mergeable: false }, 'has merge conflicts'],
-  ['head-changed', { conclusion: 'success', status: 'completed', draft: false, merged: false, mergeable: true }, 'head changed'],
-])('writes no Clawson card when a suggested merge is %s', async (_name, state, reason) => {
-  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-suggested-stop-')); roots.push(root)
-  const workflow = new WorkflowOperations(f.reader, async () => [], root)
-  const head = 'c'.repeat(40)
-  const input = { operation_id: '11111111-1111-4111-8111-111111111111', targets: [{ url: 'https://github.com/owner/repo/pull/7', head }] }
-  const read = async (path: string): Promise<unknown> => {
-    if (/\/pulls\/\d+$/.test(path)) return { head: { sha: _name === 'head-changed' ? 'd'.repeat(40) : head }, base: { ref: 'main' }, state: 'open', merged: state.merged, draft: state.draft, mergeable: state.mergeable }
-    if (path.includes('/rules/')) return []
-    if (path.includes('/branches/')) return {}
-    if (path.includes('/check-runs')) return { total_count: 1, check_runs: [{ name: 'CI', head_sha: head, status: state.status, conclusion: state.conclusion, app: { id: 1 } }] }
-    if (path.includes('/status?')) return { total_count: 0, sha: head, statuses: [] }
-    throw new Error(`Unexpected read: ${path}`)
-  }
-  await expect(workflow.createClawsonMerge(input, 'owner@example.test', () => prepareClawsonMerge(input, 'owner@example.test', read))).resolves.toMatchObject({ outcome: 'not-saved', code: 'merge-refused', message: expect.stringContaining(reason) })
-  expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(0)
-})
-
-it('creates a bounded Clawson card for green PRs across all ten Reader repositories', async () => {
-  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-ten-repos-')); roots.push(root)
-  const workflow = new WorkflowOperations(f.reader, async () => [], root)
-  const head = 'a'.repeat(40)
-  const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: readerRepositories.map((repository, index) => ({ url: `https://github.com/${repository}/pull/${index + 1}`, head })) }
-  const read = async (path: string): Promise<unknown> => {
-    if (/\/pulls\/\d+$/.test(path)) return { head: { sha: head }, base: { ref: 'main' }, state: 'open', merged: false, draft: false, mergeable: true }
-    if (path.includes('/rules/')) return []
-    if (path.includes('/branches/')) return { protection: { required_status_checks: { contexts: ['CI'] } } }
-    if (path.includes('/check-runs')) return { total_count: 1, check_runs: [{ name: 'CI', head_sha: head, status: 'completed', conclusion: 'success', app: { id: 1 } }] }
-    if (path.includes('/status?')) return { total_count: 0, sha: head, statuses: [] }
-    throw new Error(`Unexpected read: ${path}`)
-  }
-  const result = await workflow.createClawsonMerge(input, 'owner@example.test', () => prepareClawsonMerge(input, 'owner@example.test', read))
-  expect(result).toMatchObject({ outcome: 'saved', card: { properties: { Owner: { value: 'Clawson' }, Status: { value: 'In Progress' } } } })
-  const creates = f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))
-  expect(creates).toHaveLength(1)
-  const body = creates[0]!.body
-  const title = body.properties.Name.title.map((part: any) => part.text.content).join('')
-  expect(title).toBe('Admin merge 10 PRs across 10 repositories')
-  expect(title.length).toBeLessThanOrEqual(200)
-  const brief = body.children.flatMap((block: any) => block[block.type].rich_text.map((part: any) => part.text.content)).join('\n')
-  for (const [index, target] of input.targets.entries()) {
-    expect(brief).toContain(readerRepositories[index])
-    expect(brief).toContain(`${index + 1}. ${target.url}\nExact head SHA: ${target.head}`)
-    expect(brief).toContain(`gh pr merge ${target.url} --squash --admin --match-head-commit ${target.head}`)
-  }
-})
-
-
-it.each(['already merged', 'head changed', 'GitHub unavailable'].flatMap(reason => [0, 1].map(page => ({ reason, page }))))('recovers an uncertain Clawson creation on page $page before preflight reports $reason', async ({ reason, page }) => {
-  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-lost-create-')); roots.push(root)
+it('recovers a legacy Notion admin-merge receipt across pages without creating or running preflight', async () => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'legacy-merge-receipt-')); roots.push(root)
+  const actor = 'owner@example.test'
   const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [{ url: 'https://github.com/owner/repo/pull/1', head: 'a'.repeat(40) }] }
-  const prepare = vi.fn(async () => ({ at: '2026-11-10T12:00:00.000Z', name: 'Admin merge 1 PR: owner/repo', brief: 'Exact authorized selection', script: 'set -euo pipefail\n# Exact authorized selection' }))
-  f.controls.lostCreate()
-  const workflow = new WorkflowOperations(f.reader, async () => [], root)
-  expect(await workflow.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed' })
-  const created = f.pages.get('c'.repeat(32))!
-  const decoyId = 'd'.repeat(32)
-  const decoy = { ...structuredClone(created), id: decoyId }
-  if (page === 1) f.pages.delete(created.id)
-  f.pages.set(decoyId, decoy)
-  if (page === 1) f.pages.set(created.id, created)
+  const title = 'Admin merge 1 PR: owner/repo'
+  const createdId = 'c'.repeat(32), decoyId = 'd'.repeat(32)
+  const page = structuredClone(f.pages.get(id))
+  page.properties.Name.title = [{ plain_text: title }]
+  for (const cardId of [decoyId, createdId]) f.pages.set(cardId, { ...page, id: cardId, url: `https://www.notion.so/${cardId}` })
+  f.blocks.push({ id: 'legacy-marker', type: 'paragraph', pageId: createdId, paragraph: { rich_text: [{ plain_text: receiptMarker(actor, input.operation_id) }] } })
   f.controls.queryPageSize(1)
-  const beforeRetry = f.requests.length
-  prepare.mockRejectedValue(new Error(reason))
-  const restarted = new WorkflowOperations(f.reader, async () => [], root)
-  expect(await restarted.createClawsonMerge({ ...input, targets: [{ ...input.targets[0]!, head: 'b'.repeat(40) }] }, 'owner@example.test', prepare)).toMatchObject({ code: 'operation-conflict' })
-  expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: 'c'.repeat(32), url: `https://www.notion.so/${'c'.repeat(32)}` } })
-  expect(prepare).toHaveBeenCalledTimes(1)
-  const searches = f.requests.slice(beforeRetry).filter(request => request.url.endsWith('/query'))
-  expect(searches).toHaveLength(page + 1)
-  for (const search of searches) expect(search.body.filter).toEqual({ property: 'Name', title: { equals: 'Admin merge 1 PR: owner/repo' } })
-  if (page === 1) expect(searches[1]!.body.start_cursor).toBe('1')
-  expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
-})
-
-
-it.each(['receipt store', 'confirmed card'])('preserves Clawson creation uncertainty when reading the %s fails after restart', async failure => {
-  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-receipt-read-')); roots.push(root)
-  const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [{ url: 'https://github.com/owner/repo/pull/1', head: 'a'.repeat(40) }] }
-  const prepare = vi.fn(async () => ({ at: '2026-11-10T12:00:00.000Z', name: 'Admin merge 1 PR: owner/repo', brief: 'Exact authorized selection', script: 'set -euo pipefail' }))
+  const receipts = new CreationReceipts(root)
+  await receipts.put(JSON.stringify([actor, input.operation_id]), JSON.stringify({ kind: 'clawson-merge', ...input }))
   const workflow = new WorkflowOperations(f.reader, async () => [], root)
-  expect(await workflow.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'saved' })
-  const receiptPath = join(root, 'workflow-create-receipts.json')
-  const receipt = await readFile(receiptPath, 'utf8')
+  const prepare = vi.fn(async () => { throw new Error('Preflight is called only for new work') })
+  expect(await workflow.createClawsonMerge(input, actor, prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: createdId } })
   const restarted = new WorkflowOperations(f.reader, async () => [], root)
-  prepare.mockRejectedValue(new Error('Head advanced; preflight must not run'))
-  if (failure === 'receipt store') await writeFile(receiptPath, 'unreadable receipt')
-  else vi.spyOn(f.reader, 'card').mockRejectedValueOnce(new Error('Notion unavailable'))
-  expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed', saved_fields: [] })
-  if (failure === 'receipt store') await writeFile(receiptPath, receipt)
-  expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: 'c'.repeat(32) } })
-  expect(prepare).toHaveBeenCalledTimes(1)
-  expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
+  expect(await restarted.createClawsonMerge(input, actor, prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: createdId } })
+  expect(prepare).not.toHaveBeenCalled()
+  expect(f.requests.filter(request => request.url.endsWith('/query')).map(request => request.body.start_cursor)).toEqual([undefined, '1'])
+  expect(f.requests.some(request => request.method === 'POST' && request.url.endsWith('/pages'))).toBe(false)
 })
 
 function decisionFixture() {

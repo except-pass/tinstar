@@ -70,7 +70,7 @@ export interface PresentationReaders {
   preparedSubmissions?: PreparedSubmissions
   preparation?: DecisionPreparation
   authorizePulls?(req?: IncomingMessage): Promise<boolean>
-  searchWork?(input: unknown): Promise<unknown>
+  searchWork?(input: unknown, includeNative?: boolean): Promise<unknown>
   getWork?(input: unknown): Promise<unknown>
   workViews?(): Promise<QueueRead>
   startWork?(input: StartWorkInput, actor: string): Promise<unknown>
@@ -328,7 +328,7 @@ export class ReconciliationMcp {
           return ok(res, await this.leases.ownerRelease(input.card_id, input.generation, input.reason), { headers })
         }
         if (request.operation === 'rules') return ok(res, workflowRules, { headers })
-        if (request.operation === 'search') return ok(res, await this.readers.searchWork?.(searchWorkSchema.parse(request.input)), { headers })
+        if (request.operation === 'search') return ok(res, await this.readers.searchWork?.(searchWorkSchema.parse(request.input), false), { headers })
         if (request.operation === 'get') return ok(res, await this.readers.getWork?.(getWorkSchema.parse(request.input)), { headers })
         if (request.operation === 'update') return ok(res, await this.readers.updateWork?.(updateWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
         return ok(res, await this.readers.startWork?.(startWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
