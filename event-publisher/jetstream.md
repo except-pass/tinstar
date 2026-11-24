@@ -79,6 +79,12 @@ publisher change that covers the event type and its audience. Fixture events
 always stay local. The relay name also sets the reply prefix
 `_INBOX.tinstar_relay.<name>` and must agree with the broker permission.
 
+Pass the relay config explicitly with `--config`. Use `--db` or
+`EVENTS_DB` to point the relay at the existing publisher journal. It requires
+`EVENTS_NATS_NKEY_SEED` for broker authentication. The shipped `nats://`
+endpoint relies on the SSH forward for encryption. A `tls://` endpoint
+requires TLS with server certificate verification.
+
 A new relay replays eligible events from sequence zero. Start that replay
 with an empty stream and an empty deduplication history. An existing named
 relay continues from its saved cursor and skips events excluded by the
@@ -160,8 +166,9 @@ the procedure below.
 sequence, the last broker acknowledgment and the failing sequence during
 retries. If a checkpoint write fails, the relay exits with the attempted
 sequence and state in supervisor output. The status command continues to show
-the last successful write. Compare it with `events replay --db <path>` to locate
-pending facts.
+the last successful write. A failure to initialize or reload the checkpoint
+identifies the relay in supervisor output. Compare the saved sequence with
+`events replay --db <path>` to locate pending facts.
 Check the SSH forward, broker credentials and stream permissions for persistent
 failures. Repair the failed dependency and restart the relay to resume from
 the saved cursor. The source publisher and journal CLI remain available
