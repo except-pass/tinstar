@@ -61,7 +61,16 @@ export class PullReader {
         const cached = this.repos.get(key)
         if (!force && cached && cached.until > this.now()) return cached.data
         let pending = this.pending.get(key)
-        if (!pending) { pending = this.refresh(repository, key, owned, scope.account, associated).finally(() => this.pending.delete(key)); this.pending.set(key, pending) }
+        if (force || !pending) {
+          const refresh: Promise<RepoRead> = this.refresh(repository, key, owned, scope.account, associated).then(data => {
+            if (this.pending.get(key) !== refresh) return this.pending.get(key) ?? this.repos.get(key)?.data ?? data
+            this.repos.set(key, { until: this.now() + 60_000, data })
+            while (this.repos.size > 64) this.repos.delete(this.repos.keys().next().value!)
+            return data
+          }).finally(() => { if (this.pending.get(key) === refresh) this.pending.delete(key) })
+          pending = refresh
+          this.pending.set(key, refresh)
+        }
         return pending
       })))
     }
@@ -124,8 +133,6 @@ export class PullReader {
     const data: RepoRead = { pulls: [...merged.values()], closedPulls: [...closed], coverage: { repository, scope: owned ? 'all-open' : 'authored-or-associated', complete,
       observedAt: pulls.length || complete ? observedAt : previous?.coverage.observedAt ?? null,
       status: complete ? 'fresh' : pulls.length ? 'partial' : previous?.pulls.length ? 'stale' : 'unavailable', error } }
-    this.repos.set(key, { until: this.now() + 60_000, data })
-    while (this.repos.size > 64) this.repos.delete(this.repos.keys().next().value!)
     return data
   }
   /** One canonical origin, including a closed PR; never a repository history crawl. */

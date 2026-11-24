@@ -92,6 +92,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
   let boardHistoryUnavailable = false
   let shiftCommentBoundary = false
   let olderJiraHistoryUnavailable = false
+  let holdJiraPage: ((response: Response) => Promise<Response>) | undefined
   const sourceWrites: string[] = []
   const readSource = vi.fn<typeof fetch>(async (input, init) => {
     const path = new URL(String(input)).pathname
@@ -112,7 +113,13 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
       const startAt = Number(new URL(String(input)).searchParams.get('startAt'))
       const page = id === '10' && shiftCommentBoundary && startAt > 0
         ? [...rows.slice(1), { id: '9999', created: '2026-11-23T07:00:00Z', body: 'Review update' }] : rows
-      return Response.json({ startAt, total: page.length, comments: page.slice(startAt, startAt + 50) })
+      const response = Response.json({ startAt, total: page.length, comments: page.slice(startAt, startAt + 50) })
+      if (id === '10' && startAt === 0 && holdJiraPage) {
+        const hold = holdJiraPage
+        holdJiraPage = undefined
+        return hold(response)
+      }
+      return response
     }
     if (resource === 'changelog') {
       if (id === '16' && olderJiraHistoryUnavailable) return new Response(null, { status: 503 })
@@ -235,6 +242,11 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     for (const recheck of [true, false]) {
       expect(await call(granted, 'list_prs', { recheck })).toMatchObject({ outcome: 'invalid-input', message: 'recheck requires view: "owner-ready".' })
     }
+    for (const option of [{ offset: 0 }, { limit: 1 }]) {
+      expect(await call(granted, 'list_prs', { view: 'owner-ready', ...option })).toMatchObject({
+        outcome: 'invalid-input', message: 'offset and limit are only supported for ordinary PR inventory.',
+      })
+    }
     expect((await browse(false)).status).toBe(403)
     expect(inventory).not.toHaveBeenCalled()
 
@@ -309,9 +321,17 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
       sources: expect.arrayContaining([expect.objectContaining({ url: expect.stringContaining('focusedCommentId=30'), superseded: true })]) })
 
     const conditional = { ...entry(moving, '', '29', '2026-11-23T13:30:00Z'), body: `Will: merge ${moving} after rollout` }
+    let resume!: () => void
+    const gate = new Promise<void>(resolve => { resume = resolve })
+    const pageStarted = new Promise<void>(resolve => {
+      holdJiraPage = async response => { resolve(); await gate; return response }
+    })
+    const ordinaryJira = sources.jiraWork!.ownerRequests.get(true)
+    await pageStarted
     comments.get('10')!.unshift(conditional)
     readScalars.mockClear()
-    const waiting = (await (await browse()).json()).data as OwnerReadyRead
+    const waiting = await browse().then(response => response.json()).then(body => body.data as OwnerReadyRead).finally(resume)
+    await ordinaryJira
     expect(merge(waiting, moving)).toMatchObject({ requestedHeads: [], unverifiedRequest: true, live: { state: 'unverified' },
       sources: expect.arrayContaining([expect.objectContaining({ kind: 'notion', requestedHead: original, readinessEvidenceOnly: true })]) })
     expect(readScalars.mock.calls.some(([path]) => path === '/repos/owner/repo/pulls/1')).toBe(false)
@@ -408,9 +428,13 @@ it('bounds same-head checks, rotates coverage, and holds a head that moves after
 it.each([true, false])('holds unrecognized head spellings as conditional merge requests (Jira: %s)', jira => {
   const request = `${jira ? 'Will: merge' : 'Merge'} ${moving}`
   expect(mergePublication(`${request} head ${original}`, jira)).toMatchObject({ head: original, conditional: false })
-  for (const suffix of [`at head ${original}`, `@ ${original}`, `head sha= ${original}`, `(head ${original})`, `head ${original} (ready for review)`, '(ready for review)']) {
+  for (const suffix of [original, `at head ${original}`, `@ ${original}`, `head sha= ${original}`, `(head ${original})`, `head ${original} (ready for review)`, '(ready for review)']) {
     expect(mergePublication(`${request} ${suffix}`, jira)).toMatchObject({ head: null, conditional: true })
   }
+})
+
+it('rejects the Please merge alias in owner request records', () => {
+  expect(mergePublication(`Please merge ${moving} head ${original}`)).toBeNull()
 })
 
 it('accepts worker checks-green notices and rejects Jira-style worker prose', () => {
