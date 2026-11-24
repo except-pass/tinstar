@@ -364,6 +364,21 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
         expect.objectContaining({ url: expect.stringContaining('focusedCommentId=28'), requestedHead: original, superseded: true }),
       ]),
     })
+    boardHistoryUnavailable = false
+    notionNotes.push('Tin Star answer: "notion-choice"')
+    native!.properties['Next action']!.value = 'Choose a follow-up deployment window'
+    const laterDecision = (await (await browse()).json()).data as OwnerReadyRead
+    const decisions = bundle(laterDecision, 'owner/repo')?.decisions
+    expect(decisions).toContainEqual(expect.objectContaining({ question: 'Choose a follow-up deployment window',
+      sources: [expect.objectContaining({ label: 'Decision action' })] }))
+    expect(decisions?.map(decision => decision.question)).not.toContain('Choose a deployment window?')
+
+    native!.properties['Next action']!.value = `Merge ${moving} head ${sibling}`
+    const laterMerge = (await (await browse()).json()).data as OwnerReadyRead
+    expect(merge(laterMerge, moving)?.sources).toContainEqual(expect.objectContaining({
+      label: 'Merge action', requestedHead: sibling, readinessEvidenceOnly: true,
+    }))
+    expect(merge(laterMerge, moving)?.sources.map(source => source.label)).not.toContain('notion-merge')
     expect(sourceWrites).toEqual([])
   } finally {
     await Promise.all(clients.map(client => client.close()))
