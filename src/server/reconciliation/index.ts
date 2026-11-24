@@ -24,8 +24,8 @@ import { loadReconciliationConfig, type ReconciliationConfig, type FleetSource }
 import { fleetObservation } from './fleet'
 import type { WorkScope } from './notion'
 import type { SceneCard } from './scene'
-import { ageObservation } from './observation'
-import { CardContextReader } from './cardContext'
+import { ageObservation, retainMissing } from './observation'
+import { CardContextReader, hasUnverifiedRetractions, type CardContextRead } from './cardContext'
 import { SceneReconciler } from './scene'
 import { buildQueue } from './queue'
 import { QueuePullReader, queuePullReadBudget } from './queuePulls'
@@ -84,6 +84,8 @@ export class ReconciliationSources {
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
   private ownerRecheck?: Promise<OwnerReadyRead>
+  private ownerHistoryCursor?: string
+  private ownerHistories = new Map<string, CardContextRead>()
   private search = new SearchDocumentCollector((id, revision) => this.context.get(id, revision))
   // Owner-authorized PR evidence must never enter an anonymous display response.
   private queueDisplays = new Map<boolean, { value?: ReturnType<typeof buildQueue>; pending?: Promise<void>; until: number; again: boolean; failed?: boolean }>()
@@ -502,22 +504,47 @@ export class ReconciliationSources {
     return this.ownerRecheck
   }
 
+  private orderOwnerHistories(ids: string[]) {
+    const start = ids.indexOf(this.ownerHistoryCursor ?? '') + 1
+    return [...ids.slice(start), ...ids.slice(0, start)]
+  }
+
+  private projectOwnerReady(snapshot: SourceSnapshot, observed: ReadonlyMap<string, CardContextRead>, jira?: Awaited<ReturnType<JiraWork['ownerRequests']['get']>>) {
+    const histories = new Map<string, CardContextRead>()
+    for (const card of ownerCards(snapshot)) {
+      const current = observed.get(card.id)
+      const known = this.ownerHistories.get(card.id)
+      const complete = current?.outcome === 'available' && !hasUnverifiedRetractions(current)
+      const history = complete ? current : current || known ? {
+        ...current, outcome: 'partial' as const,
+        blocks: retainMissing(known?.blocks ?? [], current?.blocks ?? [], block => JSON.stringify([block.type, block.id])),
+      } : undefined
+      if (history) {
+        histories.set(card.id, history)
+        this.ownerHistories.set(card.id, history)
+      }
+    }
+    return ownerReadyRequests(snapshot, histories, jira)
+  }
+
   private async readOwnerReady(recheck: boolean) {
     const [snapshot, jira] = await Promise.all([this.snapshot(recheck), this.jiraWork?.ownerRequests.get(recheck)])
     const histories = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
-    const cards = ownerCards(snapshot), deadline = Date.now() + 10_000
+    const ids = this.orderOwnerHistories(ownerCards(snapshot).map(card => card.id)), deadline = Date.now() + 10_000
     let timer: ReturnType<typeof setTimeout> | undefined
     const collect = async () => {
-      for (let offset = 0; offset < cards.length && Date.now() < deadline; offset += 4) {
-        await Promise.all(cards.slice(offset, offset + 4).map(async card => {
-          const context = await this.context.commentDetails(card.id, recheck)
-          histories.set(card.id, await this.context.verifyRetractions(context).catch(() => context))
+      for (let offset = 0; offset < ids.length && Date.now() < deadline; offset += 4) {
+        const batch = ids.slice(offset, offset + 4)
+        this.ownerHistoryCursor = batch.at(-1)
+        await Promise.all(batch.map(async id => {
+          const context = await this.context.commentDetails(id, recheck)
+          histories.set(id, await this.context.verifyRetractions(context).catch(() => context))
         }))
       }
     }
     try { await Promise.race([collect(), new Promise<void>(resolve => { timer = setTimeout(resolve, 10_000) })]) }
     finally { clearTimeout(timer) }
-    const read = ownerReadyRequests(snapshot, histories, jira)
+    const read = this.projectOwnerReady(snapshot, histories, jira)
     await this.enrichOwnerReady(read, recheck, this.reconciler.project(snapshot))
     return workReadback(read)
   }
@@ -574,12 +601,15 @@ export class ReconciliationSources {
     const deliveries = (await this.workflow.decisionDelivery?.messages().catch(() => []) ?? []).filter(message => !requestKey || (message.sourceAnchor ?? message.requestId) === requestKey || queue.items.some(item => item.cardIds.includes(message.decisionResolution?.cardId ?? '')))
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds),
       ...(withOwnerReady ? ownerCards(snapshot).map(card => card.id) : [])])]
+    const historyIds = withOwnerReady ? this.orderOwnerHistories(ids) : ids
     const collectedContexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
     let contexts = collectedContexts
     const historyDeadline = mode === 'read' ? Date.now() + 10_000 : Infinity
     const readContexts = async () => {
       for (let offset = 0; offset < Math.min(ids.length, 20) && Date.now() < historyDeadline; offset += 4) {
-        await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
+        const batch = historyIds.slice(offset, Math.min(offset + 4, 20))
+        if (withOwnerReady) this.ownerHistoryCursor = batch.at(-1)
+        await Promise.all(batch.map(async id => {
           const context = await this.context.commentDetails(id, force)
           collectedContexts.set(id, await this.context.verifyRetractions(context).catch(() => context))
         }))
@@ -650,7 +680,7 @@ export class ReconciliationSources {
     const publications = (await Promise.all(queue.items.map(item => this.proposalSource.forRequest(item.id, item.cardIds, histories)))).flat()
     queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized, publications)
     if (withOwnerReady) {
-      queue.ownerReady = ownerReadyRequests(snapshot, contexts, await jiraOwnerRead)
+      queue.ownerReady = this.projectOwnerReady(snapshot, contexts, await jiraOwnerRead)
       if (authorized) await this.enrichOwnerReady(queue.ownerReady, false, scene, pullRead, Math.max(0, queuePullReadBudget - new Set(readableUrls).size))
     }
     const projected = new Map(queue.needsWill.map(item => [item.id, item]))

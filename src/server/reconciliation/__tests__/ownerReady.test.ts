@@ -58,7 +58,9 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
   const review = issue('10', questions)
   const tickets = [review, issue('11'), issue('12'), issue('13'), issue('14', 'D1 [Open]: Select a recovery option', 'Decision'), issue('15')]
   const comments = new Map([
-    ['10', [entry(moving, '', '21'), entry(moving + '?notice=retry', '', '20'),
+    ['10', [entry(moving, '', '21'),
+      ...Array.from({ length: 49 }, (_, index) => ({ id: String(index + 100), body: 'Review update', created: '2026-11-23T12:00:00Z' })),
+      entry(moving + '?notice=retry', '', '20'),
       { ...entry(restricted, original, '19'), visibility: { type: 'role' } }, entry(historical, original, '18', '2026-11-23T08:00:00Z')]],
     ['11', [entry(closing, sibling, '22')]], ['12', [entry(legacy, '', '23')]],
     ['13', [entry(unchanged, sibling, '24')]], ['15', [entry(outsider, original, '25')]],
@@ -74,6 +76,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     `Tin Star request: {"id":"notion-merge","action":"Merge"}\nRequested from: Will\nQuestion: Merge ${moving} head ${original}`,
     'Tin Star request: {"id":"notion-choice","action":"Decision"}\nRequested from: Will\nQuestion: Choose a deployment window?',
   ]
+  let boardHistoryUnavailable = false
   const sourceWrites: string[] = []
   const readSource = vi.fn<typeof fetch>(async (input, init) => {
     const path = new URL(String(input)).pathname
@@ -85,12 +88,14 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     }
     if (init?.method && init.method !== 'GET') sourceWrites.push(`${init.method} ${path}`)
     if (path === '/v1/comments') {
+      if (boardHistoryUnavailable) return new Response(null, { status: 503 })
       return Response.json({ results: notionNotes.map((note, index) => ({ id: `native-${index}`, rich_text: [{ plain_text: note }] })), has_more: false })
     }
     const [, id, resource] = /\/issue\/(\d+)(?:\/(comment|changelog))?$/.exec(path) ?? []
     if (resource === 'comment') {
       const rows = comments.get(id!) ?? []
-      return Response.json({ startAt: 0, total: rows.length, comments: rows })
+      const startAt = Number(new URL(String(input)).searchParams.get('startAt'))
+      return Response.json({ startAt, total: rows.length, comments: rows.slice(startAt, startAt + 50) })
     }
     if (resource === 'changelog') {
       const values = id === '10' ? [{ created: '2026-11-23T09:00:00Z', items: [{ field: 'status', fromString: 'Ready for Review', toString: 'In Progress' }] }] : []
@@ -172,7 +177,8 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(pending.repositories.map(group => group.repository)).toEqual(['outside/repo', 'owner/other', 'owner/repo', null])
     expect(bundle(pending, 'owner/repo')?.merges.filter(ask => ask.url === moving)).toHaveLength(1)
     expect(merge(pending, moving)).toMatchObject({ requestedHeads: [original], unverifiedRequest: false,
-      sources: [expect.objectContaining({ kind: 'jira' }), expect.objectContaining({ kind: 'notion' }),
+      sources: [expect.objectContaining({ kind: 'jira', url: expect.stringContaining('focusedCommentId=21') }),
+        expect.objectContaining({ kind: 'jira', url: expect.stringContaining('focusedCommentId=20') }), expect.objectContaining({ kind: 'notion' }),
         expect.objectContaining({ kind: 'firstmate' }), expect.objectContaining({ kind: 'firstmate' })] })
     expect(merge(pending, moving)).not.toHaveProperty('live')
     expect(bundle(pending, 'owner/repo')?.decisions.map(row => row.question)).toEqual(['Choose launch wording', 'Confirm the launch date', 'Choose a deployment window?'])
@@ -230,6 +236,17 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(merge(unverified, moving)).toMatchObject({ requestedHeads: [changed], live: { head: changed, state: 'unverified' } })
     outage = false
     expect(merge((await (await browse()).json()).data, moving)?.live?.state).toBe('ready')
+
+    comments.get('10')!.unshift(...Array.from({ length: 250 }, (_, index) =>
+      ({ id: String(index + 1000), body: 'Review update', created: '2026-11-23T14:00:00Z' })))
+    boardHistoryUnavailable = true
+    const retained = (await (await browse()).json()).data as OwnerReadyRead
+    expect(merge(retained, moving)).toMatchObject({ requestedHeads: [changed], unverifiedRequest: true,
+      live: { state: 'unverified' }, sources: expect.arrayContaining([
+        expect.objectContaining({ url: expect.stringContaining('focusedCommentId=26') }),
+      ]) })
+    expect(bundle(retained, 'owner/repo')?.decisions).toContainEqual(
+      expect.objectContaining({ question: 'Choose a deployment window?', fresh: false }))
     expect(sourceWrites).toEqual([])
   } finally {
     await Promise.all(clients.map(client => client.close()))
