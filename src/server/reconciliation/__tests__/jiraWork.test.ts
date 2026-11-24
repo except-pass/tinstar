@@ -394,8 +394,14 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   expect(pickup.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete' })
   expect((await call('search_work', { refresh: true })).total).toBe(5)
   expect(f.requests.some(request => request.path === 'user/assignable/search')).toBe(false)
+  expect(pickup.records[1].card.source.properties).not.toHaveProperty('Assignee')
+  const fieldsBeforeLookup = { ...issue.fields }
+  Object.assign(issue.fields, { status: { name: 'Waiting For' },
+    [config.fields.blockerType]: { value: 'Actor' }, [config.fields.blockerTarget]: 'Will', [config.fields.blockerCondition]: 'Review the request' })
   const unavailableReviewer = await sources.queue(owner, undefined, true, 'read')
   expect(unavailableReviewer.needsWill?.flatMap(item => item.evidence.map(link => link.url))).toEqual([`${config.url}/browse/${waiting.key}`])
+  expect(unavailableReviewer.coverage.intentions.coverage).toBe('partial')
+  Object.assign(issue.fields, fieldsBeforeLookup)
   f.search.directoryUnavailable = false
   const authorized = await sources.queue(owner, undefined, false, 'read')
   const ownerUrls = [issue, waiting].map(card => `${config.url}/browse/${card.key}`).sort()

@@ -10,6 +10,21 @@ import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 
 afterEach(() => vi.restoreAllMocks())
 
+it('keeps a stale legacy terminal request when native Jira coverage is fresh', () => {
+  const snapshot = fixtureSources({ now: Date.now() })
+  const card = snapshot.intentions.data!.cards[0]!
+  card.properties.Status!.value = 'Resolved'
+  card.properties['Will action'] = { id: 'action', type: 'multi_select', value: ['Decision'], hasMore: false }
+  const { data, ...fresh } = snapshot.intentions
+  const stale = { ...fresh, status: 'stale' as const, coverage: 'unknown' as const }
+  snapshot.intentions = { ...stale, data }
+  const legacy = buildQueue(snapshot).items.find(item => item.cardIds.includes(card.id))
+  expect(legacy?.readiness).toBe('needs-readiness-verification')
+  snapshot.intentions = { ...fresh, data, status: 'partial', coverage: 'partial',
+    sources: [{ ...stale, source: 'notion' }, { ...fresh, source: 'jira' }] }
+  expect(buildQueue(snapshot).items.find(item => item.cardIds.includes(card.id))?.readiness).toBe(legacy?.readiness)
+})
+
 it('serves known requests over HTTP while slow enrichment is shared, then publishes the complete result', async () => {
   const root = await mkdtemp(join(tmpdir(), 'queue-display-'))
   const snapshot = fixtureSources({ now: Date.now() })

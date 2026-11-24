@@ -228,7 +228,10 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   }
 
   for (const card of cards.values()) {
-    if (fresh(intentions) && (card.archived || card.in_trash || complete(word(card, 'Status')))) continue
+    const provider = card.source?.synthetic === false ? 'jira' : card.source?.synthetic ? 'jira-pilot' : 'notion'
+    const observed = intentions.sources?.find(source => source.source === provider)
+    const cardObservation = observed ? { ...intentions, ...observed } : intentions
+    if (fresh(provider === 'jira' ? cardObservation : legacy) && (card.archived || card.in_trash || complete(word(card, 'Status')))) continue
     const actions = prop(card, 'Will action')
     let tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
     const owner = normalize(word(card, 'Owner') ?? '')
@@ -250,9 +253,6 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       ? [tags.join(', '), waitingForWill ? word(card, 'Waiting For') : null].filter(Boolean).join('; ') : action
     const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, remainingAction, merge ? 'merge' : 'decision')
     if (resolvedMerge) resolvedMerges.add(item)
-    const provider = card.source?.synthetic === false ? 'jira' : card.source?.synthetic ? 'jira-pilot' : 'notion'
-    const observed = intentions.sources?.find(source => source.source === provider)
-    const cardObservation = observed ? { ...intentions, ...observed } : intentions
     context(item, card, cardObservation, now, ownerDecisions.has(card.id), cardWaitsForWill(card))
     if (resolvedMerge && remainingAction !== action) lower(item, 'needs-readiness-verification', 'Merge request resolved; verify the concrete next action for the remaining asks')
     item.sources.push({ ...source(card.id.startsWith('jira:') ? 'jira' : 'notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', cardObservation),

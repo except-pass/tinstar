@@ -116,7 +116,6 @@ export class JiraWork extends JiraClient {
       properties: {
         Name: property('summary', 'title', issue.name), Status: property('status', 'status', issue.status),
         Owner: property(this.config.fields.owner, 'select', issue.owner),
-        Assignee: property('assignee', 'select', issue.assignee),
         'Waiting For': property(this.config.fields.blockerTarget, 'rich_text', request ? 'Will' : null),
         'Next action': property(this.config.fields.blockerCondition, 'rich_text', request ? issue.externalBlocker.unblocks_when : null),
         'Next check-in': property('duedate', 'date', issue.due_date ? { start: issue.due_date, end: null, time_zone: null } : null),
@@ -156,6 +155,7 @@ export class JiraWork extends JiraClient {
         } catch (error) {
           if (accessDenied(error)) throw error
           coverage = 'partial'
+          continue
         }
       }
       cards.push(card)
