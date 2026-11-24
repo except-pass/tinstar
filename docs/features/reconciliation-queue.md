@@ -58,19 +58,23 @@ shown as **Requested head unverified**. Decisions without an exact repository
 stay under **Repository unspecified**.
 
 Merge entries share the canonical repository and PR identity while the source
-records remain separately linked. The newest open Jira comment by creation time
-determines the requested head and whether the bundle runs checks. The regular
-Decisions queue uses its existing readiness rules.
-Earlier Jira requests remain linked with their heads and are marked **Superseded**.
+records remain separately linked. The newest eligible Jira merge note by
+creation time determines the requested head, with the higher comment ID
+breaking ties. A non-coordinator note that repeats a coordinator note’s exact
+PR and head on the same ticket stays linked without taking precedence. Only a
+current, unconditional Jira request can qualify for readiness checks on a
+matching head. The regular Decisions queue uses its existing readiness rules.
+Other Jira requests remain linked with their heads and are marked **Superseded**.
 Notion requests and worker notices retain their own links and heads and are
 marked **Not used for readiness**. Uncertainty about earlier Jira requests and
 non-Jira records appears in source coverage.
-Jira questions on the same ticket remain
-independent. Rechecks compare every covered PR with its requested head and use
-the existing bounded checks reader for matching heads. Moved heads remain
-stale until the request is refreshed at the new revision. Confirmed closure
-removes the active merge entry. Source omissions, out-of-scope PRs and checks
-beyond the read budget remain visible as unverified.
+Jira questions on the same ticket remain independent. Rechecks compare
+available PR heads with their requested heads and use the existing bounded
+checks reader for matches. When a current, unconditional request names a
+different head, Decisions shows **Requested head changed**. Closure evidence
+in the current read removes the active merge entry from that result. Source
+omissions, out-of-scope PRs and checks beyond the read budget remain visible as
+unverified.
 
 The operational queue retains canonical requests and their verification and conditional states. The [Decisions surface](#decisions-tab) presents those requests and offers prepared review. Discuss contains conversations only; raw holds and queue candidates never enter its tabs. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor. It needs an owner-actionable hold whose ID exactly equals the decision key, or a canonical card with an explicit `Will action = Decision` and one open keyed decision. If multiple tasks share that key, the hold must explicitly name the matching origin task. Fleet answer routes still require the exact owner-actionable hold; classification does not add transport permission. Legacy aliases, matching text and card ownership alone never supply routing.
 
