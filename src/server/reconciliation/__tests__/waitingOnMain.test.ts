@@ -12,6 +12,7 @@ import { AskApi } from '../../ask/routes'
 import { NotionApi } from '../notionApi'
 import { fleetObservation } from '../fleet'
 import { ReconciliationSources } from '../index'
+import { ownerReadyRequests } from '../ownerReady'
 
 const now = Date.parse('2026-11-11T12:00:00Z')
 const roots: string[] = []
@@ -279,6 +280,39 @@ describe('Waiting on main', () => {
     await create().sweep()
     expect(bodies).toHaveLength(attempts + 2)
     expect(bodies.slice(attempts).every(body => body.rich_text.some(row => row.type === 'mention'))).toBe(true)
+  })
+  it('delivers one notice for an identical publication retry during a Main outage', async () => {
+    const directory = await root()
+    const value = snapshot()
+    Object.assign(value.fleet[0]!.observation, { status: 'unknown', coverage: 'unknown', data: null, expiresAt: null })
+    const published = value.intentions.data!.cards.find(card => card.id === fixtureId(4))!
+    const separate = value.intentions.data!.cards.find(card => card.id === fixtureId(6))!
+    asOwner(published, 'tag')
+    asOwner(separate, 'tag')
+    separate.last_edited_time = new Date(now).toISOString()
+    separate.properties['Next action'] = { id: 'next', type: 'rich_text', value: 'Choose the separate rollout window', hasMore: false }
+
+    const delivered: unknown[] = []
+    const transport: typeof fetch = async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === '/v1/comments' && init?.method === 'POST') {
+        delivered.push(JSON.parse(String(init.body)))
+        return Response.json({ id: 'notice' })
+      }
+      if (path === `/v1/users/${MAIN_WAIT_OWNER}`) return Response.json({ id: MAIN_WAIT_OWNER, type: 'person' })
+      throw new Error(`Unexpected fixture request ${path}`)
+    }
+    const notify = mainWaitNotifier({ token: 'test-only', dataSourceId: fixtureId(999) }, new NotionApi(transport, 0))
+    const publish = () => new WaitingOnMain(async () => value, notify, directory, async () => true, () => now).sweep()
+
+    await publish()
+    expect(delivered).toHaveLength(1)
+    expect(JSON.stringify(delivered[0])).toContain(published.id)
+    await publish()
+    expect(delivered).toHaveLength(1)
+    expect(ownerReadyRequests(value, new Map()).repositories.flatMap(group => group.decisions)).toContainEqual(
+      expect.objectContaining({ question: 'Choose the separate rollout window',
+        sources: [expect.objectContaining({ url: `https://www.notion.so/${separate.id}` })] }))
   })
   it('reports ambiguous transport failure without posting a duplicate fallback', async () => {
     const transport = vi.fn(async (_input: unknown, init?: RequestInit) => {

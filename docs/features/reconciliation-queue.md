@@ -60,7 +60,10 @@ head. Older URL-only requests remain visible with **Requested head unverified**.
 Decisions without an exact repository stay under **Repository unspecified**.
 
 Merge entries share the canonical repository and PR identity while the source
-records remain separately linked. Jira questions on the same ticket remain
+records remain separately linked. The newest Jira merge comment for a PR in
+the current review cycle supplies its active Jira head. Earlier comments
+remain linked with their requested heads and are marked **Superseded**.
+Jira questions on the same ticket remain
 independent. Rechecks compare every covered PR with its requested head and use
 the existing bounded checks reader for matching heads. Moved heads remain
 stale until the request is refreshed at the new revision. Confirmed closure
