@@ -472,7 +472,7 @@ it.each(['late publisher', 'new head', 'new head after submit', 'publisher after
   expect(issue.fields.status.name).toBe('Ready for Review')
   expect(mergeNotes()).toHaveLength(replacement ? 2 : 1)
   expect(mergeNotes()[0].id).toBe(id)
-  expect(adfText(mergeNotes()[0].body)).toContain('Publishers: ["Firstmate fleet"]')
+  expect(adfText(mergeNotes()[0].body)).toContain('Recorded via Tin Star (Firstmate fleet)')
   if (replacement) {
     expect(adfText(mergeNotes()[1].body).split('\n')[0]).toBe(`Will: merge ${fixturePull} head ${next}`)
     issue.comments.push({ id: '99', body: jiraText(`Will: merge ${fixturePull} head ${original}`), created: new Date().toISOString(),
@@ -486,6 +486,29 @@ it.each(['late publisher', 'new head', 'new head after submit', 'publisher after
     expect(selectJiraMergeRequests(withDistinct).get('fixture/project#123')?.merge).toMatchObject({ head: distinct, coordinator: false })
   }
   expect(issue.comments.filter(comment => adfText(comment.body).startsWith('Submit for Review via Tin Star'))).toHaveLength(1)
+})
+
+it('appends a verified head to an in-review ticket with a legacy coordinator note', async () => {
+  const f = await tswFixture()
+  await f.create('legacy review')
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'Ready for Review' }
+  issue.fields.assignee = { displayName: 'William Gathright', accountId: 'will-account' }
+  const legacyNote = jiraText(`Will: merge ${fixturePull}\nOperation: tsw-${'0'.repeat(64)}-edit-review\n\nRecorded via Tin Star (Firstmate fleet)`)
+  issue.comments.push({ id: '1', body: legacyNote, created: jiraNow(), author: { accountId: 'fixture-service' } })
+  await f.publish([tswTask('TSW-1', 'checks green: PR ready for review')])
+  const result = await f.run(true)
+  expect(result).toMatchObject({ stopped: false })
+  expect(result.plans[0]?.steps).toEqual([expect.objectContaining({ kind: 'jira_edit' })])
+  expect(result.plans[0]?.steps?.[0]).not.toHaveProperty('assignee')
+  expect(issue.comments).toHaveLength(2)
+  expect(issue.comments[0].body).toEqual(legacyNote)
+  expect(adfText(issue.comments[1].body)).toContain(`Will: merge ${fixturePull} head ${fixtureHead}`)
+  expect(adfText(issue.comments[1].body)).toContain('Recorded via Tin Star (Firstmate fleet)')
+  expect(issue.fields.status.name).toBe('Ready for Review')
+  expect(issue.fields.assignee.accountId).toBe('will-account')
+  expect(await f.run(true)).toMatchObject({ plans: [] })
+  expect(issue.comments).toHaveLength(2)
 })
 
 it('blocks review without overwriting an owner assignee', async () => {

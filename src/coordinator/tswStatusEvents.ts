@@ -16,7 +16,7 @@ type Task = Fleet['tasks'][number]
 type Backlog = NonNullable<Fleet['backlog']>[number]
 type EventDetails =
   | { target: 'In Progress' }
-  | { target: 'Ready for Review'; pull: string; head: string | null; publishers?: string[] }
+  | { target: 'Ready for Review'; pull: string; head: string | null }
   | { target: 'Done' }
 
 export type StatusEvent = EventDetails & {
@@ -153,7 +153,7 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
       const ordered = [...candidates].sort((a, b) => a.id.localeCompare(b.id))
       const actors = [...new Set(ordered.map(candidate => candidate.actor))].sort()
       const expiresAt = ordered.flatMap(candidate => candidate.expiresAt ?? []).sort()[0] ?? null
-      events.push({ ...first, owner: ordered[0]!.owner, pull: equivalent.url, publishers: actors,
+      events.push({ ...first, owner: ordered[0]!.owner, pull: equivalent.url,
         actor: actors.join(', '), expiresAt, id: eventId([key, equivalent.url, head]) })
     } else if (first && !others.length && !conflicting) {
       events.push(first)

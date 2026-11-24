@@ -36,7 +36,7 @@ function plan(event: StatusEvent, card: JiraWorkCard, existing: ReviewNote | und
   if (['Done', 'Canceled'].includes(card.status)) return 'terminal-card'
   const review = card.status === 'Ready for Review'
   const replacement = review && event.target === 'Ready for Review' && !!event.head &&
-    !!existing?.current && existing.current !== event.head
+    existing?.current !== undefined && existing.current !== event.head
   if (card.status === event.target && !replacement) return 'already-at-target'
   if (event.target === 'Ready for Review') {
     if (!event.head) return 'review-head-unverified'
@@ -69,7 +69,7 @@ function plan(event: StatusEvent, card: JiraWorkCard, existing: ReviewNote | und
   if (!active && !review) move('Start')
   if (event.target === 'Ready for Review') {
     if (existing?.current !== event.head) {
-      edit('review', { ...(replacement ? {} : { assignee: reviewer }), note: `Will: merge ${event.pull} head ${event.head}\nPublishers: ${JSON.stringify(event.publishers)}` })
+      edit('review', { ...(replacement ? {} : { assignee: reviewer }), note: `Will: merge ${event.pull} head ${event.head}` })
     }
     if (!replacement) move('Submit for Review')
   }
