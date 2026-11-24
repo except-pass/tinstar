@@ -1,7 +1,7 @@
 # Event Publisher
 
 A standalone publisher for First Mate task and worker observations, signed
-Jira ticket changes, GitHub pull requests, the revision answering at the deployment endpoint,
+Jira ticket changes, GitHub pull requests and cmsandbox tags, the revision answering at the deployment endpoint,
 and operator-recorded mate migrations. All sources share one SQLite journal and
 terminal reader.
 
@@ -86,6 +86,51 @@ Watch and replay both accept the same filters. The text view marks replays,
 fixture events, and controlled migration receipts. In JSON mode,
 `source.mode` identifies live and fixture data for polling sources and routing.
 Replay notices go to stderr so the JSON payloads stay identical.
+
+## Observe cmsandbox production tags
+
+On Hulk, set `"github": { "cmsandboxTags": true }` in the publisher configuration.
+Keep any other keys already in `github`. This source can run on its own or
+alongside other sources. The observer uses the service account's existing
+authenticated `gh` CLI with read access to `fortresspower/cmsandbox`. It reads
+all pages of GitHub's tag catalog and keeps refs named `vMAJOR.MINOR.PATCH`.
+It polls on startup and every 90 seconds after a pass, independently of fleet
+reads. It uses conditional GETs and shares the linked-PR observer's quota
+reserve and backoff.
+
+The first complete inventory records all current tags as a silent baseline.
+Restarting with the same inventory produces no new events. Subsequent
+`tag.pushed` events name the repository, tag, commit SHA and time the publisher
+observed it. A move to a SHA with no recorded push emits a push with action
+`moved` and the previous SHA in `change.before`. Returning to an already
+recorded SHA journals `tag.ref.changed`. Two complete inventories must agree
+that a known tag is missing before the publisher journals `tag.deleted`.
+The baseline and events commit together in SQLite. Polling can observe refs
+that persist through a read and can miss changes that come and go between
+polls.
+
+After recording a push, the publisher reads Hulk's existing loopback Releases
+projection and journals `tag.evidence.updated` against the original event ID
+when evidence changes for that exact tag and SHA. PR evidence identifies the
+consecutive tag range and any separately confirmed ancestry for card-linked
+PRs. Card links come from the projection's verified active associations, and
+component runs include the attempt, workflow status and freshness. Incomplete
+reads retain last-known entries where the source has no conclusive update.
+Retained runs are marked `last_known` when fresh run evidence is unavailable.
+The publisher checks at most one due push whose tag and SHA still match the
+latest inventory and whose tag has no pending absence. Due enrichment continues
+when an inventory read fails, and `events sources` still reports the inventory
+failure. Complete evidence with finished runs is checked less often.
+A tag and its Actions runs describe release activity. PROD delivery requires
+separate verification. The observer only writes to the journal.
+
+```sh
+events sources
+events watch --source github --type tag
+events replay --source github --type tag --after 0 --json
+```
+
+The [Main wake check](cmsandbox-tag-wake.md) reads the tag feed.
 
 ## Observe linked GitHub pull requests
 
