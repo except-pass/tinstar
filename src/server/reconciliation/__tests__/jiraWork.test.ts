@@ -86,7 +86,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const search = { pageSize: 100, failFrom: Infinity }
+  const search = { pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
@@ -144,14 +144,15 @@ async function fixture(projectId = config.projectId, withNotion = false) {
     }
     if (path === 'search/jql') {
       const offset = Number(body.nextPageToken ?? 0), end = offset + search.pageSize
-      if (controls.rejectSearch || offset >= search.failFrom) return response({}, 403)
+      if (controls.rejectSearch || offset >= search.failFrom) return response({}, search.failureStatus)
       expect(body.jql).toContain(`project = ${projectId}`)
-      const query = /^project = (\d+)(?: AND cf\[(\d+)\] = ("(?:[^"\\]|\\.)*") AND status IN \((.+)\))? ORDER BY id( DESC)?$/.exec(body.jql)
+      const query = /^project = (\d+)(?: AND issuetype IN \(([\d, ]+)\))?(?: AND cf\[(\d+)\] = ("(?:[^"\\]|\\.)*") AND status IN \((.+)\))? ORDER BY id( DESC)?$/.exec(body.jql)
       if (!query) return response({}, 400)
-      const [, project, ownerField, owner, statuses, descending] = query
+      const [, project, types, ownerField, owner, statuses, descending] = query
       const selectedOwner: string | undefined = owner === undefined ? undefined : JSON.parse(owner)
       const selectedStatuses: string[] | undefined = statuses === undefined ? undefined : JSON.parse(`[${statuses}]`)
-      const visible = controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === project &&
+      const visible = controls.staleSearch ? [] : [...issues.values()].map(issue => ({ ...issue, fields: search.indexed.get(issue.id) ?? issue.fields })).filter(issue => issue.fields.project.id === project &&
+        (!types || types.split(', ').includes(issue.fields.issuetype?.id)) &&
         (!ownerField || issue.fields[`customfield_${ownerField}`]?.value === selectedOwner) &&
         (!selectedStatuses || selectedStatuses.includes(issue.fields.status.name)))
         .sort((a, b) => descending ? Number(b.id) - Number(a.id) : Number(a.id) - Number(b.id))
@@ -253,6 +254,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       return response({ id, created }, 201)
     }
     if (part === 'transitions' && method === 'GET') {
+      if (controls.beforeWrite === 'change-handoff-owner') issue.fields[config.fields.owner] = { value: 'Taylor' }
       const available = controls.transitionList ?? transitions.filter(transition => jiraTransitions[transition.name][0].some(status => status === issue.fields.status.name))
       const offered = available.map(transition => ({
         ...transition, to: { ...transition.to, name: statusName(transition.to.name) },
@@ -323,6 +325,8 @@ it('includes matching Jira and legacy Notion cards with independent search cover
     const nonmatching = id % 2 ? other : canceled
     f.issues.set(String(id), f.make(String(id), `WORK-${id - 60000}`, config.projectId, nonmatching.fields))
   }
+  const unsupported = f.make('60125', 'WORK-125', config.projectId, { issuetype: { id: '99999', name: 'Bug' }, status: { name: 'Queued' }, [config.fields.owner]: { value: 'Clawson' } })
+  f.issues.set(unsupported.id, unsupported)
   const queued = f.make('60124', 'WORK-124', config.projectId, { status: { name: 'Queued' }, [config.fields.owner]: { value: 'Clawson' } })
   f.issues.set(queued.id, queued)
   f.search.pageSize = 1
@@ -385,6 +389,16 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   expect(urls(authorized.items)).toEqual(ownerUrls)
   expect(urls(authorized.needsWill!)).toEqual(ownerUrls)
   expect(authorized.reviews.items).toEqual([])
+  expect(authorized.needsWill?.find(item => item.evidence.some(link => link.url.endsWith('/TSW-103')))).toMatchObject({
+    action: 'Approve the proposed change', oneTouch: false,
+  })
+  issue.fields.assignee = { displayName: f.assignees[0]!.displayName, accountId: 'other-account' }
+  const wrongAccount = await sources.queue(owner, undefined, true, 'read')
+  expect(urls(wrongAccount.needsWill!)).toEqual([`${config.url}/browse/${waiting.key}`])
+  delete issue.fields.assignee
+  expect((await sources.queue(owner, undefined, true, 'read')).coverage.intentions.coverage).toBe('partial')
+  issue.fields.assignee = f.assignees[0]
+  await sources.queue(owner, undefined, true, 'read')
   const assigned = (queue: typeof authorized) => queue.needsWill?.find(item => item.evidence.some(link => link.url === `${config.url}/browse/${issue.key}`))
   expect(assigned(authorized)).toMatchObject({ title: 'Fixture', checkpoint: '2026-01-04', readiness: 'needs-readiness-verification', oneTouch: false,
     sources: [{ kind: 'jira', coverage: 'complete' }] })
@@ -392,7 +406,16 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   f.controls.rejectSearch = true
   const partial = await sources.queue(owner, undefined, false, 'read')
   expect(partial.coverage.intentions).toMatchObject({ status: 'partial', coverage: 'partial' })
+  expect(partial.reviews).toMatchObject({ complete: true, warning: null })
   expect(assigned(partial)).toMatchObject({ readiness: 'needs-readiness-verification', sources: [{ status: 'stale' }] })
+  f.controls.rejectSearch = false
+  f.search.pageSize = 1
+  f.search.failFrom = 1
+  f.search.failureStatus = 403
+  const denied = await sources.queue(owner, undefined, true, 'read')
+  expect(denied.needsWill).toEqual([])
+  expect((await sources.queueDisplay(owner)).needsWill).toEqual([])
+  expect((await call('search_work', { owner: 'Clawson', statuses: ['Queued', 'In Progress'] })).total).toBe(1)
   const anonymous = await sources.queue(undefined, undefined, false, 'read')
   expect(anonymous.items).toEqual([])
   expect(anonymous.needsWill).toEqual([])
@@ -429,14 +452,18 @@ it('queues one Jira admin-merge handoff and lets Clawson pick up, comment and re
   expect(card.description).toContain(plan.script)
   expect(card.description).toContain('Post one comment per PR')
   const lookup = { owner: 'Clawson', statuses: ['Queued', 'In Progress'], limit: 100 }
+  f.controls.staleSearch = true
   const pickedUp = await call('search_work', lookup)
+  f.controls.staleSearch = false
   expect(pickedUp).toMatchObject({ total: 1, coverage: { intentions: { status: 'fresh', coverage: 'complete' } }, records: [{ card: { source: { id: card.id } } }] })
   expect(await call('get_work', { card_id: card.id })).toMatchObject({ outcome: 'available', card: { description: card.description }, comments: [] })
   const work = { card_id: card.id }
   expect(await call('transition_work', { ...work, operation_id: 'begin-fixture', verb: 'Start', evidence: 'Pickup acknowledged.' })).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
   expect(await call('update_work', { ...work, operation_id: 'report-fixture', kind: 'jira_edit', note: 'Fixture report for the requester.' })).toMatchObject({ outcome: 'saved' })
+  const issue = [...f.issues.values()].find(issue => card.id.endsWith(`:${issue.id}`))!
+  f.search.indexed.set(issue.id, { ...issue.fields })
   expect(await call('update_work', { ...work, operation_id: 'return-fixture', kind: 'jira_edit', owner: 'Firstmate' })).toMatchObject({ outcome: 'saved', card: { owner: 'Firstmate' } })
-  expect(await call('search_work', lookup)).toMatchObject({ total: 0 })
+  expect(await call('search_work', { ...lookup, refresh: true })).toMatchObject({ total: 0 })
   expect(await call('get_work', work)).toMatchObject({ outcome: 'available', card: { owner: 'Firstmate', status: 'In Progress' }, comments: expect.arrayContaining([
     expect.objectContaining({ body: 'Fixture report for the requester.\n\nRecorded via Tin Star (Clawson)' }),
   ]) })
@@ -445,6 +472,21 @@ it('queues one Jira admin-merge handoff and lets Clawson pick up, comment and re
   expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: card.id } })
   expect(prepare).toHaveBeenCalledTimes(1)
   expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue')).toHaveLength(1)
+})
+
+it('rechecks an undispatched merge handoff and rejects changed fields before Fast-track', async () => {
+  const f = await fixture()
+  const { sources } = await f.connect()
+  vi.spyOn(sources.jiraWork!, 'create').mockRejectedValueOnce(new Error('Interrupted before dispatch'))
+  const prepare = vi.fn(mergePlan)
+  expect(await sources.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'partially-saved' })
+  prepare.mockRejectedValueOnce(new Error('Head changed'))
+  expect(await sources.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'not-saved', message: 'Head changed' })
+  expect(f.requests.some(request => request.method === 'POST' && request.path === 'issue')).toBe(false)
+  f.controls.beforeWrite = 'change-handoff-owner'
+  expect(await sources.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'partially-saved', code: 'queue-unconfirmed' })
+  expect(f.requests.some(request => request.method === 'POST' && request.path.endsWith('/transitions'))).toBe(false)
+  expect(f.issues.get('60001')?.fields.status.name).toBe('Backlog')
 })
 
 it.each(['creation', 'transition'])('recovers an admin-merge handoff after losing the Jira %s response', async phase => {

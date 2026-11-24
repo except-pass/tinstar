@@ -88,30 +88,18 @@ statuses. A changed head or any failed, pending, missing required or unreadable
 check stops the handoff with the affected PR and reason. This prevents a card
 from granting merge permission against an unverified or different commit.
 
-The Clawson admin-merge handoff stays on Notion until Clawson can pick up Jira
-tickets. This applies to Pulls, Ask merge suggestions, and Ask decision-proposal
-merge actions and their retries. One click creates one Clawson delivery card
-with durable creation receipts: Owner **Clawson**, Status **In Progress**, Next check-in at the
-click time, and Will action **Merge**. The card records the authenticated owner’s
-merge word for only the listed URLs and exact heads, with one command per PR:
+One click creates a Jira task owned by **Clawson** and confirms it is **Queued**
+before reporting success. The due date is the calendar date in the board’s
+check-in timezone. The Jira description records the approved selection, exact
+PR heads and merge instructions. Clawson reports the result on the ticket and
+returns ownership to the requester.
 
-```text
-gh pr merge <url> --squash --admin --match-head-commit <sha>
-```
-
-The card uses an **Authority** heading and a **Step 1 (run once)** Bash code
-block. Before each merge, the script checks the recorded head, `MERGEABLE` state,
-and zero checks in the `fail` or `pending` buckets. `set -euo pipefail` stops the
-batch on a failed line. Clawson must post the output on any stop, or post each
-final state and merge commit and hand back. Nothing else is authorized: no other
-PR and no deploy. Red and pending checks both stop the merge. The button shows the card link and preserves selection. Double-clicks
-and retries of the same selection in the mounted view reuse the same operation receipt.
-If a creation response is lost, retrying recovers the existing card before fresh
-GitHub preflight, even if a selected PR has since merged or changed or GitHub is
-unavailable. Recovery searches all pages matching the selection-derived title for
-the exact owner and operation receipt; an unconfirmed creation is never repeated.
-Fresh preflight is required before a new creation. Tin Star
-does not execute these commands; the installed-action Merge restrictions above still apply.
+The button shows the Jira ticket link and preserves the selection. Retry the
+same click if creation or queueing remains unconfirmed. Tin Star uses the Jira
+operation property and saved receipt to find an already-dispatched ticket and
+confirm that it was queued, even if GitHub is unavailable. A retry before the
+first Jira dispatch checks current PR state again. Tin Star does not execute
+the merge commands.
 
 A First Mate suggested action with the optional `merge` target documented in the
 [Ask reply format](features/ask.md#outbound-only-mac-puller) uses this same handoff

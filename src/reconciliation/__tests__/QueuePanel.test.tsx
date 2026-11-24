@@ -30,6 +30,18 @@ it('retains a disappeared selection while offering the remaining ready request',
   expect(state.queueItemId).toBe(ready[0]!.id)
 })
 
+it('opens the projected native Jira card from the source inspector', () => {
+  const now = Date.now(), queue = fixtureQueue(now), item = queue.items[0]!
+  const id = 'jira:sample.atlassian.net:10639:60101', url = 'https://sample.atlassian.net/browse/WORK-101'
+  item.cardIds = [id]
+  item.sources = [{ kind: 'jira', id, url, field: 'Assignee', request: { home: null, taskId: null, id, kind: 'jira-card' },
+    observedAt: new Date(now).toISOString(), expiresAt: null, status: 'fresh', coverage: 'complete' }]
+  render(<QueuePanel messages={[]} submit={vi.fn()} workers={[]} state={{ ...initialPresentation(), queueItemId: item.id }}
+    send={vi.fn()} queue={queue} error={null} now={now} />)
+  expect(screen.getByText('Jira card')).toBeTruthy()
+  expect(screen.getByText('Read source card ↗').getAttribute('href')).toBe(url)
+})
+
 it('keeps Desk read-only and exposes each source terminal independently', () => {
   const now = Date.now(), queue = fixtureQueue(now), selected = queue.items[0]!
   selected.sources = ['hold', 'decision'].map(kind => ({ kind: 'firstmate' as const, id: JSON.stringify(['/farm/hulk', 'worker']), field: kind,

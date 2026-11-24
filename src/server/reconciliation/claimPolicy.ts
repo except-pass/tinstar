@@ -2,7 +2,6 @@ import { waitEntries, waitState } from '../../shared/waitingForPolicy'
 import type { WorkCard } from './workReader'
 import { parseWorkerLinks, FIRST_MATE_TASKS } from './workerLinks'
 import { decisionRequests, isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
-import { tswReviewer } from './tswSnapshot'
 
 const value = (card: WorkCard, name: string) => card.properties[name]?.value
 export const deferredDecisionStatus = (status: unknown) => ['todo', 'backlog', 'archived', 'done'].includes(String(status).trim().toLowerCase())
@@ -11,7 +10,7 @@ const isWill = (value: unknown) => typeof value === 'string' && value.trim().toL
 
 export const cardOwnedByWill = (card: WorkCard) => isWill(value(card, 'Owner'))
 export const jiraCardAssignedToWill = (card: WorkCard) => card.source?.synthetic === false &&
-  value(card, 'Assignee') === tswReviewer
+  card.source.assignedToReviewer === true
 
 function cardHasWillAction(card: WorkCard) {
   const actions = value(card, 'Will action')

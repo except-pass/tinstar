@@ -517,6 +517,7 @@ export class WorkflowOperations {
       try {
         const jira = this.jiraWork
         let previous = await this.creations.get(key)
+        const resuming = !!previous
         if (!previous) {
           if (!jira) return result('not-saved', 'jira-unavailable', 'Jira work is not configured.')
           let plan: ClawsonMergePlan
@@ -558,18 +559,22 @@ export class WorkflowOperations {
           if (!current) throw new Error('Staged Jira ticket could not be read')
           card = current
         } else {
-          const created = await jira.create({ provider: 'jira', operation_id: input.operation_id, name: plan.name, owner: 'Clawson', description }, actor, dueDate)
+          const created = await jira.create({ provider: 'jira', operation_id: input.operation_id, name: plan.name, owner: 'Clawson', description }, actor, dueDate, resuming ? async () => {
+            try { await prepare() } catch (error) { throw new JiraWorkInputError((error as Error).message) }
+          } : undefined)
           if (!('card' in created)) return result(created.outcome, created.code, created.message)
           card = created.card
           stagedCardId = card.id
           await this.creations.putClawsonMerge(key, signature, plan, stagedCardId)
         }
         const savedFields = ['card', 'Name', 'Owner', 'Next check-in', 'Description']
-        const matches = (current: typeof card) => current.name === plan.name && current.owner === 'Clawson' && current.description === description && current.due_date === dueDate
+        const matches = (current: typeof card) => current.issue_type === 'Task' && current.name === plan.name && current.owner === 'Clawson' && current.description === description && current.due_date === dueDate
         const mismatch = () => result('partially-saved', 'readback-mismatch', 'The Jira ticket exists, but the handoff fields no longer match. Inspect it before retrying.', ['card'])
         if (!matches(card)) return mismatch()
         if (!['Queued', 'In Progress'].includes(card.status)) {
-          const queued = await jira.transition({ card_id: card.id, operation_id: `clawson-merge-queue:${input.operation_id}`, verb: 'Fast-track' }, actor)
+          const queued = await jira.transition({ card_id: card.id, operation_id: `clawson-merge-queue:${input.operation_id}`, verb: 'Fast-track' }, actor, current => {
+            if (current.status !== 'Backlog' || !matches(current)) throw new JiraWorkInputError('The staged handoff no longer matches the approved Backlog ticket')
+          })
           if (!('card' in queued)) return result('partially-saved', 'queue-unconfirmed', `The Jira ticket exists, but pickup is unconfirmed. ${queued.message}`, savedFields)
           card = queued.card
           if (!matches(card)) return mismatch()

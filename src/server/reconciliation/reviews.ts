@@ -1,9 +1,10 @@
 import { legacyReviewKey, isReviewStatus, reviewSubmissions, type ReviewView } from '../../shared/reviews'
 import type { SourceSnapshot } from './index'
+import { legacyWorkObservation } from './workReader'
 import { ageObservation } from './observation'
 
 export function reviewView(source: SourceSnapshot['intentions'], notes = new Map<string, Array<{ text: string }>>(), now = Date.now()): ReviewView {
-  const observation = ageObservation(source, now)
+  const observation = ageObservation(legacyWorkObservation(source), now)
   const complete = observation.status === 'fresh' && observation.coverage === 'complete' && !!observation.data
   const safeUrl = (value: unknown) => {
     try { const url = new URL(String(value)); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : null } catch { return null }

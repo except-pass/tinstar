@@ -8,8 +8,19 @@ import { isJiraCard } from '../../shared/workIdentity'
 import { JiraAdapter } from './jira'
 import { CachedObservation, retainMissing, type Observation } from './observation'
 import type { JiraWork } from './jiraWork'
-export type WorkCard = Awaited<ReturnType<typeof readNotionCard>> & { source?: { provider: 'jira'; instanceId: string; collectionId: string; itemId: string; displayKey: string; synthetic: boolean } }
+export type WorkCard = Awaited<ReturnType<typeof readNotionCard>> & { source?: { provider: 'jira'; instanceId: string; collectionId: string; itemId: string; displayKey: string; synthetic: boolean; assignedToReviewer?: boolean } }
 export type WorkData = Omit<NonNullable<Awaited<ReturnType<ReturnType<typeof notionObservation>['get']>>['data']>, 'cards'> & { cards: WorkCard[] }
+export function legacyWorkObservation(value: Observation<WorkData>): Observation<WorkData> {
+  if (!value.sources) return value
+  const board = value.sources.find(source => source.source !== 'jira')
+  if (!board) return { status: 'unknown', coverage: 'unknown', data: null, observedAt: null,
+    attemptedAt: value.attemptedAt, expiresAt: null, error: null }
+  const { source: _source, ...metadata } = board
+  return { ...metadata, data: value.data && board.observedAt
+    ? { ...value.data, cards: value.data.cards.filter(card => card.source?.synthetic !== false), hasMore: board.coverage !== 'complete' }
+    : null }
+}
+
 const sourceCoverage = <T>(source: string, { data: _data, sources: _sources, ...observation }: Observation<T>) => ({ source, ...observation })
 const scopeKey = (scope: WorkScope) => JSON.stringify([scope.owner, scope.statuses?.slice().sort(), scope.initiative, scope.epic, scope.checkpoint_before, !!scope.history])
 export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
@@ -58,11 +69,12 @@ export class WorkReader {
   }
   async query(scope: WorkScope = {}, force = false, background = false, includeNative = false): Promise<Observation<WorkData>> {
     if (!includeNative || !this.native) return this.board(scope, force, background)
+    const revision = this.native.accessRevision
     const [board, jira] = await Promise.all([
       this.config || this.jira ? this.board(scope, force, background) : null,
       this.native.observationFor(scope).get(force, background),
     ])
-    return this.combine(scope, board, jira)
+    return this.combine(scope, board, revision === this.native.accessRevision ? jira : { ...jira, data: null, status: 'unknown', coverage: 'unknown', observedAt: null, expiresAt: null })
   }
   private combine(scope: WorkScope, board: Observation<WorkData> | null, jira: Observation<WorkData>): Observation<WorkData> {
     const sources = [...(board ? [sourceCoverage(this.config ? 'notion' : 'jira-pilot', board)] : []), sourceCoverage('jira', jira)]

@@ -186,7 +186,7 @@ describe('Ask recommendation buttons', () => {
     expect(read.mock.calls.filter(([path]) => String(path).includes('/origin'))).toHaveLength(2)
   })
 
-  it.each(['lost', 'unreadable', 'incomplete', 'create-unconfirmed'])('replays the posted payload after a %s response without reading GitHub', async failure => {
+  it.each(['lost', 'unreadable', 'incomplete', 'create-unconfirmed', 'unconfirmed', 'queue-unconfirmed'])('replays the posted payload after a %s response without reading GitHub', async failure => {
     const pr = 'https://github.com/owner/repo/pull/8'
     const merge = { id: 'merge-pr-8', label: 'Merge PR 8', instruction: 'Merge this pull request', merge: { pr_url: pr } }
     let posts = 0, origins = 0
@@ -198,6 +198,7 @@ describe('Ask recommendation buttons', () => {
       if (++posts === 1) {
         if (failure === 'lost') throw new Error('Response lost')
         if (failure === 'create-unconfirmed') return new Response(JSON.stringify({ ok: false, error: { code: 'CONFLICT', message: 'Creation unconfirmed', details: { code: 'create-unconfirmed' } } }), { status: 409 })
+        if (['unconfirmed', 'queue-unconfirmed'].includes(failure)) return new Response(JSON.stringify({ ok: false, error: { code: 'CONFLICT', message: 'Handoff unconfirmed', details: { code: failure, outcome: 'partially-saved' } } }), { status: 409 })
         return new Response(failure === 'unreadable' ? 'unreadable' : JSON.stringify({ ok: true, data: {} }))
       }
       return new Response(JSON.stringify({ ok: true, data: { url: 'https://www.notion.so/card', message: 'Sent to Clawson.' } }))

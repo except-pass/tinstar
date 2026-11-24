@@ -1,5 +1,5 @@
 import { CardLeaseStatus } from './CardLeaseStatus'
-import { cardSourceUrl, isJiraCard } from '../shared/workIdentity'
+import { deskCardSource } from './deskCardSource'
 import { decodeRequestText } from './requestText'
 import { AskSurface } from '../ask/AskSurface'
 import { askElement } from '../ask/element'
@@ -37,6 +37,8 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
     return () => controller.abort()
   }, [cardId])
   const [unavailable, setUnavailable] = useState<string | null>(null)
+  const unavailableItem = unavailable ? (queue?.needsWill ?? queue?.items)?.find(item => item.cardIds.includes(unavailable)) : undefined
+  const unavailableUrl = unavailableItem && unavailable ? deskCardSource(unavailable, unavailableItem).url : undefined
   const deskCards = (item: QueueItem, focused = false) => item.cardIds.length ? item.cardIds.map(id => {
     const card = scene?.cards.find(card => card.id === id)
     return <AskSurface as="div" subject={{ cardId: id }} key={id}><button type="button" className={`ov-desk-card${focused ? ' focused' : ''}`} key={id} data-desk-card-id={id} aria-current={state.navigation?.cardId === id ? 'true' : undefined} onClick={() => {
@@ -46,7 +48,7 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
   }) : <h3>{requestText(item.title)}</h3>
   const next = actionable.filter(item => item.id !== selected?.id)
   return <section className="ov-queue" aria-label="Decision queue" data-queue-item-id={selected?.id ?? ''}>
-    {unavailable && <p role="status">Card not on the floor right now. <a href={cardSourceUrl(unavailable)} target="_blank" rel="noreferrer">Read source card ↗</a></p>}
+    {unavailable && <p role="status">Card not on the floor right now. {unavailableUrl && <a href={unavailableUrl} target="_blank" rel="noreferrer">Read source card ↗</a>}</p>}
     {cardId ? <AskSurface as="section" subject={{ cardId }}><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Decisions</button><h3>Card context</h3><CardLeaseStatus key={cardId} cardId={cardId} /><p>{context?.outcome === 'partial' ? 'Some content omitted. Use the source link for the full card.' : context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p {...askElement('description', 'Card text')} key={block.id}>{block.text}</p>)}</AskSurface> : <>
       {selected ? <details className="ov-selected-request" open={selected.cardIds.length > 0 ? true : undefined}><summary>{requestText(selected.title)}</summary><small className="ov-eyebrow">{ready(selected) ? selected.kind === 'merge' ? 'Review' : 'Decision' : 'Needs verification'}</small>{deskCards(selected, true)}<p>{selected.action ? requestText(selected.action) : 'Read the source request for context.'}</p>
         {!ready(selected) && <p>Confirm the next actor and prerequisites before acting.</p>}
@@ -54,7 +56,10 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
         <div className="ov-queue-actions"><button type="button" disabled={index <= 0} onClick={() => send({ type: 'navigate-queue', direction: 'previous' })}>← Previous</button><button type="button" disabled={index >= items.length - 1} onClick={() => send({ type: 'navigate-queue', direction: 'next' })}>Next →</button></div>
         <section aria-label="Request inspector">{selected.sources.filter(source => source.request).map((source, index) => {
           const request = source.request
-          if (request?.home === null) return <details key={source.id}><summary>{isJiraCard(request.id) ? 'Jira' : 'Notion'} card</summary><a href={cardSourceUrl(request.id)} target="_blank" rel="noreferrer">Read source card ↗</a><details><summary>Source evidence</summary><pre>{JSON.stringify(source, null, 2)}</pre></details></details>
+          if (request?.home === null) {
+            const card = deskCardSource(request.id, selected, scene?.cards.find(card => card.id === request.id)?.source)
+            return <details key={source.id}><summary>{card.provider} card</summary><a href={card.url} target="_blank" rel="noreferrer">Read source card ↗</a><details><summary>Source evidence</summary><pre>{JSON.stringify(source, null, 2)}</pre></details></details>
+          }
           const pending = messages.find(message => !!source.responseAnchor && message.kind === 'answer' && message.sourceAnchor === source.responseAnchor)
           const matches = workers.filter(worker => worker.home === request?.home && worker.id === request?.taskId)
           const worker = matches.length === 1 ? matches[0] : null

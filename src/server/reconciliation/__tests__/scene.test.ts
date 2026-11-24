@@ -56,6 +56,19 @@ function expectedHome(source = snapshot()): SourceSnapshot {
   return source
 }
 
+it('uses legacy declaration coverage independently of native Jira rows and read failures', () => {
+  const source = expectedHome()
+  const native = card('jira:sample.atlassian.net:10639:1')
+  native.source = { provider: 'jira', instanceId: 'https://sample.atlassian.net', collectionId: '10639', itemId: '1', displayKey: 'WORK-1', synthetic: false }
+  delete native.properties['First Mate tasks']
+  const intentions = source.intentions
+  const { data, ...coverage } = intentions
+  source.intentions = { ...intentions, status: 'partial', coverage: 'partial',
+    sources: [{ ...coverage, source: 'notion' }, { ...coverage, source: 'jira', status: 'stale', coverage: 'unknown' }],
+    data: { ...data!, hasMore: true, cards: [...data!.cards, native] } }
+  expect(findings(source, 'task-execution-gap').map(finding => finding.cardIds)).toEqual([[a]])
+})
+
 describe('claim evidence and stable identity', () => {
   it('keeps incomplete coverage and single advisory links out of exception totals, retaining real conflicts', () => {
     const source = snapshot([task()], [card(a, { Status: 'Backlog' }), card(b, { Status: 'Backlog' })])

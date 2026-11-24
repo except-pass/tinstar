@@ -1,3 +1,4 @@
+import { legacyWorkObservation } from './workReader'
 import { JiraWork } from './jiraWork'
 import { CardLeases, CardLeaseError } from './cardLeases'
 import { deferredDecisionCard } from './claimPolicy'
@@ -86,7 +87,7 @@ export class ReconciliationSources {
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot(), preparationSecret = readClavisValue) {
     this.leases = new CardLeases(receiptRoot)
     this.notionApi = api ?? new NotionApi(fetcher)
-    if (config.jiraWork) this.jiraWork = new JiraWork(config.jiraWork, receiptRoot, fetcher)
+    if (config.jiraWork) this.jiraWork = new JiraWork(config.jiraWork, receiptRoot, fetcher, () => this.invalidateQueueDisplays())
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira, this.jiraWork)
     this.workReader.leases = this.leases
     this.associations = new AssociationStore(receiptRoot)
@@ -237,7 +238,7 @@ export class ReconciliationSources {
     if (force) { entry.until = 0; if (entry.pending) entry.again = true }
     if (!entry.pending && Date.now() >= entry.until) {
       entry.failed = false
-      entry.pending = this.queue(req).then(value => { if (!entry.again) entry.value = value }, () => { entry.failed = true }).finally(() => {
+      entry.pending = this.queue(req, undefined, force, 'reconcile', authorized).then(value => { if (!entry.again) entry.value = value }, () => { entry.failed = true }).finally(() => {
         entry.pending = undefined
         entry.until = entry.again ? 0 : Date.now() + 20_000
         entry.again = false
@@ -328,6 +329,7 @@ export class ReconciliationSources {
 
   async searchWork(input: unknown, includeNative = true) {
     const args = searchWorkSchema.parse(input)
+    const accessRevision = this.jiraWork?.accessRevision
     const scope = { owner: args.owner, statuses: args.statuses, initiative: args.initiative, epic: args.epic, checkpoint_before: args.checkpoint_before, history: args.history }
     const [intentions, fleet] = await Promise.all([this.workReader.query(scope, args.refresh, false, includeNative), this.fleetSnapshot(args.refresh)])
     const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
@@ -342,6 +344,9 @@ export class ReconciliationSources {
       (!cardScoped || links.some(link => link.executionId === worker.id && filteredCards.has(link.cardId))))
     const work = await this.workReader.waitingForWork(page.map(card => waitState(card.source)),
       intentions.status === 'stale' ? [] : scene.cards.map(card => card.source), { refresh: args.refresh })
+    if (accessRevision !== this.jiraWork?.accessRevision && scene.cards.some(card => card.source.source?.synthetic === false)) {
+      throw new Error('Jira access changed while searching work')
+    }
     return { scope, coverage: scene.coverage, warnings: scene.warnings, total: cards.length,
       next_offset: args.offset + args.limit < Math.max(cards.length, workers.length) ? args.offset + args.limit : null,
       worker_total: workers.length, workers: workReadback(workers.slice(args.offset, args.offset + args.limit).map(worker => ({ ...worker,
@@ -481,12 +486,13 @@ export class ReconciliationSources {
     return queue
   }
 
-  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile') {
+  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile', displayGrant?: boolean) {
     let reviewWarning: string | null = null
     const reviewRecoveries = mode === 'reconcile' ? await this.workflow.reconcileReviews().catch(() => null) : null
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
     if (mode === 'reconcile') try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
-    const authorized = !!await this.authorizePulls?.(req)
+    const authorized = displayGrant ?? !!await this.authorizePulls?.(req)
+    const accessRevision = this.jiraWork?.accessRevision
     // The native project is private. Desk reads use the existing owner grant.
     const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile', {}, false, authorized), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
@@ -547,7 +553,7 @@ export class ReconciliationSources {
         const resolution = mode === 'reconcile' ? await this.workflow.reconcileDecisions(id, snapshot.fleet, false, census)
           : card && contexts.get(id)?.outcome === 'available' ? await reconcileDecision(card,
             contexts.get(id)!.blocks.map(block => ({ id: block.id, text: block.text, author: block.author ?? undefined })),
-            snapshot.fleet, this.workflow.decisionDelivery, undefined, undefined, snapshot.intentions, 'observe') : undefined
+            snapshot.fleet, this.workflow.decisionDelivery, undefined, undefined, legacyWorkObservation(snapshot.intentions), 'observe') : undefined
         if (resolution) resolutions.set(id, resolution)
         if (mode === 'reconcile' && resolution?.state === 'resolved') this.context.invalidate(id)
       } catch { resolutions.set(id, { state: 'verification-needed', message: 'Decision reconciliation needs verification: current Notion history unavailable' }) }
@@ -597,6 +603,7 @@ export class ReconciliationSources {
     if (pullRead) queue.pullCoverage = { repositories: pullRead.repositories, warnings: pullRead.warnings, associationsComplete: pullRead.associationsComplete }
     else if (!authorized) queue.warnings.push('PR details require owner authorization')
     else queue.warnings.push('PR state unverified: inventory unavailable; explicit asks are retained without a verified waiting-on-merge conclusion.')
+    if (nativeIds.size && accessRevision !== this.jiraWork?.accessRevision) throw new Error('Jira access changed while reading the Desk')
     return workReadback(queue)
   }
 }

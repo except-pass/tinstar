@@ -1,3 +1,4 @@
+import { legacyWorkObservation } from './workReader'
 import { isJiraCard } from '../../shared/workIdentity'
 import { externalWorkers } from '../../shared/workflow'
 import { homeLabel } from '../../shared/reconciliationLabels'
@@ -134,6 +135,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     findings.push({ id: key(kind, cardIds, executionIds, homeIds, reason), kind, cardIds, executionIds, homeIds, reason,
       ...(workerLinkDetectors.length ? { workerLinkDetectors } : {}), ...(sourceHealth ? { sourceHealth: true as const } : {}) })
   }
+  const legacy = ageObservation(legacyWorkObservation(intentions), now)
   const sourceCards = new Map((intentions.data?.cards ?? []).map(card => [card.id, card]))
   const cards: SceneCard[] = [...sourceCards.values()].map(card => {
     const ancestry = new Set<string>()
@@ -160,7 +162,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   const linkRecords = new Map(cards.map(card => [card.id, declaredLinks(card.source)]))
   // Blank is unknown for coverage, like a missing property. It is the normal
   // unset state, so it does not emit the per-card diagnostic a real read failure does.
-  const declarationsReadable = [...linkRecords.values()].every(parsed => parsed.status === 'valid')
+  const declarationsReadable = cards.every(card => card.source.source?.synthetic === false || linkRecords.get(card.id)?.status === 'valid')
   const declarations = cards.flatMap(card => {
     const parsed = linkRecords.get(card.id)!
     if (isBlankWorkerLinks(parsed)) return []
@@ -199,7 +201,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         liveness, activity: liveness === 'running' ? 'executing' : liveness === 'waiting' ? 'waiting' : liveness === 'finished' || liveness === 'absent' ? 'inactive' : 'unknown', source: task, observation: metadata(observation) }
       executions.push(execution)
       const taskBacklog = observation.data?.backlog?.find(row => row.id === (task.backlog.id ?? task.identity.task_id))
-      for (const finding of workerLifecycleFindings(execution, taskBacklog, intentions, now)) {
+      for (const finding of workerLifecycleFindings(execution, taskBacklog, legacy, now)) {
         add('unverified-conflicting', finding.cardIds, [id], finding.reason, [home.source.home], [finding.detector])
       }
       const refs: Array<CardReference | { pageId: string; basis: 'inferred'; source: string }> = [
@@ -226,7 +228,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         const verification = conflict ? 'conflicting' : 'unverified'
         const claim: Claim = { id: key(cardId, id, basis), cardId, executionId: id, identity: task.identity, basis,
           sources: [...new Set(evidence.map(ref => ref.source))], observedAt: observation.observedAt, firstObservedAt: observation.observedAt, endedAt: null,
-          state: fresh(observation) && fresh(intentions) ? 'current' : 'last-known', verification,
+          state: fresh(observation) && fresh(legacy) ? 'current' : 'last-known', verification,
           accountability: { home: home.source.home, parentHome: home.source.parentHome ?? null, owner: card ? word(card.source, 'Owner') : null } }
         claims.push(claim)
         add('unverified-conflicting', [cardId], [id], `Legacy candidate (${basis}); Notion declaration required; no automatic repair`, [], [], !conflict)
@@ -256,12 +258,12 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     const competing = declaredFor(link.fm_home, link.task_id)
     // Unrelated truncated Notion relations do not invalidate a fully read
     // declaration. Incomplete card pagination cannot establish uniqueness.
-    const notionAvailable = fresh(intentions) && !intentions.data?.hasMore
+    const notionAvailable = fresh(legacy) && !legacy.data?.hasMore
     const homeAvailable = !!home && sufficient(home.observation)
     const homeObserved = !!home && fresh(home.observation)
     const available = homeAvailable && notionAvailable
-    const duplicatePrimary = fresh(intentions) && new Set(competing.map(d => d.card.id)).size > 1
-    const spawnEvidence = fresh(intentions) && homeObserved &&
+    const duplicatePrimary = fresh(legacy) && new Set(competing.map(d => d.card.id)).size > 1
+    const spawnEvidence = fresh(legacy) && homeObserved &&
       (matches.length > 1 || matches.some(e => e.identity.spawn_gen && e.identity.spawn_gen !== link.first_observed_spawn_gen))
     const conflict = duplicatePrimary || spawnEvidence
     const historical = card.source.archived || card.source.in_trash || card.expectation === 'outside' ||
@@ -277,7 +279,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       const corroboration = execution?.source.cardReferences.filter(ref => ref.pageId === card.id).map(ref => ref.source) ?? []
       claims.push({ id: key(card.id, id, 'explicit'), cardId: card.id, executionId: id,
         identity: execution?.identity ?? identity, basis: 'explicit', sources: [`${isJiraCard(card.id) ? 'jira' : 'notion'}.${FIRST_MATE_TASKS}`, ...corroboration],
-        observedAt: intentions.observedAt, firstObservedAt: intentions.observedAt, endedAt: null, state, verification,
+        observedAt: legacy.observedAt, firstObservedAt: legacy.observedAt, endedAt: null, state, verification,
         accountability: { home: link.fm_home, parentHome: home?.source.parentHome ?? null, owner: word(card.source, 'Owner') } })
       add(conflict ? 'unverified-conflicting' : !available ? 'unknown-stale-source' : execution ? 'confirmed-link' : historical ? 'outside-coverage' : 'unverified-conflicting',
         [card.id], execution ? [id] : [], conflict
@@ -298,7 +300,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   for (const execution of executions) {
     if (execution.kind === 'secondmate' || declaredFor(execution.home, execution.identity.task_id).length) continue
     const refs = execution.source.cardReferences
-    if (execution.activity === 'executing' && refs.length && sufficient(intentions) && declarationsReadable && sufficient({ ...execution.observation, data: execution.source }) && fleet.every(home => sufficient(home.observation))) {
+    if (execution.activity === 'executing' && refs.length && sufficient(legacy) && declarationsReadable && sufficient({ ...execution.observation, data: execution.source }) && fleet.every(home => sufficient(home.observation))) {
       add('untracked-worker', [...new Set(refs.map(ref => ref.pageId))], [execution.id],
         'Worker metadata indicates Notion-originated work without a matching Notion declaration; First Mate investigates')
     }
@@ -307,7 +309,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   if (!fleet.length) add('unknown-stale-source', [], [], 'No configured homes; fleet coverage is unknown')
   // Unknown runtime state anywhere in the configured pool can hide an unlinked
   // execution. Do not turn metadata completeness into a false execution gap.
-  const absenceCovered = sufficient(intentions) && declarationsReadable && fleet.length > 0 && fleet.every(home => sufficient(home.observation)) &&
+  const absenceCovered = sufficient(legacy) && declarationsReadable && fleet.length > 0 && fleet.every(home => sufficient(home.observation)) &&
     executions.every(execution => execution.activity !== 'unknown')
   for (const card of cards) {
     const external = externalWorkers(property(card.source, 'Delegated To'), now).filter(worker => worker.card_id === card.id)
@@ -342,7 +344,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         explicit ? 'First Mate backlog accounts for queued/held work; retain hold reason, blocker and checkpoint in source data'
           : 'Textual backlog card reference suggests queued/held work; execution-gap conclusion suppressed pending verification')
     } else if ((!related.length || !live.length) && !external.some(worker => worker.freshness === 'current-report')) {
-      if (!external.length && absenceCovered && accountableHomes.length && related.every(claim => claim.verification === 'confirmed') && !card.source.archived && !card.source.in_trash) {
+      if (!external.length && card.source.source?.synthetic !== false && absenceCovered && accountableHomes.length && related.every(claim => claim.verification === 'confirmed') && !card.source.archived && !card.source.in_trash) {
         add('task-execution-gap', [card.id], linked.map(e => e.id), `${card.expectationReason}; explicit accountability in ${accountableHomes.join(', ')} and complete fresh configured coverage contain no execution or legitimate wait`, accountableHomes)
       } else add('unknown-stale-source', [card.id], linked.map(e => e.id), 'Expected execution cannot be accounted for; insufficient coverage, unverified claims or missing explicit home accountability suppress an execution-gap conclusion')
     } else if (confirmedWaiting.length) {
@@ -440,6 +442,7 @@ export class SceneReconciler {
   }
   reconcile(input: SourceSnapshot, now = Date.now()) {
     const scene = reconcileScene(input, now)
+    const legacy = ageObservation(legacyWorkObservation(input.intentions), now)
     const current = new Set(scene.claims.map(claim => claim.id))
     for (const claim of scene.claims) {
       const previous = this.known.get(claim.id)
@@ -451,8 +454,8 @@ export class SceneReconciler {
       const home = scene.coverage.homes.find(home => home.source.home === previous.identity.fm_home)
       const replacement = scene.executions.find(execution => execution.id === previous.executionId)
       const card = scene.cards.find(card => card.id === previous.cardId)
-      const notionKnown = ['fresh', 'partial'].includes(scene.coverage.intentions.status) &&
-        !input.intentions.data?.hasMore && card && declaredLinks(card.source).status === 'valid'
+      const notionKnown = fresh(legacy) &&
+        !legacy.data?.hasMore && card && declaredLinks(card.source).status === 'valid'
       const retired = notionKnown && home?.observation.status === 'fresh' && home.observation.coverage === 'complete' &&
         (!replacement || scene.claims.some(claim => claim.executionId === replacement.id && claim.basis === 'explicit' && claim.verification === 'confirmed' && claim.state === 'current'))
       this.known.set(id, { ...previous, state: retired || previous.endedAt ? 'historical' : 'last-known',

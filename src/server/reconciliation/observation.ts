@@ -31,6 +31,14 @@ export class CachedObservation<T> {
 
   isCached() { return !!this.pending || !!this.cached && this.now() < this.retryAt }
 
+  discard() {
+    this.cached = { status: 'unknown', coverage: 'unknown', data: null, observedAt: null,
+      attemptedAt: new Date(this.now()).toISOString(), expiresAt: null, error: this.failureMessage }
+    this.pending = null
+    this.retryAt = this.now() + this.ttlMs
+    this.changes = []
+  }
+
   updateData(change: (data: T) => T) {
     if (this.cached?.data) this.cached = { ...this.cached, data: change(this.cached.data) }
     if (this.pending) this.changes.push(change)
