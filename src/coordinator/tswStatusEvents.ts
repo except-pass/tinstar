@@ -121,9 +121,12 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
         continue
       }
       const events = byKey.get(key) ?? []
+      const completed = signal.details.target === 'Done'
+      const subjectId = completed ? row?.id ?? id : id
+      const generation = completed ? null : task?.identity.spawn_gen ?? null
       events.push({
         ...signal.details, ...authority(label), key, home, task: id, expiresAt: observation.expiresAt,
-        id: eventId([home, id, task?.identity.spawn_gen ?? null, signal.details.target, signal.witness]),
+        id: eventId([home, subjectId, generation, signal.details.target, signal.witness]),
         evidence: signal.evidence,
       })
       byKey.set(key, events)

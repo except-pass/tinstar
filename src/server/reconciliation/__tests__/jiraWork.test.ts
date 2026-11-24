@@ -486,6 +486,26 @@ it('preserves the owner’s Park when the earlier worker event returns after rev
   expect(issue.fields.status.name).toBe('In Progress')
 })
 
+it('preserves an owner reopen when the completed worker disappears', async () => {
+  const f = await tswFixture()
+  await f.create('reopened completion')
+  const completion = { id: 'backlog-delivery', body_lines: ['card: TSW-1'],
+    completion: { verb: 'done', date: '2026-11-23' }, pr_url: fixturePull }
+  await f.publish([tswTask('TSW-1', '', 'off', { backlog: { id: completion.id, body_lines: completion.body_lines } })], [completion])
+  expect(await f.run(true)).toMatchObject({ stopped: false })
+  const card = await f.jira().readTswCard('TSW-1')
+  expect(card.status).toBe('Done')
+  expect(await f.call('transition_work', {
+    card_id: card.id, operation_id: 'owner-reopen', verb: 'Reopen', to: 'Queued', reason: 'More work is needed.',
+  })).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
+
+  await f.publish([], [completion])
+  expect(await f.run(true)).toMatchObject({ plans: [], stopped: false, audits: expect.arrayContaining([
+    expect.objectContaining({ cardId: 'TSW-1', result: 'event-already-applied' }),
+  ]) })
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe('Queued')
+})
+
 it('replans a rejected Fast-track with a new operation ID on the next pass', async () => {
   const f = await tswFixture()
   await f.create('rejected Fast-track')
