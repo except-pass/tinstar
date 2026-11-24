@@ -111,7 +111,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     for (const merge of issue.merges) {
       const id = JSON.stringify([issue.id, merge.comment])
       addMerge({ kind: 'jira', id, label: issue.key, url: `${issue.url}?focusedCommentId=${merge.comment}` },
-        merge.url, merge.head, fresh && !issue.notesUnavailable && !merge.conditional)
+        merge.url, merge.head, fresh && !merge.unverified && !merge.conditional)
     }
   }
 

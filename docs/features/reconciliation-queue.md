@@ -44,6 +44,12 @@ while Main is unavailable. The same source grouping is available in
 `list_prs({ view: "owner-ready", recheck: true })` when Main returns.
 Concurrent browser and MCP rechecks share one pass over the current records.
 
+The bundle reads requests already published through Jira questions and merge
+notes, card-native requests, and worker publications. Source records remain
+in their original systems. The existing publisher journal and
+waiting-on-supervisor notice deduplication govern publication and delivery.
+Opening or rechecking the bundle sends no notices and writes no source records.
+
 Jira questions use the native issue identity and D-question ID. Review merge
 asks require a Ready for Review ticket assigned to Will and a current,
 unrestricted `Will: merge <GitHub PR URL>` comment. A full SHA on that line

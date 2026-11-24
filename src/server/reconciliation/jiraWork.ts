@@ -24,8 +24,10 @@ type OwnerIssue = {
   id: string; key: string; url: string; repository: string | null
   decisions: ReturnType<typeof readJiraDecisions>
   reviewAssigned: boolean
-  merges: Array<NonNullable<ReturnType<typeof mergePublication>> & { comment: string }>
+  merges: Array<NonNullable<ReturnType<typeof mergePublication>> & { comment: string; createdAt: number; unverified?: boolean }>
   notesUnavailable?: boolean
+  reviewAfter?: number
+  readComments?: Set<string>
   warning?: string
 }
 type ReviewChange = { fieldId?: string; field?: string; fromString?: string; toString?: string }
@@ -68,7 +70,12 @@ export class JiraWork extends JiraClient {
     'Jira owner requests unavailable; retained records require verification.', Date.now, (previous: OwnerIssue[], current: OwnerIssue[]) =>
       retainMissing(previous, current, issue => issue.id), (previous, current) => {
     const known = new Map(previous?.map(issue => [issue.id, issue]))
-    return current.map(issue => issue.notesUnavailable ? { ...issue, merges: known.get(issue.id)?.merges ?? [] } : issue)
+    return current.map(issue => {
+      if (!issue.notesUnavailable) return issue
+      const retained = (known.get(issue.id)?.merges ?? []).filter(merge =>
+        merge.createdAt > (issue.reviewAfter ?? -Infinity) && !issue.readComments?.has(merge.comment))
+      return { ...issue, merges: [...issue.merges, ...retained.map(merge => ({ ...merge, unverified: true }))] }
+    })
   })
   constructor(private readonly config: JiraWorkConfig, private readonly root: string, fetcher?: (input: string, init?: RequestInit) => Promise<Response>) {
     super(`https://api.atlassian.com/ex/jira/${config.cloudId}`, `Bearer ${config.token}`, fetcher)
@@ -84,8 +91,8 @@ export class JiraWork extends JiraClient {
     return id.issueId
   }
 
-  private async checkProject(id: string) {
-    const issue = await this.request(`issue/${id}?fields=project`)
+  private async checkProject(id: string, signal?: AbortSignal) {
+    const issue = await this.request(`issue/${id}?fields=project`, 'GET', undefined, signal)
     if (issue.id !== id || issue.fields?.project?.id !== this.config.projectId) {
       throw new JiraWorkInputError('Ticket is outside the configured Jira project')
     }
@@ -155,12 +162,12 @@ export class JiraWork extends JiraClient {
       ...(blocker === undefined ? { external_blocker_fields: externalBlocker } : {}), ...(warnings.length ? { warnings } : {}) }
   }
 
-  private async notes(issueId: string, startAt = 0) {
-    await this.checkProject(issueId)
-    const body = await this.request(`issue/${issueId}/comment?startAt=${startAt}&maxResults=50&orderBy=-created`)
+  private async notes(issueId: string, startAt = 0, signal?: AbortSignal) {
+    await this.checkProject(issueId, signal)
+    const body = await this.request(`issue/${issueId}/comment?startAt=${startAt}&maxResults=50&orderBy=-created`, 'GET', undefined, signal)
     if (!Array.isArray(body.comments) || !Number.isSafeInteger(body.total) || body.total < 0 || body.startAt !== startAt ||
       body.comments.length > body.total - startAt || !body.comments.length && startAt < body.total) throw new Error('Incomplete Jira comment readback')
-    await this.checkProject(issueId)
+    await this.checkProject(issueId, signal)
     return { comments: body.comments.map((comment: Record<string, any>) => ({
       id: comment.id, body: comment.visibility == null ? text(comment.body) : undefined, created_at: comment.created, updated_at: comment.updated, author_id: comment.author?.accountId,
     })), total: body.total as number }
@@ -232,17 +239,28 @@ export class JiraWork extends JiraClient {
       await Promise.all(reviews.slice(offset, offset + 4).map(async ([id, issue]) => {
         try {
           signal.throwIfAborted()
-          const [notes, after] = await Promise.all([this.notes(id), this.previousReviewExit(id, signal)])
-          const merges = new Map<string, OwnerIssue['merges'][number]>()
-          for (const note of notes.comments) {
-            if (!nativeId(note.id) || !note.body || !(Date.parse(note.created_at) > after)) continue
-            for (const line of note.body.split(/\r?\n/)) {
-              const pull = mergePublication(line, true)
-              if (pull && !merges.has(pull.id)) merges.set(pull.id, { ...pull, comment: note.id })
+          const after = await this.previousReviewExit(id, signal)
+          issue.reviewAfter = after
+          const seen = issue.readComments = new Set<string>()
+          let startAt = 0
+          for (let page = 0; page < 5; page++) {
+            const notes = await this.notes(id, startAt, signal)
+            let reachedPreviousCycle = false
+            for (const note of notes.comments) {
+              const createdAt = Date.parse(note.created_at)
+              if (!nativeId(note.id) || !Number.isFinite(createdAt) || seen.has(note.id)) throw new Error('Incomplete Jira comment history')
+              seen.add(note.id)
+              if (createdAt <= after) reachedPreviousCycle = true
+              if (!note.body || createdAt <= after) continue
+              for (const line of note.body.split(/\r?\n/)) {
+                const pull = mergePublication(line, true)
+                if (pull) issue.merges.push({ ...pull, comment: note.id, createdAt })
+              }
             }
+            startAt += notes.comments.length
+            if (startAt >= notes.total || reachedPreviousCycle) return
           }
-          issue.merges = [...merges.values()]
-          if (notes.total > notes.comments.length) issue.warning = [issue.warning, 'Only the latest 50 comments were inspected.'].filter(Boolean).join(' ')
+          throw new Error('Jira comment history exceeds the read budget')
         } catch {
           issue.notesUnavailable = true
           issue.warning = [issue.warning, 'Current merge notes or review history could not be verified.'].filter(Boolean).join(' ')
