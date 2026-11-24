@@ -9,9 +9,9 @@ import { collectTswEvents, type StatusEvent } from './tswStatusEvents'
 
 type Step = JiraTransition | JiraEdit
 type CardState = Pick<JiraWorkCard, 'status' | 'assignee_id' | 'owner'>
-type Pending = { eventId: string; input: Step; actor: string; before: CardState; unconfirmed?: number; retry?: boolean; rejectedAttempts?: number }
+type Pending = { eventId: string; target?: StatusEvent['target']; input: Step; actor: string; before: CardState; unconfirmed?: number; retry?: boolean; rejectedAttempts?: number }
 type NoteRepair = { input: JiraTransition; actor: string; attempts: number; queuedAt?: number }
-type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean; rejectedSteps?: Record<string, number>; handledEvents?: string[] }
+type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean; rejectedSteps?: Record<string, number>; handledEvents?: string[]; appliedEvents?: string[] }
 type StatusAudit = { provider: 'jira'; time: string; cardId: string | null; result: string; home?: string; task?: string; eventId?: string; operationId?: string; detail?: string }
 type Options = {
   jira?: Pick<JiraWork, 'readTswCard' | 'statusHistory' | 'edit' | 'transition' | 'findAssignableAccount' | 'repairTransitionAudit'>
@@ -194,10 +194,8 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
         if (history.changes.length && (!checkpoint.pending || !confirms(checkpoint.pending, card, history.changes))) {
           const { pending, ...prior } = checkpoint
           const handledEvents = new Set(prior.handledEvents)
-          if (history.changes.some(change => !change.byService)) {
-            if (prior.completed.length) handledEvents.add(prior.eventId)
-            if (pending) handledEvents.add(pending.eventId)
-          }
+          if (prior.completed.length) handledEvents.add(prior.eventId)
+          if (pending) handledEvents.add(pending.eventId)
           checkpoint = { ...prior, cursor: history.cursor, statusVersion: statusVersion(history.changes, prior.statusVersion),
             preserveAssignee: prior.preserveAssignee || history.changes.some(change => change.field === 'assignee'),
             handledEvents: [...handledEvents] }
@@ -250,8 +248,13 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           const missingNote = !isEdit(input) && (outcome.code === 'unconfirmed' || outcome.outcome === 'saved' && !!outcome.message)
           if ((verified || missingNote) && card.id === checkpoint.cardId && confirms(pending, card, history.changes)) {
             const { pending: _pending, ...prior } = checkpoint
+            const appliedEvents = new Set(prior.appliedEvents)
+            if (prior.eventId !== pending.eventId && prior.completed.length) appliedEvents.add(prior.eventId)
+            const target = pending.target ?? (event?.id === pending.eventId ? event.target : undefined)
+            if (card.status === target) appliedEvents.add(pending.eventId)
             if (missingNote) lastQueuedAt = Math.max(now(), lastQueuedAt + 1)
             checkpoint = { ...prior, cursor: history.cursor, eventId: pending.eventId,
+              appliedEvents: [...appliedEvents].slice(-50),
               statusVersion: statusVersion(history.changes, prior.statusVersion),
               noteRepairs: missingNote ? [...(prior.noteRepairs ?? []), { input, actor, attempts: 0, queuedAt: lastQueuedAt }] : prior.noteRepairs,
               completed: [...(checkpoint.eventId === pending.eventId ? checkpoint.completed : []), original.operation_id] }
@@ -296,7 +299,10 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           if (!await execute(checkpoint.pending)) continue
         }
         if (!event) continue
-        if (checkpoint.handledEvents?.includes(eventId)) { await log('event-already-applied'); continue }
+        if (checkpoint.handledEvents?.includes(eventId) || checkpoint.appliedEvents?.includes(eventId)) {
+          await log('event-already-applied')
+          continue
+        }
         const proposed = plan(event, card)
         if (typeof proposed === 'string') { await log(proposed); continue }
         const steps = proposed.filter(step => checkpoint.eventId !== eventId ||
@@ -320,7 +326,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
             stopped = true
             break
           }
-          const pending = { eventId, input, actor: event.actor, before: cardState(card), rejectedAttempts }
+          const pending = { eventId, target: event.target, input, actor: event.actor, before: cardState(card), rejectedAttempts }
           checkpoint = { ...checkpoint, cursor: history.cursor, pending }
           history = { ...history, changes: [] }
           await save(key, checkpoint)

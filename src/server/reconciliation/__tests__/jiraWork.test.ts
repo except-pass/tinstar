@@ -452,15 +452,33 @@ it('preserves the owner’s Reject Review until First Mate supplies a new event'
   expect(issue.fields.status.name).toBe('Ready for Review')
 })
 
-it('preserves the owner’s Park against an unchanged worker event', async () => {
+it('preserves Reject Review made via the shared Jira service account', async () => {
+  const f = await tswFixture()
+  await f.create('MCP Reject Review')
+  await f.publish([tswTask('TSW-1', 'checks green: PR ready for review')])
+  await f.run(true)
+  const card = await f.jira().readTswCard('TSW-1')
+  expect(card.status).toBe('Ready for Review')
+  expect(await f.call('transition_work', {
+    card_id: card.id, operation_id: 'owner-action', verb: 'Reject Review', to: 'Queued', reason: 'Try again',
+  })).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
+  expect(await f.run(true)).toMatchObject({ plans: [], stopped: false })
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe('Queued')
+})
+
+it('preserves the owner’s Park when the earlier worker event returns after review', async () => {
   const f = await tswFixture()
   await f.create('Park')
   await f.publish([tswTask('TSW-1')])
   await f.run(true)
   const issue = f.issues.get('60001')!
   expect(issue.fields.status.name).toBe('In Progress')
-  f.appendHistory(issue.id, [{ fieldId: 'status', fromString: 'In Progress', toString: 'Backlog' }], 'owner-account')
+  await f.publish([tswTask('TSW-1', 'checks green: PR ready for review')])
+  await f.run(true)
+  expect(issue.fields.status.name).toBe('Ready for Review')
+  f.appendHistory(issue.id, [{ fieldId: 'status', fromString: 'Ready for Review', toString: 'Backlog' }], 'owner-account')
   issue.fields.status = { name: 'Backlog' }
+  await f.publish([tswTask('TSW-1')])
   expect(await f.run(true)).toMatchObject({ plans: [], stopped: false })
   expect(issue.fields.status.name).toBe('Backlog')
   await f.publish([tswTask('TSW-1', '', 'off', { spawn_gen: 'attempt-2' })])
