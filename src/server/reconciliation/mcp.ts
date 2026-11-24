@@ -210,7 +210,7 @@ export class ReconciliationMcp {
     if (jira) {
       const writeAnnotations = { readOnlyHint: false, idempotentHint: true, openWorldHint: true }
       catalog.registerTool('transition_work', {
-        description: 'Apply a named native Jira transition to one ticket. Use the requested destination for recovery and interrupt exits. Supply outcome evidence, reasons or live-work disposition where applicable. Entry into Verify in Prod requires matching required and observed live revisions. Retry the same operation ID and inputs.',
+        description: 'Apply a named native Jira transition to one ticket. Use the requested destination for recovery and interrupt exits. Block requires blocker {type: Actor or Event, target, unblocks_when} and next_check_in (YYYY-MM-DD Jira due date). Supply outcome evidence, reasons or live-work disposition where applicable. Entry into Verify in Prod requires matching required and observed live revisions. Retry the same operation ID and inputs.',
         inputSchema: jiraTransitionSchema, annotations: { ...writeAnnotations, destructiveHint: false },
       }, async input => result(jiraWorkReadback(await jira.transition(input, actor))))
       catalog.registerTool('link_work', {

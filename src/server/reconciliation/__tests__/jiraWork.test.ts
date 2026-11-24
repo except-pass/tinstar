@@ -57,6 +57,10 @@ const localizedStatuses = new Map([
   ['Waiting for Prod Release', '等待发布'], ['Verify in Prod', '生产验证'], ['Done', '完成'], ['Canceled', '已取消'],
 ])
 const jiraNow = () => new Date(Date.now() - 5000).toISOString()
+const typedWait = {
+  blocker: { type: 'Actor', target: 'team:reviewers', unblocks_when: 'A reviewer grants access.' },
+  next_check_in: '2026-11-30',
+}
 /** Blank paragraphs come back without a content array. TSW-1 comments 56761 and 56765. */
 function jiraStoredBody(body: any) {
   if (!body || body.type !== 'doc' || !Array.isArray(body.content)) return body
@@ -89,7 +93,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
   const search = { directoryUnavailable: false, rateLimit: '', deniedRead: '', pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
+  const controls = { loseCreate: false, loseEdit: false, loseStagingRead: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   const attachments = new Map<string, unknown>()
@@ -302,6 +306,10 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       }
       if (controls.delayedComment) {
         issue.comments.push({ id: 'delayed', body: controls.delayedComment, created: controls.delayedCommentTime || created, updated: controls.delayedCommentTime || created, author: { accountId: controls.delayedCommentAuthor } })
+      }
+      if (controls.loseStagingRead && !part && body.fields.duedate) {
+        controls.loseStagingRead = false
+        controls.beforeWrite = `GET issue/${issue.id}`
       }
       if (controls.loseEdit) { controls.loseEdit = false; throw new Error('Dropped issue write response') }
       return response(undefined, 204)
@@ -644,6 +652,7 @@ it('publishes update_work schemas that accept Notion IDs for shared updates', as
   }
   const jiraEdit = { kind: 'jira_edit', operation_id, note: 'Fixture' }
   expect(update({ ...jiraEdit, card_id: jira })).toBe(true)
+  expect(update({ ...jiraEdit, card_id: jira, assignee: null })).toBe(false)
   expect(update({ ...jiraEdit, card_id: notion })).toBe(false)
 })
 
@@ -696,9 +705,9 @@ async function tswFixture() {
       fm_home: '/fixture/fm-offline', generated: new Date().toISOString(),
       main_inventory: { valid: true }, tasks, backlog: { present: true, records: [] } }))
   }
-  const run = async (apply: boolean, maxCards = 5, interruptSubmit = false) => runTswStatusSync(await sources.fleetSnapshot(true), {
+  const run = async (apply: boolean, maxCards = 5, interruptSubmit: boolean | string = false) => runTswStatusSync(await sources.fleetSnapshot(true), {
     jira: f.jira(), stateFile: join(f.root, 'status-checkpoints.json'), apply, maxCards, audit: async entry => {
-      if (interruptSubmit && entry.result === 'write-planned' && entry.operationId?.endsWith('-ready-for-review')) throw new Error('Interrupted before submit')
+      if (interruptSubmit && entry.result === 'write-planned' && entry.operationId?.slice('tsw-'.length + 64) === (typeof interruptSubmit === 'string' ? interruptSubmit : '-ready-for-review')) throw new Error('Interrupted before write')
     },
   })
   return { ...f, call, create, publish, publishBackup, run }
@@ -713,6 +722,242 @@ const tswTask = (key: string, detail = '', yolo = 'off', overrides: Record<strin
   pr: { url: detail ? fixturePull : null, head: fixtureHead },
   hints: { last_event_text: detail && yolo === 'off' ? `done: PR ${fixturePull} checks green at head ${fixtureHead}` : '' },
   ...overrides,
+})
+
+it('applies each TSW decision and external wait once even after an answer, wait resolution, or respawn', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('side states')
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'Waiting for Prod Release' }
+  issue.fields[config.fields.decisions] = 'D1 [Answered]: Which region?\n  Answer: East.'
+  const request = (verb: string, key: string, summary: string) => ({ verb, key, summary })
+  const publish = (decision: ReturnType<typeof request>, spawn_gen = 'attempt-1') => f.publish([tswTask(key, '', 'off', {
+    spawn_gen, hints: { open_decisions: [decision] },
+  })])
+  const writes = () => f.requests.filter(item => item.method !== 'GET' && item.path.startsWith('issue/60001')).length
+  const decision = request('needs-decision', 'select-release', 'Which release window should we use?')
+  await publish(decision)
+  expect((await f.run(false)).plans[0]?.steps).toMatchObject([
+    { kind: 'jira_edit', assignee: 'William Gathright', add_questions: [{ id: 'D2', question: decision.summary }] },
+    { verb: 'Request Decision' },
+  ])
+  expect(writes()).toBe(0)
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({
+    status: 'Decision', assignee: 'William Gathright', decision_questions: [
+      { id: 'D1', question: 'Which region?', answer: 'East.' }, { id: 'D2', question: decision.summary },
+    ],
+  })
+  expect(issue.comments.map(comment => adfText(comment.body))).not.toEqual(
+    expect.arrayContaining([expect.stringContaining(decision.summary)]),
+  )
+  const edit = (operation_id: string, fields: Record<string, unknown>) => f.call('update_work',
+    { card_id, operation_id, kind: 'jira_edit', ...fields })
+  expect(await edit('answer-decision', { answers: [{ id: 'D2', answer: 'Tonight.' }] })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', {
+    card_id, operation_id: 'decision-exit', verb: 'Answer Decision', to: 'In Progress', evidence: 'The worker has resumed.',
+  })).toMatchObject({ outcome: 'saved' })
+  await publish({ ...decision, summary: 'The wording changed after the answer.' }, 'attempt-2')
+  const afterAnswer = writes()
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'event-already-applied' }))
+  expect(writes()).toBe(afterAnswer)
+
+  const invalid = request('blocked', 'release-event', 'wait {"blocker":{"type":"Event","target":"event:release","unblocks_when":"Production is ready."}}')
+  await publish(invalid, 'attempt-2')
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'external-wait-invalid' }))
+  expect(writes()).toBe(afterAnswer)
+  const wait = { ...typedWait, blocker: { type: 'Event', target: 'event:release', unblocks_when: 'Production is ready.' } }
+  await publish({ ...invalid, summary: `wait ${JSON.stringify(wait)}` }, 'attempt-2')
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: wait.blocker, due_date: wait.next_check_in })
+  expect(await edit('clear-wait', { blocker: null })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', {
+    card_id, operation_id: 'wait-exit', verb: 'Resolve Wait', to: 'In Progress', evidence: 'The release is available.',
+  })).toMatchObject({ outcome: 'saved' })
+  await publish({ ...invalid, summary: `wait ${JSON.stringify(wait)}` }, 'attempt-3')
+  const afterResolve = writes()
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'event-already-applied' }))
+  expect(writes()).toBe(afterResolve)
+})
+
+it('considers review and later wait requests while an answered decision remains open', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('open requests')
+  const decision = { verb: 'needs-decision', key: 'window', summary: 'Which release window?' }
+  const seen = { last_event_text: `done: PR ${fixturePull} checks green at head ${fixtureHead}` }
+  const publish = (open_decisions: unknown[], detail = '') => f.publish([
+    tswTask(key, detail, 'off', { hints: { ...seen, open_decisions } }),
+  ])
+  await publish([decision])
+  await f.run(true)
+  expect(await f.call('update_work', { kind: 'jira_edit', card_id, operation_id: 'answer', answers: [{ id: 'D1', answer: 'Tonight.' }] }))
+    .toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'resume', verb: 'Answer Decision', to: 'In Progress', evidence: 'Resuming.' }))
+    .toMatchObject({ outcome: 'saved' })
+  await publish([decision], 'checks green: PR ready for review')
+  expect((await f.run(false)).plans[0]?.event.target).toBe('Ready for Review')
+  await publish([decision, { verb: 'blocked', key: 'invalid', summary: 'wait {}' },
+    { verb: 'blocked', key: 'valid', summary: `wait ${JSON.stringify(typedWait)}` }])
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'external-wait-invalid' }))
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker })
+})
+
+it('replans a staged decision after a human advances Jira without duplicating the question', async () => {
+  const f = await tswFixture()
+  const { card: { key } } = await f.create('staged decision')
+  const summary = 'Which release window?'
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [{ verb: 'needs-decision', key: 'window', summary }] } })])
+  expect((await f.run(true, 1, '-decision')).stopped).toBe(true)
+  const issue = f.issues.get('60001')!
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Backlog', assignee: 'William Gathright',
+    decision_questions: [{ id: 'D1', question: summary }] })
+  issue.fields.status = { name: 'To Do' }
+  f.appendHistory(issue.id, [{ fieldId: 'status', fromString: 'Backlog', toString: 'To Do' }], 'jira-owner')
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Decision', assignee: 'William Gathright',
+    decision_questions: [{ id: 'D1', question: summary }] })
+})
+
+it('skips a capped decision in both modes and applies the next wait', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('capped decision')
+  const decision = { verb: 'needs-decision', key: 'window', summary: 'Which release window?' }
+  const wait = { verb: 'blocked', key: 'release', summary: `wait ${JSON.stringify(typedWait)}` }
+  const publish = (open_decisions: unknown[]) => f.publish([tswTask(key, '', 'off', { hints: { open_decisions } })])
+  await publish([decision])
+  f.controls.refuseTransition = true
+  for (let attempt = 0; attempt < 3; attempt++) await f.run(true)
+  f.controls.refuseTransition = false
+  await publish([decision, wait])
+  for (const apply of [false, true]) {
+    const result = await f.run(apply)
+    expect(result.audits).toContainEqual(expect.objectContaining({ result: 'rejected-cap-reached' }))
+    expect(result.plans.map(plan => plan.event.target)).toEqual(['Waiting For'])
+  }
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker,
+    decision_questions: [{ id: 'D1', question: decision.summary }] })
+  expect(await f.call('update_work', { kind: 'jira_edit', card_id, operation_id: 'clear-wait', blocker: null })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'resolve', verb: 'Resolve Wait', to: 'To Do', evidence: 'Resolved.' }))
+    .toMatchObject({ outcome: 'saved' })
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Decision',
+    decision_questions: [{ id: 'D1', question: decision.summary }] })
+})
+
+it('combines review signals from two mates after filtering an answered decision', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('shared review')
+  const decision = { verb: 'needs-decision', key: 'window', summary: 'Which release window?' }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [decision] } })])
+  await f.run(true)
+  await f.call('update_work', { kind: 'jira_edit', card_id, operation_id: 'answer', answers: [{ id: 'D1', answer: 'Tonight.' }] })
+  await f.call('transition_work', { card_id, operation_id: 'resume', verb: 'Answer Decision', to: 'In Progress', evidence: 'Resuming.' })
+  const detail = 'checks green: PR ready for review'
+  await f.publish([tswTask(key, detail, 'off', { hints: {
+    last_event_text: `done: PR ${fixturePull} checks green at head ${fixtureHead}`, open_decisions: [decision],
+  } })])
+  await f.publishBackup([tswTask(key, detail)])
+  const result = await f.run(true)
+  expect(result.plans[0]?.event).toMatchObject({ target: 'Ready for Review', actor: 'Firstmate backup, Firstmate fleet' })
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Ready for Review' })
+})
+
+it('does not retire an undispatched mate wait after a separate service-account wait', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('unrelated wait')
+  const request = { verb: 'blocked', key: 'mate-wait', summary: `wait ${JSON.stringify(typedWait)}` }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [request] } })])
+  expect((await f.run(true, 1, '-waiting-for')).stopped).toBe(true)
+  const other = { ...typedWait, blocker: { ...typedWait.blocker, target: 'team:other' } }
+  expect(await f.call('transition_work', { card_id, operation_id: 'other-wait', verb: 'Block', ...other })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('update_work', { card_id, operation_id: 'clear', kind: 'jira_edit', blocker: null })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'resolve', verb: 'Resolve Wait', to: 'To Do', evidence: 'Resolved.' }))
+    .toMatchObject({ outcome: 'saved' })
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker })
+})
+
+it('arbitrates equivalent reviews after skipping a staged decision Jira no longer offers', async () => {
+  const f = await tswFixture()
+  const { card: { key } } = await f.create('unoffered decision')
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'In Progress' }
+  const decision = { verb: 'needs-decision', key: 'window', summary: 'Which window?' }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [decision] } })])
+  expect((await f.run(true, 1, '-decision')).stopped).toBe(true)
+  issue.fields.status = { name: 'To Do' }
+  f.appendHistory(issue.id, [{ fieldId: 'status', fromString: 'In Progress', toString: 'To Do' }], 'jira-owner')
+  f.controls.transitionList = transitions.filter(transition => transition.name !== 'Request Decision')
+  const detail = 'checks green: PR ready for review'
+  await f.publish([tswTask(key, detail, 'off', { hints: {
+    last_event_text: `done: PR ${fixturePull} checks green at head ${fixtureHead}`, open_decisions: [decision],
+  } })])
+  await f.publishBackup([tswTask(key, detail)])
+  for (const apply of [false, true]) {
+    const result = await f.run(apply)
+    expect(result.audits).toContainEqual(expect.objectContaining({ result: 'side-state-transition-unavailable' }))
+    expect(result.plans[0]?.event).toMatchObject({ target: 'Ready for Review', actor: 'Firstmate backup, Firstmate fleet' })
+  }
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Ready for Review' })
+})
+
+it('replans an owner-only wait after a Jira move and definitive Block rejections', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('interrupted wait')
+  const wait = { verb: 'blocked', key: 'window', summary: `wait ${JSON.stringify(typedWait)}` }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [wait] } })])
+  expect((await f.run(true, 1, '-waiting-for')).stopped).toBe(true)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Backlog', owner: 'Firstmate fleet' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'prioritize', verb: 'Prioritize' })).toMatchObject({ outcome: 'saved' })
+  f.controls.refuseTransition = true
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'write-rejected' }))
+    expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'To Do', blocker: typedWait.blocker })
+  }
+  f.controls.refuseTransition = false
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker })
+})
+
+it('keeps a distinct wait actionable after a matching Jira wait resolves', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('matching wait')
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'To Do' }
+  issue.fields[config.fields.owner] = { value: 'Avery' }
+  expect(await f.call('transition_work', { card_id, operation_id: 'native-wait', verb: 'Block', ...typedWait })).toMatchObject({ outcome: 'saved' })
+  const wait = { verb: 'blocked', key: 'new-wait', summary: `wait ${JSON.stringify(typedWait)}` }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [wait] } })])
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'already-at-target' }))
+  expect(await f.call('update_work', { card_id, operation_id: 'clear-blocker', kind: 'jira_edit', blocker: null })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'resolve-wait', verb: 'Resolve Wait', to: 'To Do', evidence: 'Resolved.' }))
+    .toMatchObject({ outcome: 'saved' })
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker })
+})
+
+it('keeps existing Waiting For fields and skips a decision when Jira does not offer the move', async () => {
+  const f = await tswFixture()
+  const { card: { key } } = await f.create('existing wait')
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'Waiting For' }
+  issue.fields[config.fields.owner] = { value: 'Avery' }
+  issue.fields[config.fields.blockerType] = { value: typedWait.blocker.type }
+  issue.fields[config.fields.blockerTarget] = typedWait.blocker.target
+  issue.fields[config.fields.blockerCondition] = typedWait.blocker.unblocks_when
+  issue.fields.duedate = typedWait.next_check_in
+  const publish = (verb: string, summary: string) => f.publish([tswTask(key, '', 'off', {
+    hints: { open_decisions: [{ verb, key: 'different-request', summary }] },
+  })])
+  await publish('blocked', `wait ${JSON.stringify({ ...typedWait, next_check_in: '2026-12-02' })}`)
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'already-at-target' }))
+  f.controls.transitionList = []
+  await publish('needs-decision', 'Which reviewer should we ask?')
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'side-state-transition-unavailable' }))
+  expect(f.requests.filter(request => request.method !== 'GET' && request.path.startsWith('issue/60001'))).toHaveLength(0)
+  expect(await f.jira().readTswCard(key)).toMatchObject({
+    status: 'Waiting For', blocker: typedWait.blocker, due_date: typedWait.next_check_in, decision_questions: [], assignee: null,
+  })
 })
 
 it.each([
@@ -1431,7 +1676,9 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   })
   expect(await move('answer-status', 'Answer Decision', { to: 'In Progress', evidence: 'The worker resumed execution.' })).toMatchObject({ outcome: 'saved' })
   expect(await edit('external', { blocker: { type: 'Actor', target: 'team:reviewers', unblocks_when: 'A reviewer grants access.' } })).toMatchObject({ outcome: 'saved', card: { blocker: { type: 'Actor' } } })
-  expect(await move('wait', 'Block')).toMatchObject({ outcome: 'saved', card: { status: 'Waiting For' } })
+  expect(await move('wait', 'Block', typedWait)).toMatchObject({ outcome: 'saved', card: {
+    status: 'Waiting For', blocker: typedWait.blocker, due_date: typedWait.next_check_in,
+  } })
   expect(await edit('change-blocker', { blocker: { type: 'Event', target: 'event:approval-1', unblocks_when: 'The approval event is recorded.' } })).toMatchObject({ outcome: 'saved', card: { blocker: { type: 'Event' } } })
   expect(await link('two-blockers', { action: 'add', target_key: 'OTHER-1', type: 'Blocks', direction: 'inward' })).toMatchObject({ outcome: 'not-saved' })
   expect(await edit('clear-external', { blocker: null })).toMatchObject({ outcome: 'saved', card: { blocker: null } })
@@ -1634,7 +1881,7 @@ it('refuses active destinations for a blocked Decision and allows Block', async 
     const revisions = to === 'Verify in Prod' ? { required_revision: 'rev-a', live_revision: 'rev-a' } : {}
     expect(await answer(to, revisions)).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('Clear the primary blocker') })
   }
-  expect(await call('transition_work', { card_id, operation_id: 'block', verb: 'Block' }))
+  expect(await call('transition_work', { card_id, operation_id: 'block', verb: 'Block', ...typedWait }))
     .toMatchObject({ outcome: 'saved', card: { status: 'Waiting For', blocker: { type: 'Actor' } } })
 })
 
@@ -1753,15 +2000,67 @@ it('requires source text for a native Jira blocker condition', async () => {
   const read = await call('get_work', { card_id })
   expect(read.card).not.toHaveProperty('blocker')
   expect(read.card.external_blocker_fields.unblocks_when).toBe('[Rich content in Jira]:thumbsup:')
-  const block = { card_id, operation_id: 'block', verb: 'Block' }
-  expect(await call('transition_work', block)).toMatchObject({
-    outcome: 'not-saved', message: expect.stringContaining('unblock condition'),
-  })
   issue.fields[config.fields.blockerCondition].content.push({
     type: 'paragraph', content: [{ type: 'text', text: 'A reviewer grants access.' }],
   })
-  expect(await call('transition_work', block)).toMatchObject({ outcome: 'saved', card: {
-    status: 'Waiting For', blocker: { unblocks_when: '[Rich content in Jira]:thumbsup:\nA reviewer grants access.' },
+  expect(await call('get_work', { card_id })).toMatchObject({ outcome: 'available', card: {
+    status: 'To Do', blocker: { unblocks_when: '[Rich content in Jira]:thumbsup:\nA reviewer grants access.' },
+  } })
+})
+
+it('requires typed Block arguments and confirms the Jira wait before and after the screenless move', async () => {
+  const f = await fixture()
+  const { client, call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Typed Block fixture', owner: 'Avery',
+  })
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'In Progress' }
+  const block = { card_id, operation_id: 'block', verb: 'Block' }
+  const writes = () => f.requests.filter(request => request.method !== 'GET' && request.path.startsWith('issue/60001'))
+  for (const invalid of [{}, { blocker: typedWait.blocker }, { ...typedWait, next_check_in: '2026-02-30' }]) {
+    expect(await client.callTool({ name: 'transition_work', arguments: { ...block, ...invalid } })).toMatchObject({ isError: true })
+  }
+  expect(writes()).toHaveLength(0)
+  f.controls.beforeWrite = 'PUT issue/60001'
+  const input = { ...block, ...typedWait }
+  expect(await call('transition_work', input)).toMatchObject({ outcome: 'partially-saved', code: 'unconfirmed' })
+  expect(writes().map(request => request.path)).toEqual(['issue/60001'])
+  expect(await call('transition_work', input)).toMatchObject({ outcome: 'partially-saved', code: 'invalid-work' })
+  const fresh = { ...input, operation_id: 'fresh-block' }
+  f.controls.loseEdit = true
+  expect(await call('transition_work', fresh)).toMatchObject({ outcome: 'saved', card: { status: 'Waiting For' } })
+  expect(writes().map(request => request.path)).toEqual(['issue/60001', 'issue/60001', 'issue/60001/transitions'])
+  expect(await call('get_work', { card_id, details: false })).toMatchObject({ outcome: 'available', card: {
+    status: 'Waiting For', blocker: typedWait.blocker, due_date: typedWait.next_check_in,
+  } })
+  expect(await call('transition_work', fresh)).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+  expect(writes()).toHaveLength(3)
+})
+
+it.each(['unchanged', 'blocker', 'date'])('reconciles a staged Block retry with Jira fields %s', async change => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Staging retry fixture', owner: 'Avery',
+  })
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'In Progress' }
+  const input = { card_id, operation_id: 'block', verb: 'Block', ...typedWait }
+  f.controls.loseStagingRead = true
+  expect(await call('transition_work', input)).toMatchObject({ outcome: 'partially-saved', code: 'unconfirmed' })
+  const target = change === 'blocker' ? 'team:other' : typedWait.blocker.target
+  const date = change === 'date' ? '2026-12-02' : typedWait.next_check_in
+  issue.fields[config.fields.blockerTarget] = target
+  issue.fields.duedate = date
+  expect(await call('transition_work', input)).toMatchObject(change === 'unchanged'
+    ? { outcome: 'saved' }
+    : { outcome: 'partially-saved', code: 'invalid-work' })
+  const writes = f.requests.filter(request => request.method !== 'GET' && request.path.startsWith('issue/60001'))
+  expect(writes.map(request => request.path)).toEqual(change === 'unchanged'
+    ? ['issue/60001', 'issue/60001/transitions'] : ['issue/60001'])
+  expect(await call('get_work', { card_id, details: false })).toMatchObject({ card: {
+    status: change === 'unchanged' ? 'Waiting For' : 'In Progress', blocker: { ...typedWait.blocker, target }, due_date: date,
   } })
 })
 
@@ -1789,13 +2088,14 @@ it('scopes transition revisions and disposition to their supported paths', async
   const { client, call } = await f.connect()
   const { card: { id: card_id } } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket' })
   const schema = (await client.listTools()).tools.find(tool => tool.name === 'transition_work')!.inputSchema
-  const validate = new Ajv({ strict: false }).compile(schema)
+  const validate = addFormats(new Ajv({ strict: false })).compile(schema)
   const revisions = { required_revision: 'rev-a', live_revision: 'rev-a' }
   for (const verb of jiraVerbs) {
     expect(validate({ card_id, operation_id: 'check', verb, ...revisions })).toBe(verb === 'Deployed')
     const destinations = jiraTransitions[verb][1]
     const args = { card_id, operation_id: 'check', verb }
-    expect(validate(args)).toBe(destinations.length === 1)
+    expect(validate(args)).toBe(destinations.length === 1 && verb !== 'Block')
+    if (verb === 'Block') expect(validate({ ...args, ...typedWait })).toBe(true)
     for (const to of destinations) expect(validate({ ...args, to })).toBe(destinations.length > 1)
   }
   const before = f.requests.length

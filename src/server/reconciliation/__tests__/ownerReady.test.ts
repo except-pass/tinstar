@@ -228,6 +228,9 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
           changes: coordinatorHistory.slice(after?.total ?? 0),
         }),
         findAssignableAccount: async () => 'fixture-will',
+        offersTransition: async () => true,
+        writeDispatched: async () => true,
+        hasTransitionAudit: async () => false,
         tswReviewNote: async () => ({
           current: edit.mock.calls.length ? original : undefined,
           heads: new Set(edit.mock.calls.length ? [original] : []),

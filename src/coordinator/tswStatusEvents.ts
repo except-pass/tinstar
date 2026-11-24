@@ -7,6 +7,7 @@ import type { SourceSnapshot } from '../server/reconciliation'
 import { dispatchForTask } from '../server/reconciliation/dispatchProvenance'
 import { workerReviewPublication } from '../server/reconciliation/ownerRequestEvidence'
 import { ageObservation } from '../server/reconciliation/observation'
+import { jiraWaitSchema, type JiraWait } from '../server/reconciliation/jiraWorkRules'
 import { tswEvidence } from '../server/reconciliation/tswSnapshot'
 import { isPublishedReviewDetail } from '../server/reconciliation/workerLinkReport'
 
@@ -18,6 +19,8 @@ type EventDetails =
   | { target: 'In Progress' }
   | { target: 'Ready for Review'; pull: string; head: string | null }
   | { target: 'Done' }
+  | { target: 'Decision'; question: string }
+  | ({ target: 'Waiting For' } & JiraWait)
 
 export type StatusEvent = EventDetails & {
   key: string
@@ -34,6 +37,14 @@ export type StatusSourceFinding = { home: string; key?: string; task?: string; r
 const eventId = (parts: unknown[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 const pullUrl = (value: unknown) => typeof value === 'string' && parsePullUrl(value) ? value : null
 const eventVerb = (value: string | null) => value?.trim().match(/^([a-z-]+)(?=\s|:|$)/i)?.[1]?.toLowerCase()
+export const isSideState = (target: StatusEvent['target'] | undefined) => target === 'Decision' || target === 'Waiting For'
+
+function declaredWait(summary: string) {
+  try {
+    const parsed = jiraWaitSchema.safeParse(JSON.parse(summary.slice('wait '.length)))
+    return parsed.success ? parsed.data : undefined
+  } catch { return undefined }
+}
 
 // TSW Owner dropdown values follow the owner/main convention agreed on 2026-11-23.
 const mateAuthority = new Map([
@@ -45,7 +56,7 @@ function authority(label: string) {
   return mateAuthority.get(label) ?? { actor: `Firstmate ${label}`, owner: `Firstmate ${label}` }
 }
 
-function classify(id: string, task: Task | undefined, row: Backlog | undefined, now: number) {
+function* classify(id: string, task: Task | undefined, row: Backlog | undefined, now: number) {
   function event(details: EventDetails, witness: unknown, evidence: string) {
     return { details, witness, evidence }
   }
@@ -63,33 +74,52 @@ function classify(id: string, task: Task | undefined, row: Backlog | undefined, 
   const mergedEvent = verb === 'merged' || verb === 'landed' || verb === 'done' &&
     /^(?:merged\b|landed\b|PR https:\/\/github\.com\/\S+\/pull\/\d+ merged\b)/i.test(summary ?? '')
   if (terminal || mergedState || mergedEvent) {
-    if (!pull) return 'completion-without-pull-evidence'
-    return event({ target: 'Done' }, [pull, terminal?.completedOn ?? null], `First Mate reported delivery for ${id}. ${pull}`)
+    yield pull ? event({ target: 'Done' }, [pull, terminal?.completedOn ?? null], `First Mate reported delivery for ${id}. ${pull}`)
+      : 'completion-without-pull-evidence'
+    return
+  }
+
+  let sideRequest = false
+  for (const request of task?.queue?.decisions ?? []) {
+    if (request.verb !== 'needs-decision' && !request.summary?.trimStart().startsWith('wait ')) continue
+    sideRequest = true
+    const key = request.key?.trim()
+    const summary = request.summary?.trim()
+    if (!key || !summary) {
+      yield 'side-state-request-missing-key-or-summary'
+    } else if (request.verb === 'needs-decision') {
+      yield event({ target: 'Decision', question: summary.replace(/\r\n?/g, '\n') }, key, `First Mate requested a decision for ${id} (${key}).`)
+    } else {
+      const wait = declaredWait(summary)
+      yield wait ? event({ target: 'Waiting For', ...wait }, key, `First Mate declared an external wait for ${id} (${key}).`)
+        : 'external-wait-invalid'
+    }
   }
 
   if (isPublishedReviewDetail(detail) && attempt?.yolo !== 'on') {
-    if (!pull) return 'review-without-pull-evidence'
-    if (attempt?.yolo === 'off') {
+    if (!pull) yield 'review-without-pull-evidence'
+    else if (attempt?.yolo === 'off') {
       const publication = task && workerReviewPublication(task)
       const head = publication && publication.id === releasePull(pull)?.id ? publication.head : null
-      return event({ target: 'Ready for Review', pull, head }, pull, `First Mate reported checks green. ${pull}`)
-    }
-    return 'merge-authority-unavailable'
+      yield event({ target: 'Ready for Review', pull, head }, pull, `First Mate reported checks green. ${pull}`)
+    } else yield 'merge-authority-unavailable'
+    return
   }
   if (task?.identity.spawn_gen && task.endpoint.exists !== false && task.endpoint.agent_alive !== 'dead' &&
     task.endpoint.status !== 'dead') {
     const liveness = retainedExecutionLiveness(task, now)
     if (codexTurn(task, now) === true || state && (liveness === 'running' ||
       liveness === 'liveness-not-observed' && state.state === 'working')) {
-      return event({ target: 'In Progress' }, 'spawned', `First Mate worker ${id} is active (attempt ${task.identity.spawn_gen}).`)
+      yield event({ target: 'In Progress' }, 'spawned', `First Mate worker ${id} is active (attempt ${task.identity.spawn_gen}).`)
+      return
     }
   }
-  return 'no-actionable-event'
+  if (!sideRequest) yield 'no-actionable-event'
 }
 
 export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
   const findings: StatusSourceFinding[] = []
-  const byKey = new Map<string, StatusEvent[]>()
+  const byKey = new Map<string, StatusEvent[][]>()
   for (const { source, observation: read } of fleet) {
     const home = source.home
     const observation = ageObservation(read, now)
@@ -121,43 +151,41 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
         findings.push({ home, key, task: id, reason: 'snapshot-label-missing' })
         continue
       }
-      const signal = classify(id, task, row, now)
-      if (typeof signal === 'string') {
-        findings.push({ home, key, task: id, reason: signal })
-        continue
+      const events: StatusEvent[] = []
+      for (const signal of classify(id, task, row, now)) {
+        if (typeof signal === 'string') {
+          findings.push({ home, key, task: id, reason: signal })
+          continue
+        }
+        const side = isSideState(signal.details.target)
+        const stable = signal.details.target === 'Done' || side
+        const subjectId = stable ? row?.id ?? (side ? task?.backlog.id : undefined) ?? id : id
+        const generation = stable ? null : task?.identity.spawn_gen ?? null
+        events.push({
+          ...signal.details, ...authority(label), key, home, task: id, expiresAt: observation.expiresAt,
+          id: eventId([home, subjectId, generation, signal.details.target, signal.witness]),
+          evidence: signal.evidence,
+        })
       }
-      const events = byKey.get(key) ?? []
-      const completed = signal.details.target === 'Done'
-      const subjectId = completed ? row?.id ?? id : id
-      const generation = completed ? null : task?.identity.spawn_gen ?? null
-      events.push({
-        ...signal.details, ...authority(label), key, home, task: id, expiresAt: observation.expiresAt,
-        id: eventId([home, subjectId, generation, signal.details.target, signal.witness]),
-        evidence: signal.evidence,
-      })
-      byKey.set(key, events)
+      if (events.length) byKey.set(key, [...byKey.get(key) ?? [], events])
     }
   }
-  const events: StatusEvent[] = []
-  for (const [key, candidates] of byKey) {
-    const [first, ...others] = candidates
-    const head = first?.target === 'Ready for Review' ? first.head : null
-    const pull = first?.target === 'Ready for Review' && head ? releasePull(first.pull) : null
-    const equivalent = pull && others.every(candidate =>
-      candidate.target === 'Ready for Review' && candidate.head === head && releasePull(candidate.pull)?.id === pull.id)
-      ? pull : null
-    const conflicting = findings.some(finding => finding.key === key && finding.reason === 'conflicting-card-declarations')
-    if (first?.target === 'Ready for Review' && equivalent && !conflicting) {
-      const ordered = [...candidates].sort((a, b) => a.id.localeCompare(b.id))
-      const actors = [...new Set(ordered.map(candidate => candidate.actor))].sort()
-      const expiresAt = ordered.flatMap(candidate => candidate.expiresAt ?? []).sort()[0] ?? null
-      events.push({ ...first, owner: ordered[0]!.owner, pull: equivalent.url,
-        actor: actors.join(', '), expiresAt, id: eventId([key, equivalent.url, head]) })
-    } else if (first && !others.length && !conflicting) {
-      events.push(first)
-    } else {
-      for (const candidate of candidates) findings.push({ key, home: candidate.home, task: candidate.task, reason: 'competing-task-events' })
-    }
+  return { events: new Map([...byKey].sort(([a], [b]) => a.localeCompare(b, 'en', { numeric: true }))), findings }
+}
+
+export function arbitrateTswEvents(key: string, subjects: StatusEvent[][], conflicting: boolean) {
+  const candidates = subjects.flatMap(subject => subject.slice(0, 1))
+  const [first, ...others] = candidates
+  if (!first || conflicting) return { events: [], competing: candidates }
+  const head = first.target === 'Ready for Review' ? first.head : null
+  const pull = first.target === 'Ready for Review' && head ? releasePull(first.pull) : null
+  if (first.target === 'Ready for Review' && pull && others.every(candidate =>
+    candidate.target === 'Ready for Review' && candidate.head === head && releasePull(candidate.pull)?.id === pull.id)) {
+    const ordered = [...candidates].sort((a, b) => a.id.localeCompare(b.id))
+    const actors = [...new Set(ordered.map(candidate => candidate.actor))].sort()
+    const expiresAt = ordered.flatMap(candidate => candidate.expiresAt ?? []).sort()[0] ?? null
+    return { events: [{ ...first, owner: ordered[0]!.owner, pull: pull.url,
+      actor: actors.join(', '), expiresAt, id: eventId([key, pull.url, head]) }], competing: [] }
   }
-  return { events: events.sort((a, b) => a.key.localeCompare(b.key, 'en', { numeric: true })), findings }
+  return others.length ? { events: [], competing: candidates } : { events: subjects.find(subject => subject.length)!, competing: [] }
 }
