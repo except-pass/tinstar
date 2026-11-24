@@ -52,7 +52,10 @@ function githubResponse(body, { etag = '"sample"', remaining = '4000', status = 
 
 const openHome = { id: 'example-live', path: '/example/live', mode: 'live' }
 const fixtureHome = { id: 'example-fixture', path: '/example/fixture', mode: 'fixture' }
-const prCheck = (conclusion = null) => ({ id: 100, head_sha: revision, conclusion, status: conclusion ? 'completed' : 'in_progress' })
+const prCheck = (conclusion = null) => ({
+  id: 100, url: 'https://api.github.com/repos/Example/Project/check-runs/100',
+  head_sha: revision, conclusion, status: conclusion ? 'completed' : 'in_progress',
+})
 
 test('GitHub reads only verified live links, coalesces exact task relationships, and replays immutable observations', async t => {
   const path = await journalPath(t)
@@ -86,6 +89,7 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   const observed = journal.events({ after: before, provider: 'github' })
   deepEqual(observed.map(event => event.event_type), ['pr.observed', 'pr.checks.observed'])
   equal(observed[0].change.after.merge_sha, null)
+  equal(observed[0].change.after.updated_at, undefined)
   deepEqual(observed[0].related, [
     { relation: 'linked-task', subject: { type: 'task', id: entityId('task', openHome.id, 'one') } },
     { relation: 'linked-task', subject: { type: 'task', id: entityId('task', secondary.id, 'two') } },
@@ -102,12 +106,17 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   checks = { total_count: 1, check_runs: [prCheck('success')] }
   equal(await observe(journal), true)
   const changes = journal.events({ after: observed.at(-1).sequence, provider: 'github' })
-  deepEqual(changes.map(event => event.event_type), ['pr.merged', 'pr.updated', 'pr.updated', 'pr.checks.changed'])
+  deepEqual(changes.map(event => event.event_type), ['pr.merged', 'pr.updated', 'pr.checks.changed'])
   deepEqual(changes[0].change, { field: 'state', before: 'open', after: 'merged' })
   equal(changes[1].change.after, nextRevision)
   deepEqual(changes[0].related, observed[0].related.slice(0, 1))
   equal(new Set(changes.map(event => event.observation.batch_id)).size, 1)
   ok(changes.every(event => event.occurred_at === null && event.observation.previous_snapshot))
+
+  const beforeTimestampOnly = journal.tail()
+  pr.updated_at = at(19)
+  equal(await observe(journal), true)
+  equal(journal.tail(), beforeTimestampOnly)
 
   journal.close()
   journal = new Journal(path)
@@ -117,7 +126,7 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   equal(journal.tail(), cursor)
   deepEqual(journal.inspect(changes[0].event_id), changes[0])
 
-  pr = pull() // Older upstream data must never undo the accepted merge.
+  pr = pull({ updated_at: at(18) }) // Older upstream data must never undo the accepted merge.
   equal(await resumed(journal), false)
   equal(journal.sources().find(source => source.type === 'pr').health, 'stale')
   equal(journal.tail(), cursor)
@@ -133,6 +142,26 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   deepEqual(stdout.trim().split('\n').map(line => JSON.parse(line)), changes)
   const text = await exec(cli, ['replay', '--db', path, '--type', 'pr', '--last', '1'])
   match(text.stdout, /\[replay\/live\].*in_progress=1 → success=1/)
+})
+
+test('GitHub rejects check runs from another repository even when the head matches', async t => {
+  const journal = new Journal(await journalPath(t))
+  t.after(() => journal.close())
+  journal.registerSources([githubSource])
+  taskLinks(journal, openHome, { one: [pullUrl] })
+
+  let second = 10
+  const observe = githubObserver({
+    repositories: ['example/project'],
+    now: () => new Date(at(second++)),
+    get: async path => githubResponse(path.includes('/pulls/') ? pull() : {
+      total_count: 1,
+      check_runs: [{ ...prCheck(), url: 'https://api.github.com/repos/other-example/project/check-runs/100' }],
+    }),
+  })
+  equal(await observe(journal), false)
+  deepEqual(journal.events({ provider: 'github' }), [])
+  equal(journal.sources().find(source => source.type === 'pr').last_snapshot_id, null)
 })
 
 test('GitHub rotates bounded pulls and stops at the shared reserve', async t => {

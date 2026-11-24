@@ -38,13 +38,15 @@ function prFields(body, repository, number) {
   }
 }
 
-function checkFields(body, head, headers) {
+function checkFields(body, repository, head, headers) {
   if (headers.has('link') && /rel="next"/.test(headers.get('link')) ||
       !Array.isArray(body?.check_runs) || body.total_count !== body.check_runs.length ||
       body.check_runs.length > 100) throw new GitHubReadError('head check inventory incomplete')
   const ids = new Set()
   return body.check_runs.map(check => {
-    if (!Number.isSafeInteger(check?.id) || check.id < 1 || ids.has(check.id) || check.head_sha !== head ||
+    if (typeof check?.url !== 'string' ||
+        check.url.toLowerCase() !== `https://api.github.com/repos/${repository}/check-runs/${check.id}` ||
+        !Number.isSafeInteger(check.id) || check.id < 1 || ids.has(check.id) || check.head_sha !== head ||
         !checkStates.has(check.status) || !(check.conclusion === null || conclusions.has(check.conclusion))) {
       throw new GitHubReadError('unverified head check response')
     }
@@ -54,8 +56,8 @@ function checkFields(body, head, headers) {
 }
 
 export function githubDiff(before, after) {
-  if (before && after.updated_at < before.updated_at) return null
-  const { checks, ...fields } = after
+  const { checks, updated_at, ...fields } = after
+  if (before && updated_at < before.updated_at) return null
   const changes = before ? Object.entries(fields)
     .filter(([field, value]) => before[field] !== value)
     .map(([field, value]) => ({
@@ -153,7 +155,7 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
         cache.pull = pull
         const head = pull.value.head_sha
         const checks = await sample(`repos/${repository}/commits/${head}/check-runs?filter=all&per_page=100`,
-          cache.head === head ? cache.checks : null, (body, headers) => checkFields(body, head, headers), signal)
+          cache.head === head ? cache.checks : null, (body, headers) => checkFields(body, repository, head, headers), signal)
         cache.head = head
         cache.checks = checks
         entries.push({

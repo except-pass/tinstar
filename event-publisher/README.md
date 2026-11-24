@@ -108,6 +108,8 @@ Long lists take multiple passes. A missing or incomplete check-run response
 leaves that PR's previous snapshot intact. Check statuses posted only through
 the legacy commit-status API or another repository are outside this coverage.
 The service checks every accepted sample's exact repository and PR number.
+PR identity is `owner/repo#number`, so a rename or transfer that changes the
+slug starts a new identity.
 
 ```sh
 events watch --source github --type pr
