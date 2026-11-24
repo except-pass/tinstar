@@ -29,7 +29,7 @@ const first = <T>(values: T[]) => {
   const unique = [...new Set(values)]
   return unique.length === 1 ? unique[0]! : null
 }
-const addSource = (items: OwnerRequestSource[], source: OwnerRequestSource) => {
+const addSource = <T extends OwnerRequestSource>(items: T[], source: T) => {
   if (!items.some(item => item.kind === source.kind && item.id === source.id)) items.push(source)
 }
 const cardPull = (card: Card) => first(['Link', 'Evidence'].flatMap(name => {
@@ -45,6 +45,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
   const warnings: string[] = []
   const groups = new Map<string | null, Bundle>()
   const merges = new Map<string, OwnerMergeAsk>()
+  const incompleteJiraPulls = new Set<string>()
   const decisions = new Map<string, { ask: OwnerDecisionAsk; repositories: string[] }>()
   const group = (repository: string | null) => {
     let value = groups.get(repository)
@@ -60,7 +61,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       merges.set(id, ask)
       group(pull?.repository ?? null).merges.push(ask)
     }
-    addSource(ask.sources, source)
+    addSource(ask.sources, { ...source, requestedHead: head })
     if (head && !ask.requestedHeads.includes(head)) ask.requestedHeads.push(head)
     if (head && fresh) ask.unverifiedRequest = false
     ask.fresh ||= fresh
@@ -109,9 +110,10 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       addDecision(id, jiraWorkReadback(decision.question), repository, fresh, { kind: 'jira', id, label: `${issue.key} ${decision.id}`, url: issue.url })
     }
     for (const merge of issue.merges) {
-      const id = JSON.stringify([issue.id, merge.comment])
+      if (issue.notesUnavailable) incompleteJiraPulls.add(merge.id)
+      const id = JSON.stringify([issue.id, merge.comment, merge.head])
       addMerge({ kind: 'jira', id, label: issue.key, url: `${issue.url}?focusedCommentId=${merge.comment}` },
-        merge.url, merge.head, fresh && !merge.unverified && !merge.conditional)
+        merge.url, merge.head, fresh && !issue.notesUnavailable && !merge.conditional)
     }
   }
 
@@ -199,6 +201,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       publication.url, publication.head, fresh)
   }
 
+  for (const [id, ask] of merges) if (incompleteJiraPulls.has(id)) ask.unverifiedRequest = true
   for (const { ask, repositories } of decisions.values()) group(first(repositories)).decisions.push(ask)
   return { observedAt: snapshot.generatedAt, repositories: [...groups.values()].sort((a, b) => (a.repository ?? '\uffff').localeCompare(b.repository ?? '\uffff')), warnings: [...new Set(warnings)] }
 }

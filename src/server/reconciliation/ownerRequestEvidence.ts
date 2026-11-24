@@ -3,9 +3,6 @@ import { releasePull } from '../../shared/pullIdentity'
 export const requestedHead = (text: unknown) =>
   typeof text === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(text) ? text.toLowerCase() : null
 
-const sha = '([a-f\\d]{40}|[a-f\\d]{64})'
-const explicitHead = new RegExp(`^(?:(?:at )?head(?: sha)?[:=]? |@ ?)?${sha}$`, 'i')
-
 /** A head belongs to an explicit request only when the publication binds it to
  * this exact URL. An unrelated SHA elsewhere in a note is never head evidence. */
 export function mergePublication(line: string, jira = false) {
@@ -14,10 +11,10 @@ export function mergePublication(line: string, jira = false) {
   const pull = match && releasePull(match[1]!)
   if (!pull) return null
   const suffix = (match[2] ?? '').replace(/\s*\(ready for review\)\s*$/i, '').trim()
-  const head = explicitHead.exec(suffix.replace(/^\((.*)\)$/, '$1'))?.[1]
+  const head = requestedHead(suffix.replace(/^(?:at )?head /i, ''))
   // Unfamiliar qualifiers may be conditions. Retain the exact target but hold
   // readiness until a current publication records an unconditional request.
-  return { ...pull, head: requestedHead(head), conditional: !!suffix && !head }
+  return { ...pull, head, conditional: !!suffix && !head }
 }
 
 /** An exact-head ready notice supplements a routed merge ask. A ready notice

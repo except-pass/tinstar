@@ -12,6 +12,7 @@ import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { DomainReadTools } from '../domainReads'
 import { ReconciliationMcp } from '../mcp'
 import { authorizePrReadGrant } from '../prReadGrant'
+import { mergePublication } from '../ownerRequestEvidence'
 import { QueuePullReader } from '../queuePulls'
 import { PullReader } from '../../pulls/reader'
 import { PullsApi } from '../../pulls/routes'
@@ -77,6 +78,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     'Tin Star request: {"id":"notion-choice","action":"Decision"}\nRequested from: Will\nQuestion: Choose a deployment window?',
   ]
   let boardHistoryUnavailable = false
+  let shiftCommentBoundary = false
   const sourceWrites: string[] = []
   const readSource = vi.fn<typeof fetch>(async (input, init) => {
     const path = new URL(String(input)).pathname
@@ -95,7 +97,9 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     if (resource === 'comment') {
       const rows = comments.get(id!) ?? []
       const startAt = Number(new URL(String(input)).searchParams.get('startAt'))
-      return Response.json({ startAt, total: rows.length, comments: rows.slice(startAt, startAt + 50) })
+      const page = id === '10' && shiftCommentBoundary && startAt > 0
+        ? [...rows.slice(1), { id: '9999', created: '2026-11-23T07:00:00Z', body: 'Review update' }] : rows
+      return Response.json({ startAt, total: page.length, comments: page.slice(startAt, startAt + 50) })
     }
     if (resource === 'changelog') {
       const values = id === '10' ? [{ created: '2026-11-23T09:00:00Z', items: [{ field: 'status', fromString: 'Ready for Review', toString: 'In Progress' }] }] : []
@@ -186,12 +190,13 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect([historical, restricted, releaseWait].map(url => merge(pending, url))).toEqual([undefined, undefined, undefined])
     expect((await call(mate, 'list_prs', { view: 'owner-ready', recheck: true })).outcome).toBe('unauthorized')
     expect((await browse(true, false)).status).toBe(403)
+    expect((await browse(false)).status).toBe(404)
     expect(inventory).not.toHaveBeenCalled()
 
     // Reconstruct Tin Star with a stale Main file and the very same native records.
     await snapshotFile(main!, [], new Date(Date.now() - 3600_000).toISOString())
     ;({ sources, pulls } = makeSources())
-    const restarted = (await (await browse(false)).json()).data as OwnerReadyRead
+    const restarted = (await call(granted, 'list_prs', { view: 'owner-ready' })).ownerReady as OwnerReadyRead
     expect(restarted.warnings).toContainEqual(expect.stringContaining('Fleet coverage for main is stale'))
     expect(merge(restarted, moving)?.live?.state).toBe('ready')
     expect(merge(restarted, legacy)).toMatchObject({ requestedHeads: [], unverifiedRequest: true, live: { head: original, state: 'unverified' } })
@@ -239,14 +244,30 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
 
     comments.get('10')!.unshift(...Array.from({ length: 250 }, (_, index) =>
       ({ id: String(index + 1000), body: 'Review update', created: '2026-11-23T14:00:00Z' })))
+    comments.get('10')!.unshift(entry(moving, changed, '27', '2026-11-23T15:00:00Z'))
     boardHistoryUnavailable = true
     const retained = (await (await browse()).json()).data as OwnerReadyRead
     expect(merge(retained, moving)).toMatchObject({ requestedHeads: [changed], unverifiedRequest: true,
       live: { state: 'unverified' }, sources: expect.arrayContaining([
-        expect.objectContaining({ url: expect.stringContaining('focusedCommentId=26') }),
+        expect.objectContaining({ url: expect.stringContaining('focusedCommentId=26'), requestedHead: changed }),
+        expect.objectContaining({ url: expect.stringContaining('focusedCommentId=27'), requestedHead: changed }),
       ]) })
     expect(bundle(retained, 'owner/repo')?.decisions).toContainEqual(
       expect.objectContaining({ question: 'Choose a deployment window?', fresh: false }))
+
+    comments.set('10', [entry(moving, changed, '27', '2026-11-23T15:00:00Z'),
+      ...comments.get('10')!.slice(1, 50), entry(moving, original, '28')])
+    const distinct = (await call(granted, 'list_prs', { view: 'owner-ready', recheck: true })).ownerReady as OwnerReadyRead
+    expect(bundle(distinct, 'owner/repo')?.merges.filter(ask => ask.url === moving)).toHaveLength(1)
+    expect(merge(distinct, moving)?.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: expect.stringContaining('focusedCommentId=27'), requestedHead: changed }),
+      expect.objectContaining({ url: expect.stringContaining('focusedCommentId=28'), requestedHead: original }),
+    ]))
+    shiftCommentBoundary = true
+    const shifted = (await (await browse()).json()).data as OwnerReadyRead
+    expect(merge(shifted, moving)).toMatchObject({ unverifiedRequest: true, sources: expect.arrayContaining([
+      expect.objectContaining({ url: expect.stringContaining('focusedCommentId=28'), requestedHead: original }),
+    ]) })
     expect(sourceWrites).toEqual([])
   } finally {
     await Promise.all(clients.map(client => client.close()))
@@ -271,4 +292,10 @@ it('bounds same-head checks, rotates coverage, and holds a head that moves after
   expect(read.mock.calls.map(([path]) => path).filter(path => path.includes(changed))).toEqual([])
   const next = await reader.get(urls, { force: true, expectedHeads })
   expect([...next.keys()]).toEqual(expect.arrayContaining(urls.slice(4)))
+})
+
+it('holds unrecognized head spellings as conditional merge requests', () => {
+  for (const suffix of [`@ ${original}`, `head sha= ${original}`, `(head ${original})`]) {
+    expect(mergePublication(`Will: merge ${moving} ${suffix}`, true)).toMatchObject({ head: null, conditional: true })
+  }
 })

@@ -32,7 +32,9 @@ describe('Decisions', () => {
     const source = { kind: 'jira' as const, id: 'jira-d1', label: 'TSW-10 D1', url: ticket }
     queue.ownerReady = { observedAt: '2026-11-24T01:00:00Z', warnings: [], repositories: [{ repository: 'owner/repo',
       decisions: [{ id: 'jira-d1', question: 'Choose launch wording', fresh: true, sources: [source] }],
-      merges: [{ url, requestedHeads: [requested], unverifiedRequest: false, fresh: true, sources: [],
+      merges: [{ url, requestedHeads: [requested], unverifiedRequest: false, fresh: true, sources: [{
+        ...source, id: 'jira-merge', label: 'TSW-10 merge note', url: ticket + '?focusedCommentId=21', requestedHead: requested,
+      }],
         live: { head: requested, state: 'ready', observedAt: '2026-11-24T01:00:00Z' } }] }] }
     const updated = structuredClone(queue.ownerReady)
     updated.recheckedAt = updated.observedAt = '2026-11-24T01:01:00Z'
@@ -48,7 +50,9 @@ describe('Decisions', () => {
     expect(screen.getByText('Ready at requested head')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Recheck current requests' }))
     expect(await screen.findByText('Requested head changed')).toBeVisible()
-    expect(screen.getByText(requested)).toBeVisible()
+    const witness = screen.getByRole('link', { name: 'TSW-10 merge note' })
+    expect(witness).toHaveAttribute('href', ticket + '?focusedCommentId=21')
+    expect(witness.closest('li')).toHaveTextContent(requested)
     expect(screen.getByText(current)).toBeVisible()
     expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/api/reconciliation/owner-ready?recheck=1'), expect.anything())
   })
