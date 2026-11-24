@@ -37,9 +37,10 @@ export class PullsApi {
       return this.prepareMerge(input, actor)
     })
   }
-  readiness(urls: string[]) { return this.reader.readinessFor(urls) }
-  private async scope() {
-    const scene = await this.sources.scene(), warnings: string[] = []
+  readiness(...args: Parameters<PullReader['readinessFor']>) { return this.reader.readinessFor(...args) }
+  private async scope(scene?: import('../../shared/reconciliationPresentation').FloorScene) {
+    scene ??= await this.sources.scene()
+    const warnings: string[] = []
     let events: Awaited<ReturnType<AssociationStore['read']>> = [], auditAvailable = true
     try { events = await this.store.read() } catch { auditAvailable = false; warnings.push('Shared association audit unavailable. Card linkage is unknown.') }
     const associations = releaseAssociations(scene, events)
@@ -52,10 +53,11 @@ export class PullsApi {
     if (!repositories.length) warnings.push('No repositories selected. Add prOperations.repositories to Tin Star config.json or register an explicit PR in the shared sources.')
     return { scene, warnings, associations, auditAvailable, repositories, associated }
   }
-  async read() {
-    const { warnings, associations, auditAvailable, repositories, associated } = await this.scope()
+  async read(force = false, requestedRepositories?: ReadonlySet<string>, scene?: import('../../shared/reconciliationPresentation').FloorScene) {
+    const { warnings, associations, auditAvailable, repositories, associated } = await this.scope(scene)
     const identity = await this.reader.identity()
-    const reads = await this.reader.inventory(repositories, { ...identity, associated })
+    const reads = await this.reader.inventory(requestedRepositories ? repositories.filter(repository => requestedRepositories.has(repository)) : repositories,
+      { ...identity, associated }, force)
     const links = new Map(associations.pulls.map(pull => [pull.id, pull.links]))
     return { associations: auditAvailable ? associations.pulls.filter(pull => activeReleaseLinks(pull).length > 0).map(({ id, repository, number, url, links }) => ({ id, repository, number, url, links })) : [], account: identity.account, authenticatedActor: identity.authenticatedActor, credentialProfile: identity.credentialProfile, pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
       repositories: reads.map(read => read.coverage), warnings: [...warnings, ...(identity.authenticatedActor ? [`Authenticated as ${identity.authenticatedActor}; review author ${identity.account}. Repositories outside its verified installations are unavailable; no ambient-login fallback.`] : []), ...associations.warnings], associationsComplete: auditAvailable && associations.associationsComplete }

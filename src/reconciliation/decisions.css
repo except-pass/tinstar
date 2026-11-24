@@ -13,3 +13,13 @@
 .decisions .detail-heading{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.decisions .lede{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.decisions .ask-context-composer{margin:0;padding:0;border:0;font:inherit}
 
 @media(max-width:760px){.decisions-summary .nav-foot{padding-bottom:58px}}
+
+.owner-ready{padding:12px 14px;border-bottom:1px solid var(--line2);font-size:12px}
+.owner-ready summary{cursor:pointer;font-weight:650}
+.owner-ready button{margin-top:8px}
+.owner-ready h3{font-size:13px;margin:12px 0 4px}
+.owner-ready ul{padding-inline-start:18px}
+.owner-ready li,.owner-ready code{overflow-wrap:anywhere}
+.owner-ready section>ul>li{margin-bottom:8px}
+.owner-ready .owner-ready-sources{color:var(--muted)}
+.owner-ready a{color:var(--aqua)}

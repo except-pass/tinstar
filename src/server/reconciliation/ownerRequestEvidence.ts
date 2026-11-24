@@ -1,0 +1,41 @@
+import { releasePull } from '../../shared/pullIdentity'
+
+export const requestedHead = (text: unknown) =>
+  typeof text === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(text) ? text.toLowerCase() : null
+
+const sha = '([a-f\\d]{40}|[a-f\\d]{64})'
+const explicitHead = new RegExp(`^(?:(?:at )?head(?: sha)?[:=]? |@ ?)?${sha}$`, 'i')
+
+/** A head belongs to an explicit request only when the publication binds it to
+ * this exact URL. An unrelated SHA elsewhere in a note is never head evidence. */
+export function mergePublication(line: string, jira = false) {
+  const match = (jira ? /^Will: merge (https:\/\/\S+?)(?:\s+(.*))?$/i :
+    /^(?:Will: |Please )?merge (https:\/\/\S+?)(?:\s+(.*))?$/i).exec(line.trim())
+  const pull = match && releasePull(match[1]!)
+  if (!pull) return null
+  const suffix = (match[2] ?? '').replace(/\s*\(ready for review\)\s*$/i, '').trim()
+  const head = explicitHead.exec(suffix.replace(/^\((.*)\)$/, '$1'))?.[1]
+  // Unfamiliar qualifiers may be conditions. Retain the exact target but hold
+  // readiness until a current publication records an unconditional request.
+  return { ...pull, head: requestedHead(head), conditional: !!suffix && !head }
+}
+
+/** An exact-head ready notice supplements a routed merge ask. A ready notice
+ * alone does not route work or change which head the owner was asked to merge. */
+export function readyHeadPublication(event: string) {
+  const line = event.replace(/^(?:pr-ready|done):\s*/i, '')
+  const notice = /^PR (https:\/\/\S+) checks green(?:\s+(.*))?$/i.exec(line)
+  return mergePublication(notice ? `Will: merge ${notice[1]} ${notice[2] ?? ''}` : line, true)
+}
+
+export function declaredRepository(value: unknown) {
+  return typeof value === 'string' && /^[\w.-]+\/[\w.-]+$/.test(value.trim()) ? value.trim().toLowerCase() : null
+}
+
+export function repositoryPublication(text: string) {
+  const repositories = new Set(text.split(/\r?\n/).flatMap(line => {
+    const repository = declaredRepository(/^Repository: (.+)$/i.exec(line)?.[1])
+    return repository ? [repository] : []
+  }))
+  return repositories.size === 1 ? [...repositories][0]! : null
+}
