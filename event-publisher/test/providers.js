@@ -370,18 +370,21 @@ test('deployment parser projects synthetic audit receipts and a failure marker',
   const target = 'fixture-floor'
   const events = parseFloorAudit(audit + audit, { target, failureMarker })
   deepEqual(events.map(event => event.event_type), [
-    'deployment.started', 'deployment.completed', 'deployment.started',
-    'deployment.failed', 'deployment.block_bypassed', 'deployment.block_cleared',
+    'deployment.started', 'deployment.smoke_passed', 'deployment.completed',
+    'deployment.smoke_passed', 'deployment.started', 'deployment.failed',
+    'deployment.block_bypassed', 'deployment.block_clear_requested',
   ])
-  equal(events[0].id, events[1].id)
-  equal(events[0].fields.previous_revision, nextRevision)
-  equal(events[1].fields.revision, revision)
-  equal(events[1].fields.native_deployment_id, `floor:${revision}`)
-  equal(events[3].fields.revision, 'c'.repeat(40))
-  equal(events[3].fields.native_deployment_id, null)
-  equal(events[3].occurredAt, '2026-01-01T00:03:00.000Z')
-  equal(events[5].fields.revision, null)
-  equal(events[5].fields.checkout_revision, revision)
+  equal(events[0].id, events[2].id)
+  equal(events[0].fields.previous_revision, undefined)
+  equal(events[0].fields.revision, revision)
+  equal(events[2].fields.native_deployment_id, `floor:${revision}`)
+  equal(events[5].fields.revision, 'c'.repeat(40))
+  equal(events[5].fields.native_deployment_id, null)
+  equal(events[5].occurredAt, '2026-01-01T00:03:00.000Z')
+  equal(events[7].fields.revision, null)
+  equal(events[7].fields.checkout_revision, revision)
+  const smokeOnly = audit.split('\n')[1]
+  deepEqual(parseFloorAudit(smokeOnly, { target }).map(event => event.event_type), ['deployment.smoke_passed'])
   ok(events.every(event => event.evidence.source_reference.target === target))
   ok(!/synthetic-user|synthetic operator reason|synthetic receipt|github[.]com/.test(JSON.stringify(events)))
   deepEqual(parseFloorAudit('bad JSON\n{"action":"floor-smoke","passed":true}', { target }), [])

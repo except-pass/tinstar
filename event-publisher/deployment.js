@@ -24,16 +24,20 @@ function auditTime(value) {
 
 export function parseFloorAudit(jsonl, { target, failureMarker = '' }) {
   const observations = new Map()
+  let pendingDeployment
   function add(time, lifecycle, action, revision, nativeId, extra = {}) {
     const occurredAt = auditTime(time)
     if (!occurredAt) return
     const id = `deployment:${encodeURIComponent(target)}:${nativeId ?? revision ?? 'block'}`
     const event_type = `deployment.${lifecycle}`
-    observations.set(JSON.stringify([id, event_type, occurredAt]), {
+    const key = JSON.stringify([id, event_type, occurredAt])
+    if (observations.has(key)) return
+    observations.set(key, {
       id, event_type, occurredAt,
       fields: { environment: 'floor', revision, lifecycle, native_deployment_id: nativeId, ...extra },
       evidence: { source_reference: { target, action }, confidence_basis: 'guarded floor deployment record' },
     })
+    return occurredAt
   }
 
   for (const line of jsonl.split('\n')) {
@@ -43,19 +47,22 @@ export function parseFloorAudit(jsonl, { target, failureMarker = '' }) {
     } catch {
       continue
     }
-    const { action, time, newSha, oldSha, head, gate } = row ?? {}
+    const { action, time, newSha, head, gate } = row ?? {}
     if (action === 'floor-deployment' && typeof newSha === 'string' &&
         shaPattern.test(newSha) && row.id === `floor:${newSha}`) {
-      add(time, 'started', action, newSha, row.id, {
-        previous_revision: typeof oldSha === 'string' && shaPattern.test(oldSha) ? oldSha : null,
-      })
+      const startedAt = add(time, 'started', action, newSha, row.id)
+      if (startedAt) pendingDeployment = { id: row.id, startedAt }
     } else if (action === 'floor-smoke' && row.passed === true && typeof newSha === 'string' &&
         shaPattern.test(newSha) && row.deploymentId === `floor:${newSha}`) {
-      add(time, 'completed', action, newSha, row.deploymentId)
+      const passedAt = add(time, 'smoke_passed', action, newSha, row.deploymentId)
+      if (passedAt && pendingDeployment?.id === row.deploymentId && passedAt >= pendingDeployment.startedAt) {
+        add(time, 'completed', action, newSha, row.deploymentId)
+        pendingDeployment = null
+      }
     } else if (gate === 'block' && action === 'override' && typeof head === 'string' && shaPattern.test(head)) {
       add(time, 'block_bypassed', action, head, null)
     } else if (gate === 'block' && action === 'clear-block') {
-      add(time, 'block_cleared', action, null, null, {
+      add(time, 'block_clear_requested', action, null, null, {
         checkout_revision: typeof head === 'string' && shaPattern.test(head) ? head : null,
       })
     }

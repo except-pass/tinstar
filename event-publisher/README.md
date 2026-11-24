@@ -167,8 +167,10 @@ the publisher has no read-only reader there. The audit path is
 
 Run from the repository root. The parser reads synthetic audit JSONL and the
 separate failure marker format. It emits starts from deployment receipts,
-completions from successful smoke receipts, failure from the marker, and
-audited block bypasses and clears. The current writers supply no explicit
+smoke-passed observations from successful smoke receipts, and completion when
+a deployment receipt is followed by its first matching passing smoke. It also
+emits failures from the marker and audited block bypasses and clear requests.
+The current writers supply no explicit
 rollback receipt. Every replayed event is labeled `fixture`.
 
 ```sh
