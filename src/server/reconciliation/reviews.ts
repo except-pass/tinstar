@@ -2,7 +2,6 @@ import { legacyReviewKey, isReviewStatus, reviewSubmissions, type ReviewView } f
 import type { SourceSnapshot } from './index'
 import { ageObservation } from './observation'
 
-/** Status is the sole admission rule. Owner/holds/PRs never create another row. */
 export function reviewView(source: SourceSnapshot['intentions'], notes = new Map<string, Array<{ text: string }>>(), now = Date.now()): ReviewView {
   const observation = ageObservation(source, now)
   const complete = observation.status === 'fresh' && observation.coverage === 'complete' && !!observation.data
@@ -12,7 +11,7 @@ export function reviewView(source: SourceSnapshot['intentions'], notes = new Map
   return { complete, observedAt: observation.observedAt,
     warning: complete ? null : 'Review coverage is incomplete or stale; an empty list does not establish that nothing needs review.',
     items: [...new Map((observation.data?.cards ?? []).map(card => [card.id, card])).values()]
-      .filter(card => !card.archived && !card.in_trash && isReviewStatus(card.properties.Status?.value))
+      .filter(card => card.source?.synthetic !== false && !card.archived && !card.in_trash && isReviewStatus(card.properties.Status?.value))
       .map(card => {
         const submission = reviewSubmissions(notes.get(card.id) ?? []).at(-1) ?? null
         return { id: `review:${card.id}`, cardId: card.id, submissionKey: submission?.submission_key ?? legacyReviewKey(card.id, card.last_edited_time), title: String(card.properties.Name?.value ?? card.id),

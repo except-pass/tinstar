@@ -578,7 +578,6 @@ export class ReconciliationSources {
     const scene = this.reconciler.project(snapshot)
     const reviewNotes = new Map<string, Array<{ text: string }>>()
     for (const item of queue.reviews.items.slice(0, 20)) {
-      if (nativeIds.has(item.cardId)) continue
       const context = contexts.get(item.cardId) ?? (mode === 'reconcile' ? await this.context.commentDetails(item.cardId) : this.context.cachedComments(item.cardId))
       if (context?.outcome === 'available') reviewNotes.set(item.cardId, context.blocks)
     }

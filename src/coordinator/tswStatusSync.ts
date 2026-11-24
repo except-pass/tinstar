@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import type { SourceSnapshot } from '../server/reconciliation'
 import type { JiraHistoryCursor, JiraTrackedChange, JiraWork, JiraWorkCard } from '../server/reconciliation/jiraWork'
 import { jiraTransitionDestination, JiraWorkInputError, type JiraEdit, type JiraTransition } from '../server/reconciliation/jiraWorkRules'
+import { tswReviewer } from '../server/reconciliation/tswSnapshot'
 import { acquireLock } from '../server/infra/lock'
 import { collectTswEvents, type StatusEvent } from './tswStatusEvents'
 
@@ -23,7 +24,6 @@ type Options = {
 const linearVerbs = ['Fast-track', 'Queue', 'Start', 'Submit for Review', 'Accept Final', 'Complete Directly'] as const
 const noteRepairLimit = 3
 const stepAttemptLimit = 3
-const reviewer = 'William Gathright'
 const isEdit = (step: Step): step is JiraEdit => 'kind' in step
 function attemptId({ input, retry, rejectedAttempts = 0 }: Pending) {
   const id = rejectedAttempts ? `${input.operation_id}-attempt-${rejectedAttempts + 1}` : input.operation_id
@@ -61,7 +61,7 @@ function plan(event: StatusEvent, card: JiraWorkCard): Step[] | string {
   // A review or completion PR also supplies evidence for an intermediate Start.
   if (!active && !review) move('Start')
   if (event.target === 'Ready for Review') {
-    edit('review', { assignee: reviewer, note: `Will: merge ${event.pull}` })
+    edit('review', { assignee: tswReviewer, note: `Will: merge ${event.pull}` })
     move('Submit for Review')
   }
   if (event.target === 'Done') move(review ? 'Accept Final' : 'Complete Directly')
@@ -218,14 +218,14 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           const expected = { ...cardState(card), updated_at: card.updated_at, id: card.id, key: card.key }
           const submitting = !isEdit(input) && input.verb === 'Submit for Review'
           const reviewerId = submitting && !alreadyChanged && event?.id === pending.eventId
-            ? await jira.findAssignableAccount(card.id, reviewer) : null
+            ? await jira.findAssignableAccount(card.id, tswReviewer) : null
           let reviewerBlocked = false
           const guard = (current: JiraWorkCard) => {
             if (alreadyChanged || !event || pending.eventId !== event.id || ['Done', 'Canceled'].includes(current.status) || event.expiresAt && Date.parse(event.expiresAt) <= now() ||
               !isDeepStrictEqual(expected, { ...cardState(current), updated_at: current.updated_at, id: current.id, key: current.key })) {
               throw new JiraWorkInputError('TSW source or Jira ticket changed before the planned write')
             }
-            if (submitting && (!reviewerId || current.assignee_id !== reviewerId || current.assignee !== reviewer)) {
+            if (submitting && (!reviewerId || current.assignee_id !== reviewerId || current.assignee !== tswReviewer)) {
               reviewerBlocked = true
               throw new JiraWorkInputError('TSW review requires the exact reviewer assignment')
             }
@@ -309,7 +309,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           !checkpoint.completed.includes(identify(step, event, card.status, checkpoint.statusVersion).operation_id))
         if (!steps.length) { await log('event-already-applied'); continue }
         if (event.target === 'Ready for Review') {
-          const reviewerId = await jira.findAssignableAccount(card.id, reviewer)
+          const reviewerId = await jira.findAssignableAccount(card.id, tswReviewer)
           if (!reviewerId || checkpoint.preserveAssignee && card.assignee_id !== reviewerId) {
             await log('reviewer-blocked')
             continue

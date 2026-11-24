@@ -11,6 +11,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { loadReconciliationConfig, type JiraWorkConfig } from '../config'
 import { ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
+import { buildQueue } from '../queue'
 import { jiraTransitions, jiraVerbs } from '../jiraWorkRules'
 import { JiraWork } from '../jiraWork'
 import { adfText } from '../jira'
@@ -372,14 +373,18 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   const queued = f.make('60102', 'TSW-102', '10639', { status: { name: 'Queued' }, [config.fields.owner]: { value: 'Clawson' } })
   const waiting = f.make('60103', 'TSW-103', '10639', { status: { name: 'Waiting For' }, [config.fields.owner]: { value: 'Clawson' },
     [config.fields.blockerType]: { value: 'Actor' }, [config.fields.blockerTarget]: 'Will', [config.fields.blockerCondition]: 'Approve the proposed change' })
-  for (const card of [issue, queued, waiting]) f.issues.set(card.id, card)
+  const review = f.make('60104', 'TSW-104', '10639', { status: { name: 'Ready for Review' }, [config.fields.owner]: { value: 'Clawson' },
+    assignee: { displayName: 'Will', accountId: 'other-account' } })
+  for (const card of [issue, queued, waiting, review]) f.issues.set(card.id, card)
   const pickup = await call('search_work', { owner: 'Clawson', statuses: ['Queued', 'In Progress'] })
   expect(pickup.records.map((record: any) => record.card.source.url)).toEqual([f.notionCard.url, `${config.url}/browse/${issue.key}`, `${config.url}/browse/${queued.key}`])
+  expect(buildQueue(await sources.snapshot(false, {}, false, true)).reviews.items).toEqual([])
   const authorized = await sources.queue(owner, undefined, false, 'read')
   const ownerUrls = [issue, waiting].map(card => `${config.url}/browse/${card.key}`).sort()
   const urls = (items: typeof authorized.items) => items.flatMap(item => item.evidence.map(link => link.url)).sort()
   expect(urls(authorized.items)).toEqual(ownerUrls)
   expect(urls(authorized.needsWill!)).toEqual(ownerUrls)
+  expect(authorized.reviews.items).toEqual([])
   const assigned = (queue: typeof authorized) => queue.needsWill?.find(item => item.evidence.some(link => link.url === `${config.url}/browse/${issue.key}`))
   expect(assigned(authorized)).toMatchObject({ title: 'Fixture', checkpoint: '2026-01-04', readiness: 'needs-readiness-verification', oneTouch: false,
     sources: [{ kind: 'jira', coverage: 'complete' }] })
