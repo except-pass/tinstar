@@ -86,7 +86,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const search = { directoryUnavailable: false, deniedRead: '', pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
+  const search = { directoryUnavailable: false, directoryStatus: 503, deniedRead: '', pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
@@ -139,7 +139,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
     }
     if (path === 'myself') return response({ accountId: 'fixture-service' })
     if (path === 'user/assignable/search') {
-      if (search.directoryUnavailable) return response({}, 503)
+      if (search.directoryUnavailable) return response({}, search.directoryStatus)
       const name = url.searchParams.get('query')!.toLowerCase()
       expect(issues.has(url.searchParams.get('issueId')!)).toBe(true)
       return response(assignees.filter(user => user.displayName.toLowerCase().includes(name)))
@@ -395,8 +395,16 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   expect((await call('search_work', { refresh: true })).total).toBe(5)
   expect(f.requests.some(request => request.path === 'user/assignable/search')).toBe(false)
   expect(pickup.records[1].card.source.properties).not.toHaveProperty('Assignee')
+  f.search.directoryStatus = 403
   const assigneeOnly = await sources.queue(owner, undefined, true, 'read')
   expect(assigneeOnly.needsWill?.flatMap(item => item.evidence.map(link => link.url))).toEqual([`${config.url}/browse/${waiting.key}`])
+  expect(await call('search_work', { owner: 'Clawson', statuses: ['Queued', 'In Progress'] })).toMatchObject({
+    total: 3, coverage: { intentions: { status: 'fresh', coverage: 'complete' } },
+  })
+  const requests = await call('search_work', { owner: 'Clawson', statuses: ['Waiting For'] })
+  expect(requests.records.find((record: any) => record.card.source.url.endsWith('/TSW-103'))).toMatchObject({
+    waiting_for_exception: null, waiting_for_issues: [], waiting_for_work: [],
+  })
   const fieldsBeforeLookup = { ...issue.fields }
   Object.assign(issue.fields, { status: { name: 'Waiting For' },
     [config.fields.blockerType]: { value: 'Actor' }, [config.fields.blockerTarget]: 'Will', [config.fields.blockerCondition]: 'Review the request' })

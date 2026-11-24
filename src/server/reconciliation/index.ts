@@ -320,8 +320,9 @@ export class ReconciliationSources {
     // Filtered tool reads must not close waits outside their requested scope.
     const filtered = Object.entries(scope).some(([key, value]) => key !== 'history' && value !== undefined)
     const waits = this.waitingOnMain ? await this.waitingOnMain(filtered ? await this.snapshot() : snapshot) : undefined
-    const work = waitReferences && await this.workReader.waitingForWork(scene.cards.map(card => waitState(card.source)),
-      snapshot.intentions.status === 'stale' ? [] : scene.cards.map(card => card.source), { refresh: force, cachedOnly: waitReferences === 'cached' })
+    const legacyCards = scene.cards.map(card => card.source).filter(card => card.source?.synthetic !== false)
+    const work = waitReferences && await this.workReader.waitingForWork(legacyCards.map(waitState),
+      snapshot.intentions.status === 'stale' ? [] : legacyCards, { refresh: force, cachedOnly: waitReferences === 'cached' })
     return { ...scene, searchIndex: this.search.get(scene), ...(work && { waitingForWork: [...work.values()] }), ...(waits && { waitingOnMain: waits }) }
 
   }
@@ -342,8 +343,8 @@ export class ReconciliationSources {
     const cardScoped = !!(args.owner || args.statuses || args.initiative || args.epic || args.checkpoint_before || args.patterns.length)
     const workers = scene.executions.filter(worker => keys.has(`execution:${worker.id}`) &&
       (!cardScoped || links.some(link => link.executionId === worker.id && filteredCards.has(link.cardId))))
-    const work = await this.workReader.waitingForWork(page.map(card => waitState(card.source)),
-      intentions.status === 'stale' ? [] : scene.cards.map(card => card.source), { refresh: args.refresh })
+    const work = await this.workReader.waitingForWork(page.map(card => card.source).filter(card => card.source?.synthetic !== false).map(waitState),
+      intentions.status === 'stale' ? [] : scene.cards.map(card => card.source).filter(card => card.source?.synthetic !== false), { refresh: args.refresh })
     if (accessRevision !== this.jiraWork?.accessRevision && scene.cards.some(card => card.source.source?.synthetic === false)) {
       throw new Error('Jira access changed while searching work')
     }
@@ -357,9 +358,9 @@ export class ReconciliationSources {
   private workRecord(scene: ReturnType<SceneReconciler['reconcile']>, card: SceneCard, work: ReadonlyMap<string, WorkBlocker>) {
     const { id } = card
     const links = [...scene.claims, ...scene.claimHistory].filter(claim => claim.cardId === id)
-    const state = waitState(card.source)
-    const waiting_for_issues = waitingForIssues({ ...state, coverage: coverageFromObservation(scene.coverage.intentions.status, scene.coverage.intentions.coverage) }, work)
-    const waiting_for_work = waitingForWorkIds(state).map(id => {
+    const state = card.source.source?.synthetic === false ? null : waitState(card.source)
+    const waiting_for_issues = state ? waitingForIssues({ ...state, coverage: coverageFromObservation(scene.coverage.intentions.status, scene.coverage.intentions.coverage) }, work) : []
+    const waiting_for_work = (state ? waitingForWorkIds(state) : []).map(id => {
       const target = work.get(id)
       return target ? { ...target, state: closedWorkBlocker(target) ? 'closed' : 'resolved', url: cardSourceUrl(id) } : { id, state: 'unknown' }
     })

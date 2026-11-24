@@ -71,7 +71,7 @@ export class JiraWork extends JiraClient {
     const revision = this.accessRevision
     try { return await super.request(path, method, body, signal) }
     catch (error) {
-      if ((method === 'GET' || path === 'search/jql') && accessDenied(error) && revision === this.accessRevision) this.discardObservations()
+      if ((method === 'GET' && path.startsWith('issue/') || path === 'search/jql') && accessDenied(error) && revision === this.accessRevision) this.discardObservations()
       throw error
     }
   }
@@ -160,8 +160,7 @@ export class JiraWork extends JiraClient {
             cards.push(verified)
             continue
           }
-        } catch (error) {
-          if (accessDenied(error)) throw error
+        } catch {
           coverage = 'partial'
         }
       }
