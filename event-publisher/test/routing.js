@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { sourcesFor } from '../firstmate.js'
 import { Journal } from '../journal.js'
 
 const exec = promisify(execFile)
@@ -96,6 +97,35 @@ test('controlled migration receipt is durable and retries preserve original prov
   const { stdout } = await run('replay', '--source', 'routing', '--type', 'mate', '--entity', fixture.mate_id, '--after', '0', '--json')
   deepEqual(stdout.trim().split('\n').map(JSON.parse), [receipt])
   match((await run('replay', '--source', 'routing', '--last', '1')).stdout, /controlled proof.*Cursor\/Grok → Hulk\/Codex\/OpenAI/)
+})
+
+test('controlled receipts cannot claim a journal with live collector sources', async t => {
+  const { directory } = await setup(t)
+  const input = join(directory, 'receipt.json')
+  const env = { ...process.env }
+  delete env.EVENTS_DB
+  const collectors = {
+    firstmate: sourcesFor({ id: 'live-home', path: directory, mode: 'live' }),
+    jira: [{ source_id: 'jira:fixture-project', provider: 'jira', type: 'ticket', home_path: null }],
+  }
+  for (const [provider, sources] of Object.entries(collectors)) {
+    const db = join(directory, `${provider}.sqlite`)
+    const journal = new Journal(db)
+    try {
+      journal.registerSources(sources, { reconcile: true })
+    } finally {
+      journal.close()
+    }
+    const run = (...args) => exec(process.execPath, [cli, '--db', db, ...args], { env })
+    await writeFile(input, JSON.stringify(fixture))
+    await rejects(run('record-migration', input), error => {
+      equal(error.code, 1)
+      match(error.stderr, /separate journal/)
+      return true
+    })
+    await writeFile(input, JSON.stringify({ ...fixture, controlled: false }))
+    equal(JSON.parse((await run('record-migration', input)).stdout).source.mode, 'live')
+  }
 })
 
 test('routing metrics keep observations within any visit to the exact route', async t => {

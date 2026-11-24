@@ -212,6 +212,14 @@ export class Journal {
   recordMigration(event) {
     this.db.exec('BEGIN IMMEDIATE')
     try {
+      if (event.source.mode === 'fixture' && this.db.prepare(`
+        SELECT 1 FROM sources
+        WHERE json_extract(description, '$.mode') = 'live'
+           OR json_extract(description, '$.provider') = 'jira'
+        LIMIT 1
+      `).get()) {
+        throw new JournalConfigurationError('use a separate journal for live and fixture baselines')
+      }
       this.register(migrationSource(event.source.mode))
       let receipt = this.inspect(event.event_id)
       if (!receipt) {
