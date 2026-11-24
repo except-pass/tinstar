@@ -86,7 +86,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const search = { directoryUnavailable: false, directoryStatus: 503, deniedRead: '', pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
+  const search = { directoryUnavailable: false, rateLimit: '', deniedRead: '', pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
@@ -139,7 +139,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
     }
     if (path === 'myself') return response({ accountId: 'fixture-service' })
     if (path === 'user/assignable/search') {
-      if (search.directoryUnavailable) return response({}, search.directoryStatus)
+      if (search.directoryUnavailable) return response({}, 503)
       const name = url.searchParams.get('query')!.toLowerCase()
       expect(issues.has(url.searchParams.get('issueId')!)).toBe(true)
       return response(assignees.filter(user => user.displayName.toLowerCase().includes(name)))
@@ -161,6 +161,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       return response({ issues: visible.slice(offset, end), isLast: end >= visible.length, ...(end < visible.length ? { nextPageToken: String(end) } : {}) })
     }
     if (path === 'issue' && method === 'POST') {
+      if (search.rateLimit === 'creation') return response({}, 429)
       if (body.fields[config.fields.owner] && !['Avery', 'Taylor', 'Clawson', 'Firstmate'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
       const id = String(nextIssue++)
       const issue = make(id, `${projectId === '10639' ? 'TSW' : 'WORK'}-${Number(id) - 60000}`, projectId, body.fields)
@@ -269,6 +270,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       return response({ transitions: offered })
     }
     if ((!part && method === 'PUT') || (part === 'transitions' && method === 'POST')) {
+      if (part && search.rateLimit === 'transition') return response({}, 429)
       if (part && controls.refuseTransition) return response({}, 409)
       if (!part && body.fields[config.fields.owner] && !['Avery', 'Taylor', 'Clawson', 'Firstmate', 'Firstmate fleet'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
       if (part) {
@@ -395,29 +397,12 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   expect((await call('search_work', { refresh: true })).total).toBe(5)
   expect(f.requests.some(request => request.path === 'user/assignable/search')).toBe(false)
   expect(pickup.records[1].card.source.properties).not.toHaveProperty('Assignee')
-  f.search.directoryStatus = 403
-  const assigneeOnly = await sources.queue(owner, undefined, true, 'read')
-  expect(assigneeOnly.needsWill?.flatMap(item => item.evidence.map(link => link.url))).toEqual([`${config.url}/browse/${waiting.key}`])
-  expect(await call('search_work', { owner: 'Clawson', statuses: ['Queued', 'In Progress'] })).toMatchObject({
-    total: 3, coverage: { intentions: { status: 'fresh', coverage: 'complete' } },
-  })
   const requests = await call('search_work', { owner: 'Clawson', statuses: ['Waiting For'] })
   expect(requests.records.find((record: any) => record.card.source.url.endsWith('/TSW-103'))).toMatchObject({
     waiting_for_exception: null, waiting_for_issues: [], waiting_for_work: [],
   })
-  const fieldsBeforeLookup = { ...issue.fields }
-  Object.assign(issue.fields, { status: { name: 'Waiting For' },
-    [config.fields.blockerType]: { value: 'Actor' }, [config.fields.blockerTarget]: 'Will', [config.fields.blockerCondition]: 'Review the request' })
-  const unavailableReviewer = await sources.queue(owner, undefined, true, 'read')
-  expect(unavailableReviewer.needsWill?.flatMap(item => item.evidence.map(link => link.url)).sort())
-    .toEqual([issue, waiting].map(card => `${config.url}/browse/${card.key}`).sort())
-  expect(unavailableReviewer.needsWill?.find(item => item.evidence.some(link => link.url.endsWith('/TSW-101'))))
-    .toMatchObject({ action: 'Review the request', oneTouch: false })
-  expect(unavailableReviewer.coverage.intentions.coverage).toBe('partial')
-  Object.assign(issue.fields, fieldsBeforeLookup)
-  f.search.directoryUnavailable = false
   const authorized = await sources.queue(owner, undefined, false, 'read')
-  const ownerUrls = [issue, waiting].map(card => `${config.url}/browse/${card.key}`).sort()
+  const ownerUrls = [waiting].map(card => `${config.url}/browse/${card.key}`).sort()
   const urls = (items: typeof authorized.items) => items.flatMap(item => item.evidence.map(link => link.url)).sort()
   expect(urls(authorized.items)).toEqual(ownerUrls)
   expect(urls(authorized.needsWill!)).toEqual(ownerUrls)
@@ -425,16 +410,7 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   expect(authorized.needsWill?.find(item => item.evidence.some(link => link.url.endsWith('/TSW-103')))).toMatchObject({
     action: 'Approve the proposed change', oneTouch: false,
   })
-  issue.fields.assignee = { displayName: f.assignees[0]!.displayName, accountId: 'other-account' }
-  const wrongAccount = await sources.queue(owner, undefined, true, 'read')
-  expect(urls(wrongAccount.needsWill!)).toEqual([`${config.url}/browse/${waiting.key}`])
-  delete issue.fields.assignee
-  expect((await sources.queue(owner, undefined, true, 'read')).coverage.intentions.coverage).toBe('partial')
-  issue.fields.assignee = f.assignees[0]
-  await sources.queue(owner, undefined, true, 'read')
-  const assigned = (queue: typeof authorized) => queue.needsWill?.find(item => item.evidence.some(link => link.url === `${config.url}/browse/${issue.key}`))
-  expect(assigned(authorized)).toMatchObject({ title: 'Fixture', checkpoint: '2026-01-04', readiness: 'needs-readiness-verification', oneTouch: false,
-    sources: [{ kind: 'jira', coverage: 'complete' }] })
+  expect(f.requests.some(request => request.path === 'user/assignable/search')).toBe(false)
   expect(authorized.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete', sources: [{ source: 'notion' }, { source: 'jira', coverage: 'complete' }] })
   f.search.directoryUnavailable = true
   const directoryReads = f.requests.filter(request => request.path === 'user/assignable/search').length
@@ -446,7 +422,7 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   const partial = await sources.queue(owner, undefined, false, 'read')
   expect(partial.coverage.intentions).toMatchObject({ status: 'partial', coverage: 'partial' })
   expect(partial.reviews).toMatchObject({ complete: true, warning: null })
-  expect(assigned(partial)).toMatchObject({ readiness: 'needs-readiness-verification', sources: [{ status: 'stale' }] })
+  expect(partial.needsWill?.[0]).toMatchObject({ readiness: 'needs-readiness-verification', sources: [{ status: 'stale' }] })
   f.controls.rejectSearch = false
   f.search.pageSize = 1
   f.search.failFrom = 1
@@ -513,7 +489,7 @@ it('queues one Jira admin-merge handoff and lets Clawson pick up, comment and re
   expect(await call('update_work', { ...work, operation_id: 'requester-fixture', kind: 'jira_edit', owner: 'Taylor' })).toMatchObject({ outcome: 'saved', card: { owner: 'Taylor' } })
   const { sources: restarted } = await f.connect()
   expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: card.id } })
-  expect(prepare).toHaveBeenCalledTimes(1)
+  expect(prepare).toHaveBeenCalledTimes(2)
   expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue')).toHaveLength(1)
 })
 
@@ -569,10 +545,31 @@ it.each(['creation', 'transition'])('recovers an admin-merge handoff after losin
   prepare.mockRejectedValue(new Error('Head no longer available'))
   const { sources: restarted } = await f.connect()
   expect(await restarted.workflow.createClawsonMerge({ ...mergeSelection, targets: [mergeSelection.targets[0]!] }, mergeActor, prepare)).toMatchObject({ code: 'operation-conflict' })
-  expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'saved', card: { status: 'Queued', owner: 'Clawson' } })
-  expect(prepare).toHaveBeenCalledTimes(2)
+  if (phase === 'creation') {
+    expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ code: 'queue-unconfirmed' })
+    expect(f.issues.get('60001')?.fields.status.name).toBe('Backlog')
+    prepare.mockImplementation(mergePlan)
+  } else {
+    const issue = f.issues.get('60001')!
+    issue.fields.status = { name: 'In Progress' }
+    issue.fields[config.fields.owner] = { value: 'Firstmate' }
+  }
+  expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({
+    outcome: 'saved', card: phase === 'creation' ? { status: 'Queued', owner: 'Clawson' } : { status: 'In Progress', owner: 'Firstmate' },
+  })
   expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue')).toHaveLength(1)
   expect(f.requests.filter(request => request.method === 'POST' && request.path.endsWith('/transitions'))).toHaveLength(1)
+})
+
+it.each(['creation', 'transition'])('retries a rate-limited handoff %s with the same operation', async phase => {
+  const f = await fixture()
+  const { sources } = await f.connect()
+  f.search.rateLimit = phase
+  expect(await sources.workflow.createClawsonMerge(mergeSelection, mergeActor, mergePlan)).toMatchObject({ outcome: 'partially-saved' })
+  f.search.rateLimit = ''
+  const { sources: restarted } = await f.connect()
+  expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, mergePlan)).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
+  expect([...f.issues.values()].filter(issue => issue.fields.project.id === config.projectId)).toHaveLength(1)
 })
 
 it('publishes update_work schemas that accept Notion IDs for shared updates', async () => {

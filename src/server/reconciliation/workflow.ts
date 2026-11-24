@@ -569,16 +569,13 @@ export class WorkflowOperations {
         }
         const savedFields = ['card', 'Name', 'Owner', 'Next check-in', 'Description']
         const matches = (current: typeof card) => current.issue_type === 'Task' && current.name === plan.name && current.owner === 'Clawson' && current.description === description && current.due_date === dueDate
-        const mismatch = () => result('partially-saved', 'readback-mismatch', 'The Jira ticket exists, but the handoff fields no longer match. Inspect it before retrying.', ['card'])
-        if (!matches(card)) return mismatch()
-        if (!['Queued', 'In Progress'].includes(card.status)) {
-          const queued = await jira.transition({ card_id: card.id, operation_id: `clawson-merge-queue:${input.operation_id}`, verb: 'Fast-track' }, actor, current => {
-            if (current.status !== 'Backlog' || !matches(current)) throw new JiraWorkInputError('The staged handoff no longer matches the approved Backlog ticket')
-          })
-          if (!('card' in queued)) return result('partially-saved', 'queue-unconfirmed', `The Jira ticket exists, but pickup is unconfirmed. ${queued.message}`, savedFields)
-          card = queued.card
-          if (!matches(card)) return mismatch()
-        }
+        const queued = await jira.transition({ card_id: card.id, operation_id: `clawson-merge-queue:${input.operation_id}`, verb: 'Fast-track' }, actor, current => {
+          if (current.status !== 'Backlog' || !matches(current)) throw new JiraWorkInputError('The staged handoff no longer matches the approved Backlog ticket')
+        }, false, async () => {
+          try { await prepare() } catch (error) { throw new JiraWorkInputError((error as Error).message) }
+        })
+        if (!('card' in queued)) return result('partially-saved', 'queue-unconfirmed', `The Jira ticket exists, but pickup is unconfirmed. ${queued.message}`, savedFields)
+        card = queued.card
         await this.creations.put(key, signature, card.id)
         this.onRecordedChange?.(card.id)
         return result('saved', 'saved', 'Sent to Clawson for admin merge.', [...savedFields, 'Status'], card)

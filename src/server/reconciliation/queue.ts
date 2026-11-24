@@ -14,7 +14,7 @@ import { record, text } from './values'
 import type { PullReadiness } from './queuePulls'
 import type { NeedsWillItem } from './needsWill'
 import type { ExecutionWarning } from './workflowViews'
-import { cardWaitsForWill, jiraCardAssignedToWill } from './claimPolicy'
+import { cardWaitsForWill } from './claimPolicy'
 import { parseWaitLine } from '../../shared/waitingForPolicy'
 import { requestText, isCoordinationRequest, displayRequestText } from '../../shared/requestText'
 
@@ -245,7 +245,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       tags = tags.filter(tag => normalize(tag) !== 'merge')
       if (!tags.length && !waitingForWill) continue
     }
-    if ((owner !== 'will' || isReviewStatus(word(card, 'Status'))) && !tags.length && !waitingForWill && !jiraCardAssignedToWill(card)) continue
+    if ((owner !== 'will' || isReviewStatus(word(card, 'Status'))) && !tags.length && !waitingForWill) continue
     const nativeRequest = card.source?.synthetic === false && waitingForWill
     const action = word(card, 'Next action') ?? word(card, 'Next Action')
     const merge = tags.some(tag => normalize(tag) === 'merge')

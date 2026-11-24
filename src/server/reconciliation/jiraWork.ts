@@ -11,7 +11,7 @@ import {
   type JiraCreate, type JiraEdit, type JiraExternalBlocker, type JiraLink, type JiraTransition,
 } from './jiraWorkRules'
 import { CreationReceipts } from './workflowReceipts'
-import { tswKey, tswProjectId, tswReviewer } from './tswSnapshot'
+import { tswKey, tswProjectId } from './tswSnapshot'
 import { CachedObservation, retainMissing } from './observation'
 import { scopeMatches, type WorkCard, type WorkData } from './workReader'
 import type { WorkScope } from './notion'
@@ -57,7 +57,6 @@ type BeforeWrite = (current: JiraWorkCard) => void
 export class JiraWork extends JiraClient {
   private readonly receipts: CreationReceipts
   private readonly site: string
-  private readonly reviewerCandidates = new WeakMap<WorkCard, string>()
   private readonly confirmed = new Map<string, { card: WorkCard; until: number }>()
   accessRevision = 0
   private readonly scoped = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
@@ -80,7 +79,7 @@ export class JiraWork extends JiraClient {
 
   private boardFields() {
     const { owner, blockerType, blockerTarget, blockerCondition } = this.config.fields
-    return ['project', 'issuetype', 'summary', 'status', 'updated', 'duedate', 'assignee', owner, blockerType, blockerTarget, blockerCondition]
+    return ['project', 'issuetype', 'summary', 'status', 'updated', 'duedate', owner, blockerType, blockerTarget, blockerCondition]
   }
 
   private boardFieldsFrom(raw: Record<string, any>) {
@@ -92,7 +91,6 @@ export class JiraWork extends JiraClient {
       !Number.isFinite(Date.parse(fields.updated)) ||
       (fields.duedate !== null && !calendarDate(fields.duedate)) ||
       (fields[owner] !== null && !nonempty(fields[owner]?.value)) ||
-      (fields.assignee !== null && (!nonempty(fields.assignee?.displayName) || !nonempty(fields.assignee?.accountId))) ||
       (fields[blockerType] !== null && !['Actor', 'Event'].includes(fields[blockerType]?.value)) ||
       (fields[blockerTarget] !== null && typeof fields[blockerTarget] !== 'string') ||
       (fields[blockerCondition] !== null && typeof fields[blockerCondition] !== 'string' && fields[blockerCondition]?.type !== 'doc')) {
@@ -100,11 +98,10 @@ export class JiraWork extends JiraClient {
     }
     return { issue_id: raw.id, key: raw.key, name: fields.summary as string, status: fields.status.name as string, updated_at: fields.updated as string,
       owner: fields[owner]?.value as string ?? null, due_date: fields.duedate as string | null,
-      assignee: fields.assignee?.displayName as string ?? null, assignee_id: fields.assignee?.accountId as string ?? null,
       externalBlocker: { type: fields[blockerType]?.value as string ?? null, target: text(fields[blockerTarget]), unblocks_when: text(fields[blockerCondition], 'omit') } }
   }
 
-  private projectCard(issue: Pick<Issue, 'issue_id' | 'key' | 'name' | 'status' | 'updated_at' | 'owner' | 'due_date' | 'assignee' | 'assignee_id' | 'externalBlocker'>): WorkCard {
+  private projectCard(issue: Pick<Issue, 'issue_id' | 'key' | 'name' | 'status' | 'updated_at' | 'owner' | 'due_date' | 'externalBlocker'>): WorkCard {
     const property = (id: string | null, type: string, value: unknown) => ({ id, type, value, hasMore: false })
     const request = issue.status === 'Waiting For' && issue.externalBlocker.type === 'Actor' &&
       issue.externalBlocker.target.trim().toLowerCase() === 'will'
@@ -122,7 +119,6 @@ export class JiraWork extends JiraClient {
         'Last touched by': property(null, 'rich_text', null),
       },
     }
-    if (issue.assignee === tswReviewer && issue.assignee_id) this.reviewerCandidates.set(card, issue.assignee_id)
     return card
   }
 
@@ -130,45 +126,11 @@ export class JiraWork extends JiraClient {
     this.accessRevision++
     this.confirmed.clear()
     this.observation.discard()
-    this.deskObservation.discard()
     for (const { observation } of this.scoped.values()) observation.discard()
     this.onAccessDenied?.()
   }
 
   readonly observation = this.observeProject()
-  readonly deskObservation = new CachedObservation<WorkData>(async background => {
-    const base = await this.observation.get(true, background)
-    if (!base.data || !base.observedAt) throw new Error('Jira work project unavailable')
-    let coverage = base.coverage === 'complete' ? 'complete' as const : 'partial' as const
-    const signal = AbortSignal.timeout(20_000)
-    const cards: WorkCard[] = []
-    for (const card of base.data.cards) {
-      const assignee = this.reviewerCandidates.get(card)
-      if (assignee && card.source) {
-        const id = this.id(card.id)
-        try {
-          await this.checkProject(id, signal)
-        } catch (error) {
-          if (accessDenied(error)) throw error
-          coverage = 'partial'
-          continue
-        }
-        try {
-          if (assignee === await this.lookupAssignableAccount(id, tswReviewer, signal)) {
-            const verified = { ...card, source: { ...card.source, assignedToReviewer: true } }
-            this.reviewerCandidates.set(verified, assignee)
-            cards.push(verified)
-            continue
-          }
-        } catch {
-          coverage = 'partial'
-        }
-      }
-      cards.push(card)
-    }
-    return { data: { ...base.data, cards }, observedAt: base.observedAt, coverage }
-  }, 60_000, 120_000, 'Jira Desk read failed', Date.now, (_previous, current) => current)
-
   observationFor({ owner, statuses }: WorkScope) {
     if (!owner || !statuses?.length) return this.observation
     const scope = { owner, statuses: [...new Set(statuses)].sort() }
@@ -243,8 +205,8 @@ export class JiraWork extends JiraClient {
     return id.issueId
   }
 
-  private async checkProject(id: string, signal?: AbortSignal) {
-    const issue = await this.request(`issue/${id}?fields=project`, 'GET', undefined, signal)
+  private async checkProject(id: string) {
+    const issue = await this.request(`issue/${id}?fields=project`)
     if (issue.id !== id || issue.fields?.project?.id !== this.config.projectId) {
       throw new JiraWorkInputError('Ticket is outside the configured Jira project')
     }
@@ -252,7 +214,7 @@ export class JiraWork extends JiraClient {
 
   private async read(id: string, allowOtherTypes = false): Promise<Issue> {
     await this.checkProject(id)
-    const fields = [...this.boardFields(), 'issuetype', 'description', 'issuelinks', this.config.fields.decisions]
+    const fields = [...this.boardFields(), 'assignee', 'description', 'issuelinks', this.config.fields.decisions]
     const raw = await this.request(`issue/${id}?fields=${fields.join(',')}`)
     const f = raw.fields
     if (raw.id !== id || f?.project?.id !== this.config.projectId) {
@@ -260,7 +222,8 @@ export class JiraWork extends JiraClient {
     }
     const projection = this.boardFieldsFrom(raw)
     const issueType = Object.entries(this.config.issueTypes).find(([, typeId]) => typeId === f.issuetype?.id)?.[0]
-    if ((!issueType && (!allowOtherTypes || !nativeId(f.issuetype?.id))) || !Array.isArray(f.issuelinks) || Object.values(this.config.fields).some(field => !Object.hasOwn(f, field))) {
+    if ((!issueType && (!allowOtherTypes || !nativeId(f.issuetype?.id))) ||
+      (f.assignee !== null && (!nonempty(f.assignee?.displayName) || !nonempty(f.assignee?.accountId))) || !Array.isArray(f.issuelinks) || Object.values(this.config.fields).some(field => !Object.hasOwn(f, field))) {
       throw new Error('Incomplete Jira work readback')
     }
     const links = f.issuelinks.map((link: Record<string, any>): Link => {
@@ -272,6 +235,7 @@ export class JiraWork extends JiraClient {
     const { decisions, blockerCondition } = this.config.fields
     return {
       ...projection, id: this.qualified(id), url: `${this.config.url}/browse/${encodeURIComponent(raw.key)}`,
+      assignee: f.assignee?.displayName ?? null, assignee_id: f.assignee?.accountId ?? null,
       project_id: this.config.projectId, issue_type: issueType ?? f.issuetype.name ?? f.issuetype.id,
       description: text(f.description), instructionText: text(f.description, 'omit'), decisions: text(f[decisions]), decisionDocument: f[decisions], links,
       blockerConditionText: text(f[blockerCondition], 'omit'),
@@ -441,7 +405,7 @@ export class JiraWork extends JiraClient {
   }
 
   private async mutate<T extends (ReturnType<JiraWork['saved']> & { message?: string }) | { outcome: 'card-canceled' }>(
-    verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<T>,
+    verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<T>, retryRateLimit = false,
   ) {
     const key = this.receiptKey(actor, input.operation_id)
     const marker = `tinstar.work.${digest(key)}`
@@ -477,14 +441,6 @@ export class JiraWork extends JiraClient {
           const update = (data: WorkData, current?: WorkCard) => data.cards.some(prior => prior.id === card.id && newer(prior))
             ? data : { ...data, cards: [...data.cards.filter(prior => prior.id !== card.id), ...(current ? [current] : [])] }
           this.observation.updateData(data => update(data, card), false)
-          this.deskObservation.updateData(data => {
-            const previous = data.cards.find(prior => prior.id === card.id)
-            const retained = previous?.source?.assignedToReviewer && card.source &&
-              this.reviewerCandidates.get(previous) === this.reviewerCandidates.get(card)
-            const current = retained ? { ...card, source: { ...card.source!, assignedToReviewer: true } } : card
-            if (retained) this.reviewerCandidates.set(current, this.reviewerCandidates.get(card)!)
-            return update(data, current)
-          }, false)
           for (const { scope, observation } of this.scoped.values()) {
             observation.updateData(data => update(data, scopeMatches(card, scope) ? card : undefined), false)
           }
@@ -492,6 +448,10 @@ export class JiraWork extends JiraClient {
         },
       })
     } catch (error) {
+      if (retryRateLimit && sent && error instanceof JiraWriteError && error.method === 'POST' && error.status === 429) {
+        await this.receipts.putJiraWork(key, verb, false)
+        return { outcome: 'partially-saved' as const, code: 'unconfirmed' as const, operation_id: input.operation_id, message: 'Jira rate-limited the handoff. Retry the same operation.' }
+      }
       const rejected = sent && isWriteRejection(error)
       const unconfirmed = pending && !rejected
       const result = {
@@ -637,7 +597,7 @@ export class JiraWork extends JiraClient {
         throw new JiraWorkUnconfirmed('Jira did not confirm the merge handoff fields and due date')
       }
       return attempt.confirm(issue)
-    })
+    }, !!mergeDueDate)
   }
 
   private checkEdit(issue: Issue, input: JiraEdit, assigneeId: string | undefined) {
@@ -657,11 +617,7 @@ export class JiraWork extends JiraClient {
   async findAssignableAccount(cardId: string, name: string) {
     const id = this.id(cardId)
     await this.checkProject(id)
-    return this.lookupAssignableAccount(id, name)
-  }
-
-  private async lookupAssignableAccount(id: string, name: string, signal?: AbortSignal) {
-    const users = await this.request(`user/assignable/search?${new URLSearchParams({ issueId: id, query: name, maxResults: '1000' })}`, 'GET', undefined, signal)
+    const users = await this.request(`user/assignable/search?${new URLSearchParams({ issueId: id, query: name, maxResults: '1000' })}`)
     if (!Array.isArray(users)) throw new Error('Incomplete Jira assignee search')
     const eligible = users.filter(user => user.active === true && typeof user.accountId === 'string' && user.accountId &&
       typeof user.displayName === 'string')
@@ -826,7 +782,7 @@ export class JiraWork extends JiraClient {
     return { outcome: result.outcome, dispatched }
   }
 
-  transition(input: JiraTransition, actor: string, beforeWrite?: BeforeWrite, deferAudit = false) {
+  transition(input: JiraTransition, actor: string, beforeWrite?: BeforeWrite, deferAudit = false, handoffPreflight?: () => Promise<unknown>) {
     return this.mutate('transition', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = this.transitionAudit(input, actor)
@@ -836,6 +792,7 @@ export class JiraWork extends JiraClient {
         return issue
       }
       if (attempt.dispatched) {
+        if (handoffPreflight) return attempt.confirm(await this.read(id))
         const destination = jiraTransitionDestination(input)
         if (!destination) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
         try {
@@ -852,6 +809,7 @@ export class JiraWork extends JiraClient {
       }
       destination(await this.read(id))
       const response = await this.request(`issue/${id}/transitions`)
+      await handoffPreflight?.()
       const current = await this.read(id)
       const to = destination(current)
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
@@ -861,13 +819,14 @@ export class JiraWork extends JiraClient {
       await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id } }).catch(error => {
         if (!note || isWriteRejection(error)) throw error
       })
+      if (handoffPreflight) return attempt.confirm(await this.read(id))
       const saved = await readDestination(to)
       if (!note) return attempt.confirm(saved)
       if (!await this.postTransitionAudit(id, note, deferAudit)) {
         throw new JiraWorkUnconfirmed('Jira ticket was canceled before the audit comment could be posted')
       }
       return attempt.confirm(await readDestination(to))
-    })
+    }, !!handoffPreflight)
   }
 
   private async resolveLinkTarget(key: string) {

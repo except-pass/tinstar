@@ -7,7 +7,7 @@ import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from '
 import { queuePulls, type PullsRead, type PullSummary } from '../../shared/pulls'
 import { releasePull } from '../../shared/releases'
 import type { PullReadiness } from './queuePulls'
-import { currentWillRequests, deferredDecisionCard, jiraCardAssignedToWill, oldestOpenRequestSince } from './claimPolicy'
+import { currentWillRequests, deferredDecisionCard, oldestOpenRequestSince } from './claimPolicy'
 import { decisionRequests } from '../../shared/workflowRequests'
 
 export interface NeedsWillItem extends QueueItem {
@@ -39,7 +39,7 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       const history = context && !hasUnverifiedRetractions(context) ? requestHistory(context.blocks) : []
       const open = currentWillRequests(history, actionTags).filter(request => !request.answered)
       requests.push(...open.map(request => ({ ...request, cardId: id })))
-      if (/\bWill\b/.test(wait) || actionTags.length || jiraCardAssignedToWill(card.source)) real = true
+      if (/\bWill\b/.test(wait) || actionTags.length) real = true
     }
     if (!real) return []
     const ids = new Set(queuePulls(item, inventory).map(pull => pull.id))

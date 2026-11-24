@@ -88,18 +88,18 @@ statuses. A changed head or any failed, pending, missing required or unreadable
 check stops the handoff with the affected PR and reason. This prevents a card
 from granting merge permission against an unverified or different commit.
 
-One click creates a Jira task owned by **Clawson** and confirms it is **Queued**
-before reporting success. The due date is the calendar date in the board’s
+One click creates a Jira task owned by **Clawson** and releases it to **Queued**. The due date is the calendar date in the board’s
 check-in timezone. The Jira description records the approved selection, exact
 PR heads and merge instructions. Clawson reports the result on the ticket and
 returns ownership to the requester.
 
 The button shows the Jira ticket link and preserves the selection. Retry the
 same click if creation or queueing remains unconfirmed. Tin Star uses the Jira
-operation property and saved receipt to find an already-dispatched ticket and
-confirm that it was queued, even if GitHub is unavailable. A retry before the
-first Jira dispatch checks current PR state again. Tin Star does not execute
-the merge commands.
+operation property to find an already-created ticket. Before releasing the
+ticket to Clawson for the first time, Tin Star checks current PR state again.
+A recorded release remains delivered after the ticket changes hands. If Jira
+rate-limits a write, retry the same click once the limit clears. Tin Star does
+not execute the merge commands.
 
 A First Mate suggested action with the optional `merge` target documented in the
 [Ask reply format](features/ask.md#outbound-only-mac-puller) uses this same handoff
