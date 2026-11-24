@@ -224,7 +224,7 @@ export class WorkflowOperations {
     }
     if (!this.jiraWork) return { outcome: 'not-saved', code: 'unavailable', message: 'Jira is the only creation target and Jira work is not configured', operation_id, saved_fields: [] }
     const create = jiraCreateSchema.safeParse({ operation_id, name: input.name, owner: input.owner,
-      description: `${input.content?.brief ?? ''}\n\nRead the verified implementation contract through Tin Star before starting work.` })
+      description: 'Read the verified implementation contract through Tin Star before starting work.' })
     if (!create.success) return { outcome: 'not-saved', code: 'invalid-input', operation_id, saved_fields: [],
       message: create.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') }
     const response = await this.jiraWork.create(create.data, actor)
