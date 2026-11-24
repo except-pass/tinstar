@@ -174,8 +174,8 @@ and screenshots use fixtures and do not establish live acceptance.
 
 ## Slice 2: remaining operations and First Mate integration
 
-Authenticated MCP creates new board work in Jira TSW. See [native Jira work](jira-work.md)
-for `create_work` inputs and the creation readback. The Inspector's **Update work**
+See [native Jira work](jira-work.md#mcp-calls) for the authenticated
+`create_work` contract. The Inspector's **Update work**
 form collects ordinary updates on existing cards and needs no Notion window.
 Card returns use the leased MCP operation and reviews use dedicated controls.
 `close_worker` and `release_wait` are available through authenticated MCP.
@@ -761,17 +761,22 @@ Required input:
 }
 ```
 
-Use `target: {card_id: "<canonical card ID>"}` for a known card. Notion IDs
-remain 32-character page IDs; pilot Jira identity is defined in the
-[adapter mapping](jira-adapter.md#field-mapping). An explicit ID is authoritative and must belong to the configured board. Otherwise,
-the existing receipt file binds the submission and external reference to one
-creation identity in Jira TSW. `target.candidate_ids` supplies narrow candidates, but even a
-single candidate requires an explicit target: `needs-target` returns identities
-without overwriting or creating. Titles never determine identity.
+Use `target: {card_id: "<canonical card ID>"}` for an existing Notion, pilot
+Jira or native Jira card on the configured board. See the
+[pilot mapping](jira-adapter.md#field-mapping) and
+[native Jira ID format](jira-work.md#mcp-calls). A fresh `target.external_ref`
+creates a ticket in the configured native Jira work project. The target
+deployment uses TSW. Durable receipts bind retries to the same card, including
+Notion cards from pre-cutover handoffs. `target.candidate_ids` accepts Notion
+and pilot Jira IDs. Even one candidate requires an explicit target. The
+`needs-target` result lists candidates without overwriting or creating.
+Titles never determine identity.
 
 Optional fields include `initiative`, `epic`, `priority`, `parent_card_id`,
 `source_conversation`, and `ui_prototype`. Initiative/Epic retain existing text or
-relation-ID semantics. Every UI handoff must supply its approved durable
+relation-ID semantics on Notion and pilot Jira. On native Jira, declared
+classification is retained in the contract, and title edits update the issue's
+Summary. Every UI handoff must supply its approved durable
 `ui_prototype`; the saved contract explicitly requires comparison of a real
 first-pass implementation screenshot with it before claiming done. References
 are caller-declared durable HTTP links, recorded verbatim. Linked media is not
@@ -779,12 +784,11 @@ downloaded or independently verified: the response states this limitation. Do
 not label temporary/unsaved media durable; replace it with a durable reference
 before submission.
 
-New cards are staged in Backlog until all contract bytes verify, then assigned
-Queued through the existing transition operation. This prevents a partially
-written contract from becoming a pickup. Existing cards retain Owner, Status,
-worker links, asks, waits and checkpoints. Declared title/area/classification
-edits use the ordinary update path and captured property preconditions;
-concurrent changes to those properties conflict, while unrelated changes survive.
+A new handoff ticket starts in Backlog. The handoff verifies the contract
+before requesting its default transition to Queued. Existing cards retain Owner,
+Status, worker links, asks, waits and checkpoints by default. Handoff edits check
+captured preconditions for title and, on Notion and pilot Jira, for area and
+classification properties.
 Reassignment/reopening requires a separate explicit `assignment` object with
 `owner`, `status` (Queued/Todo/Backlog), `expected_owner`, and `expected_status`.
 An In Progress amendment is a contextual bridge update, never another pickup.
@@ -795,9 +799,10 @@ null means pickup evidence is unavailable, including older delivery receipts
 that did not retain the notice kind. Delivery never confirms worker acceptance.
 
 In Notion, the executive brief is inserted at the top without deleting existing
-content. Native Jira stores the exact contract and declared classification in issue attachments. Jira pilot persistence is described in the [adapter mapping](jira-adapter.md#field-mapping).
-The distinct **Implementation contract** section stores immutable version
-manifests, ordered raw-text chunks, and a completion marker. Markdown, Unicode,
+content. Jira stores contract sections in issue attachments. See the
+[pilot mapping](jira-adapter.md#field-mapping) for its storage details.
+Contract sections hold immutable version manifests, ordered raw-text chunks
+and a completion marker. Markdown, Unicode,
 tables, code fences, acceptance, decisions, constraints and references are retained
 without normalization or truncation. Each version records the input identity,
 SHA-256, UTF-16 length, UTF-8 byte length, exact source-spec offset/length and
@@ -806,10 +811,10 @@ marker or assignment is confirmed. A later approval needs an explicit
 `revision_id` and `expected_contract_hash`; previous versions remain readable.
 Ordinary progress notes remain outside the approved contract.
 
-The contract bound is 1,500,000 UTF-8 bytes. Rich text is split into at most 2,000
-UTF-16 code units per element without dividing Unicode code points; contract
-chunks are at most 8,000 code units and append batches at most 20 blocks. These
-stay below the [Notion request limits](https://developers.notion.com/reference/request-limits).
+The contract bound is 1,500,000 UTF-8 bytes. Chunks are at most 8,000 UTF-16
+code units without dividing Unicode code points. Notion rich-text elements use
+at most 2,000 code units and append batches at most 20 blocks to stay below the
+[Notion request limits](https://developers.notion.com/reference/request-limits).
 The brief uses [Notion's insert-at-start position](https://developers.notion.com/reference/patch-block-children#controlling-insert-position).
 Notion requests follow the [shared pacing policy](#read-contracts).
 Both MCP transport request bounds are 2 MiB so large contracts can traverse the same
@@ -842,29 +847,30 @@ current verified fields, spec version/hash and full-spec readback), `assignment`
 (current Owner/Status), `delivery` (unknown/offered/confirmed inbox evidence),
 `execution` (Queued, fresh tracked native worker, or unknown), and `recovery`.
 An inbox receipt proves notification delivery only. It never proves acceptance,
-worker dispatch or In Progress. Missing/stale execution stays unknown.
+worker dispatch or In Progress. Native Jira handoffs report delivery as unknown
+and leave pickup to the Jira workflow. Missing/stale execution stays unknown.
 
 The existing creation receipt file also holds submission hashes, target IDs,
 captured preconditions, step flags and uncertain batch hashes, not authoritative
 specification text or an offline task queue. A changed payload under the same
 submission/revision conflicts. A same-ID retry reads the authoritative provider
-first, verifies saved chunks and continues only never-submitted batches. The latch is written before
-each append/history operation to prevent duplicate production writes after a
-lost response or restart. An uncertain append or comment POST is never replayed.
+first, verifies saved chunks and continues with batches clear for dispatch. The
+latch is written before each append or history operation to prevent duplicate
+writes after a lost response or restart. An uncertain append or comment POST is never replayed.
 Partial results identify the canonical card, verified/missing chunk indices and
-block IDs, pending batch hashes or history operation ID. If an uncertain batch
-remains incomplete, inspect Notion and explicitly correct the missing blocks or
-history before retrying the identical submission. Do not create a new task or
-change IDs to bypass uncertainty. A definite Notion rejection can be retried
-after its Retry-After; no independent polling loop is added.
+section IDs, pending batch hashes or history operation ID. If an uncertain
+batch remains incomplete, inspect the issue attachments or Notion blocks and
+history, then explicitly correct the missing content before retrying the
+identical submission. Keep the original IDs to preserve recovery. A definite
+Notion rejection can be retried after its Retry-After. For Jira attachments, a
+failed preflight or a definite upload rejection clears the batch latch. An
+HTTP 408 upload response leaves the batch uncertain.
 
-Rollout is separate from code delivery. The catalog adds **submit_handoff** and
-extends **get_work** with optional full-contract retrieval; existing calls stay
-valid. After guarded deployment, verify the deployed commit and authenticated
-catalog, then ask the owner to refresh the ChatGPT connector catalog once.
+After guarded deployment, verify the deployed commit and authenticated catalog,
+then ask the owner to refresh the ChatGPT connector catalog once.
 Firstmate must run the authorized disposable-card proof through that connected
-ChatGPT tool, inspect exact Notion readback and one real pickup/canonical worker
-link in Tin Star, and put the evidence on card
+ChatGPT tool, inspect exact Jira attachment readback and one real pickup/canonical
+worker link in Tin Star, and put the evidence on card
 `41450ce6d42281028a15d04e769f3f3e`. Fixture tests prove the protocol only; they do
 not complete this live acceptance. Keep the parent shared-workflow cutover
 dependency explicit and do not activate another pickup mechanism or real inbox

@@ -264,7 +264,9 @@ export class JiraWork extends JiraClient {
     return (await this.receipts.get(this.receiptKey(actor, operationId)))?.jiraWork?.dispatched === true
   }
 
-  private async mutate(verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<ReturnType<JiraWork['saved']> & { message?: string }>) {
+  private async mutate<T extends (ReturnType<JiraWork['saved']> & { message?: string }) | { outcome: 'card-canceled' }>(
+    verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<T>,
+  ) {
     const key = this.receiptKey(actor, input.operation_id)
     const marker = `tinstar.work.${digest(key)}`
     let pending = false
@@ -612,7 +614,7 @@ export class JiraWork extends JiraClient {
         if (!await this.postTransitionAudit(id, note, true, () => { dispatched = true })) return { outcome: 'card-canceled' }
       }
       return attempt.confirm(await this.read(id))
-    }) as { outcome: string }
+    })
     return { outcome: result.outcome, dispatched }
   }
 

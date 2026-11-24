@@ -31,7 +31,7 @@ export function implementationContract(input: SubmitHandoffInput, actor: string,
     classification + (input.source_conversation ? `\nSource conversation: ${input.source_conversation}\n` : '') +
     (input.parent_card_id ? `\nParent card: ${cardSourceUrl(input.parent_card_id)}\n` : '') +
     (input.ui_prototype ? `\nApproved prototype: ${input.ui_prototype}\nBinding UI acceptance: the approved prototype is the implementation contract. A real screenshot of the first implemented pass must be compared with this prototype before claiming done.\n` : '')
-  // This bound keeps each Notion write and on-demand read finite, without truncation.
+  // Bound contract storage and on-demand reads for both providers without truncating the approved text.
   if (Buffer.byteLength(text, 'utf8') > 1500000) throw new ContractError('contract-too-large', 'Contract exceeds 1,500,000 UTF-8 bytes; submit a smaller explicit revision. Nothing was truncated.')
   const chunks: string[] = []; let part = ''
   for (const char of text) {
