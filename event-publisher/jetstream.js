@@ -108,6 +108,6 @@ export async function runRelay(journal, config, seed, signal) {
     }
   } finally {
     await nc?.close()
-    if (signal.aborted) journal.updateRelay(config.name, sequence, 'stopped')
   }
+  journal.updateRelay(config.name, sequence, 'stopped')
 }

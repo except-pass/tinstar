@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util'
 import { deploymentLifecycleSource, deploymentSource, observeDeploymentEndpoint } from './deployment.js'
 import { observeHome, sourcesFor } from './firstmate.js'
 import { githubInterval, githubObserver, githubReader, githubSource, repositoryPattern } from './github.js'
-import { Journal, JournalConfigurationError } from './journal.js'
+import { Journal, JournalConfigurationError, RelayCheckpointError } from './journal.js'
 import { jiraConfig, JiraWebhookConfigurationError, startJiraWebhook } from './jira.js'
 import { readRelayConfig, RelayConfigurationError, runRelay } from './jetstream.js'
 import { releaseTagObserver, tagInterval, tagSource } from './releaseTags.js'
@@ -499,7 +499,7 @@ async function main() {
       }
       for (const transport of journal.relayStatus()) {
         const reason = transport.reason ? ` · ${transport.reason}` : ''
-        console.log(`jetstream:${transport.name} ${transport.health} · ${transport.stream} · processed through #${transport.sequence} · last broker ack ${age(transport.last_ack_at)} · last status update ${age(transport.updated_at)}${reason}`)
+        console.log(`jetstream:${transport.name} last recorded state ${transport.health} · ${transport.stream} · processed through #${transport.sequence} · last broker ack ${age(transport.last_ack_at)} · last status update ${age(transport.updated_at)}${reason}`)
       }
     } else {
       const statuses = new Map(journal.sources().map(source => [source.source_id, source]))
@@ -524,7 +524,8 @@ try {
   await main()
 } catch (error) {
   const usageError = error instanceof UsageError || error instanceof MigrationReceiptError || error instanceof RelayConfigurationError
-  const message = usageError || error instanceof JournalConfigurationError || error instanceof JiraWebhookConfigurationError ? error.message
+  const message = usageError || error instanceof JournalConfigurationError || error instanceof JiraWebhookConfigurationError ||
+    error instanceof RelayCheckpointError ? error.message
     : error.code === 'ERR_SQLITE_ERROR' ? 'cannot access the journal; check its path, permissions and writer'
     : 'publisher failed; check the journal path and permissions'
   console.error(`events: ${message}`)

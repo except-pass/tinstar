@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { publishPage, readRelayConfig } from '../jetstream.js'
-import { Journal } from '../journal.js'
+import { Journal, RelayCheckpointError } from '../journal.js'
 
 const observedAt = '2026-11-24T20:00:00.000Z'
 const source = { provider: 'jira', source_id: 'jira:cloud:test:project:123' }
@@ -79,6 +79,38 @@ test('fixture rows are excluded even when their type is selected', async t => {
     const cursor = journal.registerRelay(config)
     equal(await publishPage(journal, config, { publish }, cursor, signal), 1)
     equal(journal.relayStatus()[0].sequence, 1)
+  } finally {
+    journal.close()
+  }
+})
+
+test('a failed checkpoint after acknowledgment leaves the fact pending', async t => {
+  const path = join(await tempDirectory(t), 'journal.sqlite')
+  const journal = new Journal(path)
+  try {
+    journal.registerSources([{ ...source, home_path: null }])
+    record(journal, 'first', 'ticket.status.changed')
+    const [event] = journal.events()
+    const cursor = journal.registerRelay(config)
+    journal.updateRelay(config.name, cursor, 'connected')
+    journal.db.exec(`
+      CREATE TEMP TRIGGER reject_checkpoint BEFORE UPDATE ON jetstream_relays
+      BEGIN SELECT RAISE(ABORT, 'private database detail'); END;
+    `)
+    const published = []
+    const publish = async (_topic, _payload, { msgID }) => { published.push(msgID) }
+    await rejects(publishPage(journal, config, { publish }, cursor, signal), {
+      constructor: RelayCheckpointError,
+      message: 'JetStream relay test-relay could not save checkpoint at journal #1 (state ok)',
+    })
+    equal(journal.relayStatus()[0].health, 'connected')
+    equal(journal.relayStatus()[0].last_ack_at, null)
+    const resume = journal.registerRelay(config)
+    equal(resume, cursor)
+    journal.db.exec('DROP TRIGGER reject_checkpoint')
+    equal(await publishPage(journal, config, { publish }, resume, signal), event.sequence)
+    deepEqual(published, [event.event_id, event.event_id])
+    equal(journal.registerRelay(config), event.sequence)
   } finally {
     journal.close()
   }

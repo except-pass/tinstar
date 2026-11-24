@@ -187,6 +187,7 @@ function releaseTagEvent(subject, tag, sha, observed_at, event_type, label, chan
 }
 
 export class JournalConfigurationError extends Error {}
+export class RelayCheckpointError extends Error {}
 
 export class Journal {
   constructor(path, { readOnly = false } = {}) {
@@ -841,12 +842,16 @@ export class Journal {
   }
 
   updateRelay(name, sequence, health, reason = null, ackAt = null) {
-    this.db.prepare(`
-      UPDATE jetstream_relays
-      SET sequence = MAX(sequence, ?), health = ?, reason = ?,
-          last_ack_at = COALESCE(?, last_ack_at), updated_at = ?
-      WHERE name = ?
-    `).run(sequence, health, reason, ackAt, new Date().toISOString(), name)
+    try {
+      this.db.prepare(`
+        UPDATE jetstream_relays
+        SET sequence = MAX(sequence, ?), health = ?, reason = ?,
+            last_ack_at = COALESCE(?, last_ack_at), updated_at = ?
+        WHERE name = ?
+      `).run(sequence, health, reason, ackAt, new Date().toISOString(), name)
+    } catch {
+      throw new RelayCheckpointError(`JetStream relay ${name} could not save checkpoint at journal #${sequence} (state ${health})`)
+    }
   }
 
   relayStatus() {

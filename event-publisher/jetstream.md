@@ -82,18 +82,30 @@ provision its reply permission if earlier matching events should be sent.
 
 ### Verify the permanent cutover
 
-After the PR merges with green checks, use `events replay --source jira --json`
-against Hulk's live journal to record the sequence and event ID of an existing
-signed Jira status fact. Check replay to Serena from an isolated journal backup
-before starting the permanent relay. Keep Hulk's signed Jira ingress and
-publisher running throughout the cutover. Install and start the permanent Hulk
-relay as a supervised service with the live journal and supervised SSH forward.
+After the PR merges with green checks, run the following on Hulk and record
+the sequence and event ID of an existing signed Jira status fact from the live
+journal.
+
+```sh
+./events replay --db /home/farm/srv/event-publisher/data/journal.sqlite --source jira --json
+```
+
+Check replay to Serena from an isolated journal backup before starting the
+permanent relay. Keep Hulk's signed Jira ingress and publisher running
+throughout the cutover. Install and start the permanent Hulk relay as a
+supervised service with the live journal and supervised SSH forward.
 
 After cutover, arrange one new authentic Jira status change that triggers a
-signed delivery. Replay the live journal after the recorded sequence with
-`events replay --source jira --after <sequence> --json` and confirm signed
-delivery evidence. Check `events sources` for relay progress and use Serena's
-JetStream management API to replay the stored fact and match its event ID to
+signed delivery. Set `sequence` to the recorded journal sequence, then run
+both checks on Hulk.
+
+```sh
+./events replay --db /home/farm/srv/event-publisher/data/journal.sqlite --source jira --after "$sequence" --json
+./events sources --db /home/farm/srv/event-publisher/data/journal.sqlite
+```
+
+Confirm signed delivery evidence and relay progress. Use Serena's JetStream
+management API to replay the stored fact and match its event ID to
 the live journal. Keep stage 1 open until the before-and-after replay and the
 new delivery through Hulk ingress, the live journal, the relay and Serena
 are recorded. Perform this rollout after merge.
@@ -115,9 +127,12 @@ configured window. Consumers must deduplicate logical effects by the stable
 event ID even after that window. Broker acknowledgment confirms stream
 persistence only.
 
-`events sources --db <path>` reports selected relay health, the processed
+`events sources --db <path>` reports the last recorded relay state, the processed
 sequence, the last broker acknowledgment and the failing sequence during
-retries. Compare it with `events replay --db <path>` to locate pending facts.
+retries. If a checkpoint write fails, the relay exits with the attempted
+sequence and state in supervisor output. The status command continues to show
+the last successful write. Compare it with `events replay --db <path>` to locate
+pending facts.
 Check the SSH forward, broker credentials and stream permissions for persistent
 failures. Repair the failed dependency and restart the relay to resume from
 the saved cursor. The source publisher and journal CLI remain available
