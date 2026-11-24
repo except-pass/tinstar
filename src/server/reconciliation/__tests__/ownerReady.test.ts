@@ -169,10 +169,11 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     sources.authorizePulls = req => pulls.authorized(req)
     sources.readOwnerInventory = (repositories, force, scene) => pulls.readForReconciliation(force, repositories, scene)
     sources.readPulls = async () => pulls.readForReconciliation(false, undefined, new SceneReconciler().project(await sources.snapshot()))
-    sources.readPullReadiness = (...args) => pulls.readiness(...args)
-    return { sources, pulls }
+    const schedule = vi.fn<NonNullable<ReconciliationSources['readPullReadiness']>>((...args) => pulls.readiness(...args))
+    sources.readPullReadiness = schedule
+    return { sources, pulls, schedule }
   }
-  let { sources, pulls } = makeSources()
+  let { sources, pulls, schedule } = makeSources()
   const mcp = new ReconciliationMcp(sources, root, new DomainReadTools(pulls, { read: vi.fn() },
     req => authorizePrReadGrant(req, root), recheck => sources.ownerReadyWithPulls(recheck)))
   const server = createServer((req, res) => { void (async () => {
@@ -253,7 +254,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
 
     // Reconstruct Tin Star with a stale Main file and the very same native records.
     await snapshotFile(main!, [], new Date(Date.now() - 3600_000).toISOString())
-    ;({ sources, pulls } = makeSources())
+    ;({ sources, pulls, schedule } = makeSources())
     const restarted = (await call(granted, 'list_prs', { view: 'owner-ready' })).ownerReady as OwnerReadyRead
     expect(restarted.warnings).toContainEqual(expect.stringContaining('Fleet coverage for main is stale'))
     expect(merge(restarted, moving)?.live?.state).toBe('ready')
@@ -339,7 +340,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     const req = new IncomingMessage(new Socket())
     Object.defineProperty(req.socket, 'remoteAddress', { value: '127.0.0.1' })
     req.headers['tailscale-user-login'] = author
-    const schedule = vi.spyOn(sources, 'readPullReadiness')
+    schedule.mockClear()
     const queue = await sources.queue(req, undefined, true, 'read', true)
     expect(queue.items).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'merge',
       evidence: expect.arrayContaining([expect.objectContaining({ kind: 'pull-request', url: moving })]) })]))
@@ -470,6 +471,8 @@ it('rotates five owner histories beyond the ordinary twenty without displacing q
     const snapshot = fixtureSources({ size: 26 })
     snapshot.fleet = []
     const board = snapshot.intentions.data!
+    const { dataSourceId } = board
+    if (dataSourceId === null) throw new Error('Expected a fixture data source ID')
     board.cards = board.cards.slice(-26)
     for (const card of board.cards) {
       card.properties.Status!.value = 'In Progress'
@@ -485,7 +488,7 @@ it('rotates five owner histories beyond the ordinary twenty without displacing q
         id, rich_text: [{ plain_text: `Tin Star request: {"id":"${id}","action":"Decision"}\nRequested from: Will\nQuestion: Review ${id}?` }],
       }] })
     }
-    const sources = new ReconciliationSources({ fleet: [], warnings: [], notion: { dataSourceId: board.dataSourceId, token: 'fixture' } },
+    const sources = new ReconciliationSources({ fleet: [], warnings: [], notion: { dataSourceId, token: 'fixture' } },
       fetcher, new NotionApi(fetcher, 0), root)
     vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
     await sources.queue(undefined, undefined, true, 'read')
