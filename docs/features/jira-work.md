@@ -12,7 +12,7 @@ Use `POST /rest/api/3/workflowscheme/read` to find the existing scheme, confirm 
 
 ## Private server configuration
 
-Set `reconciliation.jira` in the server's private `TINSTAR_CONFIG_HOME/config.json`. Work mode replaces the [synthetic pilot](jira-adapter.md) for this server. Omitting `create_work.provider` still selects the existing Notion workflow. This example uses illustrative IDs. Copy IDs from the isolated Jira project and confirm them against Task create and edit metadata, and Epic metadata if Epic is configured.
+Set `reconciliation.jira` in the server's private `TINSTAR_CONFIG_HOME/config.json`. Work mode replaces the [synthetic pilot](jira-adapter.md) for this server. Point the work-mode configuration at TSW. New board work uses that Jira project even when `create_work.provider` is omitted. This example uses illustrative IDs. Copy IDs from the isolated Jira project and confirm them against Task create and edit metadata, and Epic metadata if Epic is configured.
 
 ```json
 {
@@ -36,7 +36,7 @@ Set `reconciliation.jira` in the server's private `TINSTAR_CONFIG_HOME/config.js
 }
 ```
 
-Inject the scoped Jira service-account token as `TINSTAR_JIRA_TOKEN` through the service's secret mechanism. The adapter uses the Atlassian API gateway and a separate browser site URL. For the selected project, grant the service account Browse Projects, Create Issues, Edit Issues, Transition Issues, Link Issues, and Add Comments. Setting Assignee also requires Assign Issues and access to Jira’s assignable-user search. Cross-project linking requires the corresponding permissions for the intended partners. Use the setup credential only for provisioning and revoke it after confirming access with the service credential. [Atlassian service-account tokens](https://support.atlassian.com/user-management/docs/manage-api-tokens-for-service-accounts/)
+Inject the scoped Jira service-account token as `TINSTAR_JIRA_TOKEN` through the service's secret mechanism. The adapter uses the Atlassian API gateway and a separate browser site URL. For the selected project, grant the service account Browse Projects, Create Issues, Edit Issues, Transition Issues, Link Issues, Create Attachments, and Add Comments. Setting Assignee also requires Assign Issues and access to Jira’s assignable-user search. Cross-project linking requires the corresponding permissions for the intended partners. Use the setup credential only for provisioning and revoke it after confirming access with the service credential. [Atlassian service-account tokens](https://support.atlassian.com/user-management/docs/manage-api-tokens-for-service-accounts/)
 
 Owner is one Jira single select with approved names and no default. Decision Questions and Waiting For Condition are multiline fields. Waiting For Type is a single select with Actor and Event. Waiting For ID is a single-line field. For a Jira blocker, use one inward Blocks link from the blocked ticket. Jira's own project permissions and workflow rules apply to native UI edits.
 
@@ -46,8 +46,9 @@ Tin Star requests English status names from Jira Cloud for transition matching a
 
 | Tool | Arguments and result |
 | --- | --- |
-| `create_work` | Set `provider: "jira"`, `name`, and `operation_id`. Task is the default. Optionally include `issue_type: "Epic"`, `description`, or `owner`. Jira must confirm Backlog on create readback. |
-| `get_work` | Pass the returned immutable `card.id` as `card_id` for get, edit, transition, and link calls. The ID has the form `jira:<site hostname>:<project ID>:<issue ID>`. The result includes the display key, native fields and links. The default detailed read includes up to 50 recent comments. Set `details: false` to skip comments. |
+| `create_work` | Supply `name` and `operation_id`. If supplied, `provider` must be `"jira"`. Task is the default. Optionally include `issue_type: "Epic"`, `description`, or `owner`. Jira must confirm Backlog on create readback. |
+| `get_work` | Pass the returned immutable `card.id` as `card_id` for get, edit, transition, and link calls. The ID has the form `jira:<site hostname>:<project ID>:<issue ID>`. The result includes the display key, native fields and links. The default detailed read includes up to 50 recent comments. Request `implementation_contract` to read verified chunks of an approved handoff. Set `details: false` to skip comments. |
+| `submit_handoff` | Use a stable `target.external_ref` to create a Jira ticket or `target.card_id` for a known ticket. Tin Star saves and verifies the exact contract in Jira attachments before it queues a new ticket. Assignment and worker delivery are reported separately. |
 | `update_work` | Use `kind: "jira_edit"` and the ticket ID. Edit `name`, `description`, `owner`, or `assignee`. Assignee must match the exact display name of one active, assignable Jira account. MCP readback exposes the display name and omits the account ID. Use `null` to clear description or Owner where allowed. Send `add_questions` with `id`, `question` and optional `options`, or `answers` with `id` and `answer`. Set `blocker` with `type`, `target` and `unblocks_when`, clear it with `null`, or add a Jira comment with `note`. |
 | `transition_work` | Supply `verb` and give `to` for verbs with several destinations. Supply `evidence` and `reason` where relevant. Use `disposition` only for Park, Cancel, and Stop and Requeue. Entry into Verify in Prod requires identical `required_revision` and `live_revision`. The [transition rules](../../src/server/reconciliation/jiraWorkRules.ts) define allowed routes and required evidence, reasons and dispositions. |
 | `link_work` | Set `action: "add"` with `target_key`, native link type `type`, and `direction` as displayed on this ticket. Set `action: "remove"` with the native `link_id`. |

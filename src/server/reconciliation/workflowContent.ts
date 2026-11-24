@@ -3,6 +3,7 @@ import { workflowMarkers } from '../../shared/workflowMarkers'
 import { isDecisionRetraction, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { notionWorkflowWriter } from './notionApi'
 import type { WorkReader } from './workReader'
+import type { JiraWork } from './jiraWork'
 import { isJiraCard } from '../../shared/workIdentity'
 
 export const richText = (content: string) => {
@@ -35,7 +36,7 @@ export const sectionText = (name: string, text: string) => `${sectionMarker(name
 export class NotionWriteError extends Error { constructor(readonly status: number, readonly method = 'PATCH') { super(`Notion HTTP ${status}`) } }
 export class ManagedSectionConflict extends Error {}
 export class WorkflowContent {
-  constructor(private reader: WorkReader) {}
+  constructor(private reader: WorkReader, private jiraWork?: JiraWork) {}
   workflowWriter() {
     if (!this.reader.config) throw new Error('Notion is not configured')
     return notionWorkflowWriter(this.reader.config, this.reader.api.fetch)
@@ -61,6 +62,7 @@ export class WorkflowContent {
   }
   appendBlocks(id: string, children: WorkflowCreateBlock[], atStart = false, readbackCanSettle = false) { return this.reader.mutate(id, () => this.performAppendBlocks(id, children, atStart), { kind: 'append', readback_can_settle: readbackCanSettle, texts: children.map(createBlockText) }) }
   private async performAppendBlocks(id: string, children: WorkflowCreateBlock[], atStart = false) {
+    if (this.jiraWork?.owns(id)) return this.jiraWork.appendHandoffSections(id, children.map(block => ({ type: block.type, text: createBlockText(block) })))
     const jira = this.jira(id)
     if (jira) return jira.appendContract(id, children.map(block => ({ type: block.type, text: createBlockText(block) })))
     return this.request(`blocks/${id}/children`, 'PATCH', { children, ...(atStart ? { position: { type: 'start' } } : {}) })
@@ -168,6 +170,7 @@ export class WorkflowContent {
     throw new Error('Comments truncated; cannot safely resolve or deduplicate this operation')
   }
   async sections(id: string, includeStructured = false, complete = false) {
+    if (this.jiraWork?.owns(id)) return this.jiraWork.handoffSections(id)
     const jira = this.jira(id)
     if (jira) return jira.sections(id, complete)
     const result: Array<{ id: string; text: string; type: string }> = []; let cursor: string | undefined

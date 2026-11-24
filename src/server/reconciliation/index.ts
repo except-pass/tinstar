@@ -35,7 +35,7 @@ import { NotionApi } from './notionApi'
 import { WorkReader, type WorkCard } from './workReader'
 import { getConfigRoot } from '../configRoot'
 import { WorkflowOperations } from './workflow'
-import { externalWorkers, searchWorkSchema, getWorkSchema, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
+import { externalWorkers, searchWorkSchema, getWorkSchema, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput } from '../../shared/workflow'
 import { closedWorkBlocker, coverageFromObservation, waitingForIssues, waitingForWorkIds, waitState, type WorkBlocker } from '../../shared/waitingForPolicy'
 import { searchSeeds, directNeighbors } from '../../shared/smartSearch'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
@@ -93,7 +93,7 @@ export class ReconciliationSources {
     this.askStore = new AskStore(receiptRoot)
     const content = new WorkflowContent(this.workReader)
     this.proposalSource = new ProposalSource(this.askStore, async id => [...await content.notes(id), ...await content.sections(id)])
-    this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot, this.proposalSource)
+    this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot, this.proposalSource, this.jiraWork)
     this.context = new CardContextReader(config.notion, this.notionApi.backgroundFetch, this.workReader.jira)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
     this.decisionPackets = new DecisionPackets(this.leases, decisionScope)
@@ -415,8 +415,8 @@ export class ReconciliationSources {
     const released = input.kind === 'not_for_me' && result.outcome === 'saved' ? await this.leases.releaseCurrent(input.card_id, `Not for me: ${input.reason}`) : undefined
     return { ...workReadback(result), ...(released ? { lease_release: released } : {}), lease: this.leases.status(input.card_id) }
   }
-  async createWork(input: CreateWorkInput, actor: string) {
-    return workReadback(await this.workflow.create(input, actor))
+  readImplementationContract(id: string, options: NonNullable<ReturnType<typeof getWorkSchema.parse>['implementation_contract']>) {
+    return this.workflow.readImplementationContract(id, options)
   }
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
     const result = await this.workflow.submitHandoff(input, actor)

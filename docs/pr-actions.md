@@ -88,8 +88,10 @@ statuses. A changed head or any failed, pending, missing required or unreadable
 check stops the handoff with the affected PR and reason. This prevents a card
 from granting merge permission against an unverified or different commit.
 
-One click creates one card through `create_work`'s shared workflow writer and
-creation receipts: Owner **Clawson**, Status **In Progress**, Next check-in at the
+The Clawson admin-merge handoff stays on Notion until Clawson can pick up Jira
+tickets. This applies to Pulls, Ask merge suggestions, and Ask decision-proposal
+merge actions and their retries. One click creates one Clawson delivery card
+with durable creation receipts: Owner **Clawson**, Status **In Progress**, Next check-in at the
 click time, and Will action **Merge**. The card records the authenticated owner’s
 merge word for only the listed URLs and exact heads, with one command per PR:
 

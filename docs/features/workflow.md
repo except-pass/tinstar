@@ -174,20 +174,14 @@ and screenshots use fixtures and do not establish live acceptance.
 
 ## Slice 2: remaining operations and First Mate integration
 
-`create_work` and `update_work` extend `WorkflowOperations`, the existing
-`start_work` policy, and the authenticated MCP/tunnel. `create_work` requires a
-name, owner and area. The Inspector's **Update work** form collects ordinary update
-inputs and needs no Notion window; card returns use the leased MCP operation and
-reviews use their dedicated controls. `close_worker` and `release_wait` are available
-through authenticated MCP. Inspector details include
-bounded comments as well as body prose. A card leaving the current filter remains in the
-Inspector with its last confirmed readback so a partial save can still be seen and retried.
-
-`create_work({operation_id,name,owner,area,status?,properties?,content?})` creates
-one page in the configured data source. Initial status is Queued by default;
-Firstmate assignment always records Queued. `content` has optional `brief` and
-`acceptance_criteria`; ordinary properties preserve canonical Initiative/Epic
-relation IDs. No owner, execution or substantive card facts are inferred.
+Authenticated MCP creates new board work in Jira TSW. See [native Jira work](jira-work.md)
+for `create_work` inputs and the creation readback. The Inspector's **Update work**
+form collects ordinary updates on existing cards and needs no Notion window.
+Card returns use the leased MCP operation and reviews use dedicated controls.
+`close_worker` and `release_wait` are available through authenticated MCP.
+Inspector details include bounded comments and body prose. A card leaving the
+filter remains in the Inspector with its last confirmed readback so partial
+saves can still be seen and retried.
 
 `update_work({card_id,operation_id,kind,...,expected?})` accepts:
 
@@ -771,7 +765,7 @@ Use `target: {card_id: "<canonical card ID>"}` for a known card. Notion IDs
 remain 32-character page IDs; pilot Jira identity is defined in the
 [adapter mapping](jira-adapter.md#field-mapping). An explicit ID is authoritative and must belong to the configured board. Otherwise,
 the existing receipt file binds the submission and external reference to one
-creation identity. `target.candidate_ids` supplies narrow candidates, but even a
+creation identity in Jira TSW. `target.candidate_ids` supplies narrow candidates, but even a
 single candidate requires an explicit target: `needs-target` returns identities
 without overwriting or creating. Titles never determine identity.
 
@@ -801,7 +795,7 @@ null means pickup evidence is unavailable, including older delivery receipts
 that did not retain the notice kind. Delivery never confirms worker acceptance.
 
 In Notion, the executive brief is inserted at the top without deleting existing
-content. Jira pilot persistence is described in the [adapter mapping](jira-adapter.md#field-mapping).
+content. Native Jira stores the exact contract and declared classification in issue attachments. Jira pilot persistence is described in the [adapter mapping](jira-adapter.md#field-mapping).
 The distinct **Implementation contract** section stores immutable version
 manifests, ordered raw-text chunks, and a completion marker. Markdown, Unicode,
 tables, code fences, acceptance, decisions, constraints and references are retained

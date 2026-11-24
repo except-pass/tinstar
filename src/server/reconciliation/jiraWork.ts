@@ -11,6 +11,7 @@ import {
 } from './jiraWorkRules'
 import { CreationReceipts } from './workflowReceipts'
 import { tswKey, tswProjectId } from './tswSnapshot'
+import type { WorkCard } from './workReader'
 
 const createProperty = 'tinstar.work.create'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -208,6 +209,33 @@ export class JiraWork extends JiraClient {
     }
   }
 
+  owns(cardId: string) {
+    const identity = jiraWorkIdentity(cardId)
+    return identity?.site === this.site && identity.projectId === this.config.projectId
+  }
+
+  async handoffCard(cardId: string): Promise<WorkCard> {
+    const card = await this.read(this.id(cardId))
+    const field = (type: string, value: unknown) => ({ id: null, type, value, hasMore: false })
+    return { id: card.id, url: card.url, last_edited_time: card.updated_at, archived: false, in_trash: false,
+      properties: { Name: field('title', card.name), Owner: field('select', card.owner), Status: field('status', card.status) } }
+  }
+
+  async handoffSections(cardId: string) {
+    const id = this.id(cardId)
+    const issue = await this.request(`issue/${id}?fields=project,attachment`)
+    if (issue.id !== id || issue.fields?.project?.id !== this.config.projectId) {
+      throw new JiraWorkInputError('Ticket is outside the configured Jira project')
+    }
+    return this.contractSections(cardId, issue.fields.attachment)
+  }
+
+  async appendHandoffSections(cardId: string, sections: Array<{ type: string; text: string }>) {
+    const id = this.id(cardId)
+    await this.checkProject(id)
+    await this.uploadContract(id, sections)
+  }
+
   private message(error: unknown) {
     if (error instanceof JiraWorkInputError || error instanceof JiraWorkUnconfirmed) return error.message
     if (error instanceof JiraWriteError) return `Jira returned HTTP ${error.status}`
@@ -215,11 +243,19 @@ export class JiraWork extends JiraClient {
   }
 
   private saved(issue: Issue, already = false) {
-    return { outcome: 'saved', code: already ? 'already-saved' : 'confirmed', card: this.view(issue) }
+    return { outcome: 'saved' as const, code: already ? 'already-saved' : 'confirmed', card: this.view(issue) }
   }
 
-  private async mutate(verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<unknown>) {
-    const key = JSON.stringify(['jira-work', this.config.cloudId, this.config.projectId, actor, input.operation_id])
+  private receiptKey(actor: string, operationId: string) {
+    return JSON.stringify(['jira-work', this.config.cloudId, this.config.projectId, actor, operationId])
+  }
+
+  async writeDispatched(actor: string, operationId: string) {
+    return (await this.receipts.get(this.receiptKey(actor, operationId)))?.jiraWork?.dispatched === true
+  }
+
+  private async mutate(verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<ReturnType<JiraWork['saved']> & { message?: string }>) {
+    const key = this.receiptKey(actor, input.operation_id)
     const marker = `tinstar.work.${digest(key)}`
     let pending = false
     let sent = false

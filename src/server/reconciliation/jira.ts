@@ -85,6 +85,29 @@ export class JiraClient {
     const response = await this.response(path, { method, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, fetcher)
     return response.status === 204 ? {} : this.json(response)
   }
+  protected async contractSections(cardId: string, attachments: unknown, signal?: AbortSignal, fetcher = this.fetcher) {
+    if (!Array.isArray(attachments)) throw new Error('Jira attachment inventory unavailable')
+    const sections: JiraSection[] = []
+    const contracts = attachments.filter(attachment => /^[1-9][0-9]*$/.test(attachment.id) &&
+      /^tinstar-contract-[a-f0-9-]+\.json$/.test(attachment.filename))
+      .sort((a, b) => Number(a.id) - Number(b.id))
+    for (const attachment of contracts) {
+      const body = await this.json(await this.response(`attachment/content/${attachment.id}?redirect=false`, { signal }, fetcher))
+      if (body.schema !== 'tinstar.contract-sections.v1' || !Array.isArray(body.sections)) throw new Error('Invalid Jira contract attachment')
+      for (const [index, section] of body.sections.entries()) {
+        if (typeof section.text !== 'string' || !['paragraph', 'heading_2', 'code'].includes(section.type)) throw new Error('Malformed Jira contract section')
+        sections.push({ id: `${cardId}:attachment:${attachment.id}:${index}`, type: section.type, text: section.text })
+      }
+    }
+    return sections
+  }
+  protected async uploadContract(issueId: string, sections: Array<{ type: string; text: string }>) {
+    const form = new FormData()
+    form.append('file', new Blob([JSON.stringify({ schema: 'tinstar.contract-sections.v1', sections })], { type: 'application/json' }), `tinstar-contract-${randomUUID()}.json`)
+    sourceWriteDispatched()
+    const response = await this.response(`issue/${issueId}/attachments`, { method: 'POST', headers: { 'X-Atlassian-Token': 'no-check' }, body: form })
+    await response.body?.cancel()
+  }
   protected async json(response: Response): Promise<Record<string, any>> {
     const reader = response.body?.getReader()
     if (!reader) throw new Error('Jira response missing')
@@ -287,16 +310,7 @@ export class JiraAdapter extends JiraClient {
     const issue = await this.issue(id, signal, fetcher), doc = record(issue.fields.description)
     const sections: JiraSection[] = (Array.isArray(doc.content) ? doc.content : []).map((node, index) => ({ id: `${id}:description:${index}`, type: record(node).type === 'heading' ? 'heading_2' : 'paragraph', text: adfText(node) }))
     if (contracts) {
-      const attachments = issue.fields.attachment
-      if (!Array.isArray(attachments)) throw new Error('Jira attachment inventory unavailable')
-      for (const attachment of attachments.filter((a: any) => /^tinstar-contract-[a-f0-9-]+\.json$/.test(a.filename)).sort((a: any, b: any) => Number(a.id) - Number(b.id))) {
-        const body = await this.json(await this.response(`attachment/content/${encodeURIComponent(attachment.id)}?redirect=false`, { signal }, fetcher))
-        if (body.schema !== 'tinstar.contract-sections.v1' || !Array.isArray(body.sections)) throw new Error('Invalid Jira contract attachment')
-        for (const [index, section] of body.sections.entries()) {
-          if (typeof section.text !== 'string' || !['paragraph', 'heading_2', 'code'].includes(section.type)) throw new Error('Malformed Jira contract section')
-          sections.push({ id: `${id}:attachment:${attachment.id}:${index}`, type: section.type, text: section.text })
-        }
-      }
+      sections.push(...await this.contractSections(id, issue.fields.attachment, signal, fetcher))
     }
     return sections
   }
@@ -319,9 +333,6 @@ export class JiraAdapter extends JiraClient {
     // Native immutable attachment batches reuse the existing contract manifests,
     // pending-batch latch and exact chunk/hash readback. No shadow body store.
     await this.issue(id)
-    const form = new FormData()
-    form.append('file', new Blob([JSON.stringify({ schema: 'tinstar.contract-sections.v1', sections })], { type: 'application/json' }), `tinstar-contract-${randomUUID()}.json`)
-    const response = await this.response(`issue/${this.issueId(id)}/attachments`, { method: 'POST', headers: { 'X-Atlassian-Token': 'no-check' }, body: form })
-    await response.body?.cancel()
+    await this.uploadContract(this.issueId(id), sections)
   }
 }

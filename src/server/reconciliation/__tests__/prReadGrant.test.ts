@@ -53,7 +53,7 @@ async function setup() {
   const read = vi.spyOn(pulls, 'read'), inspect = vi.spyOn(pulls, 'inspect')
   const releaseRead = vi.fn().mockResolvedValue({ pulls: [], unassociatedCards: [], warnings: [], reconciliation: null })
   const mcp = new ReconciliationMcp({ scene: async () => scene, card: async () => null,
-    workerLinkReport: vi.fn(), queue: vi.fn(), createWork: vi.fn().mockResolvedValue({ outcome: 'not-saved', code: 'unavailable' }),
+    workerLinkReport: vi.fn(), queue: vi.fn(),
   }, root, new DomainReadTools(pulls, { read: releaseRead }, req => authorizePrReadGrant(req, root)))
   const backend = createServer((req, res) => { void (async () => { if (!await pulls.handle(req, res)) await mcp.handle(req, res) })() }); servers.push(backend)
   await new Promise<void>(resolve => backend.listen(0, '127.0.0.1', resolve))

@@ -305,9 +305,11 @@ it('shares UI and authenticated MCP operations/readback for the same Jira state'
   const client = new Client({ name: 'synthetic-jira-proof', version: '1' }); clients.push(client)
   const { installToken } = await import('../mcp')
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${installToken(f.root)}` } } }))
-  const created = JSON.parse((await client.callTool({ name: 'create_work', arguments: create }) as any).content[0].text)
+  const creation = await client.callTool({ name: 'create_work', arguments: { provider: 'jira', operation_id: 'public-create', name: 'Fixture' } })
+  expect(JSON.parse((creation.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ outcome: 'not-saved', code: 'unavailable' })
+  const created = await f.workflow.create(create, 'Fixture')
   expect(created.outcome).toBe('saved')
-  const cardId = created.card.id
+  const cardId = (created.card as { id: string }).id
   const ui = await (await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation: 'update', input: { kind: 'edit', card_id: cardId, operation_id: 'ui-edit', properties: { Area: 'Product' }, note: 'UI and MCP agreement proof' } }) })).json()
   expect(ui).toMatchObject({ ok: true, data: { outcome: 'saved' } })
   const mcpRead = JSON.parse((await client.callTool({ name: 'get_work', arguments: { card_id: cardId, details: true, refresh: true } }) as any).content[0].text)

@@ -22,8 +22,8 @@ Supply `TINSTAR_JIRA_EMAIL` and `TINSTAR_JIRA_TOKEN` in the server environment a
 runtime, or the `email`/`token` settings in its private config. Never commit those
 values. Credentials are server-side only. Existing `reconciliation.notion`
 configuration is unchanged and can coexist; each card routes by its own identity.
-Omitting `create_work.provider` still means Notion. Creating in Jira requires
-`"provider":"jira"`; an unconfigured provider fails without falling back.
+The authenticated `create_work` tool targets the native Jira work project.
+Use an existing synthetic issue when testing the pilot's read and update paths.
 
 The fixed site/project boundary prevents this authorized pilot from writing real
 work elsewhere. The adapter has only project reads and issue-level operations;
@@ -114,12 +114,11 @@ telemetry listeners or any First Mate lifecycle services:
 npx tsx scripts/jira-workflow-proof.ts --config-home /absolute/private/proof-config --prepare
 # Supply the runtime Jira credential environment through the approved secret route.
 TINSTAR_CONFIG_HOME=/absolute/private/proof-config npx tsx scripts/jira-workflow-preview.ts --port 5293
-npx tsx scripts/jira-workflow-proof.ts --config-home /absolute/private/proof-config --server http://127.0.0.1:5293 --output /absolute/private/proof.json --operation-prefix UNIQUE
+npx tsx scripts/jira-workflow-proof.ts --config-home /absolute/private/proof-config --server http://127.0.0.1:5293 --output /absolute/private/proof.json --operation-prefix UNIQUE --card-id SYNTHETIC-CARD-ID
 ```
 
 Use a private config root and a synthetic snapshot file; never configure a real
-First Mate home or enable inbox delivery. After native status setup is confirmed,
-run `scripts/jira-workflow-proof.ts` against that preview, then use the existing
+First Mate home or enable inbox delivery. After native status setup is confirmed, prepare one synthetic Task with the pilot label and run `scripts/jira-workflow-proof.ts` against that preview, then use the existing
 Inspector to inspect/edit the returned card and capture it with the task's named
 `chrome-devtools-axi` session. Keep receipts/screenshots outside the repository.
 Stop the browser session immediately after capture. Keep the one synthetic issue
