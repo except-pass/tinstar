@@ -426,20 +426,25 @@ export class Journal {
       // An overlapping poll can move the tag while Releases is still reading.
       if (current) {
         const previous = JSON.parse(current.detail)
-        const merged = detail && Object.fromEntries(Object.entries({
+        const merged = Object.fromEntries(Object.entries({
           pulls: item => item.url,
           cards: item => JSON.stringify([item.pull, item.card_id]),
           runs: item => item.id,
         }).map(([name, identity]) => {
-          const group = detail[name]
+          const incoming = detail?.[name] ?? (name === 'runs' && previous.runs.coverage !== 'pending'
+            ? { coverage: 'unknown', items: [] } : null)
+          if (!incoming) return [name, previous[name]]
+          const { availableLinks, ...group } = incoming
           if (group.coverage === 'complete') return [name, group]
-          const items = new Map(previous[name].items.map(item => [
+          const retained = availableLinks ? previous[name].items.filter(item =>
+            availableLinks.get(item.pull)?.some(link => link.card_id === item.card_id)) : previous[name].items
+          const items = new Map(retained.map(item => [
             identity(item), name === 'runs' ? { ...item, freshness: 'last_known' } : item,
           ]))
           for (const item of group.items) items.set(identity(item), item)
           return [name, { ...group, items: [...items.values()] }]
         }))
-        const updated = merged ? JSON.stringify(merged) : current.detail
+        const updated = JSON.stringify(merged)
         if (updated !== current.detail) {
           const event_id = `event:${randomUUID()}`
           const event = releaseTagEvent(target.subject, target.tag, target.sha, observedAt,

@@ -77,7 +77,9 @@ test('cmsandbox poll baselines existing tags silently, keeps ref transitions and
   await fixture.poll(poll)
   pages[1] = [row('v1.10.0', moved), row('v1.11.0')]
   await fixture.poll(poll)
-  const [created, move, firstReturn, returned] = fixture.events()
+  const events = fixture.events()
+  const created = events.find(event => event.evidence.source_reference.tag === 'v1.11.0')
+  const [move, firstReturn, returned] = events.filter(event => event.evidence.source_reference.tag === 'v1.10.0')
   deepEqual(created.evidence.source_reference, { repository: tagRepository, tag: 'v1.11.0', sha: head })
   equal(created.evidence.action, 'created')
   equal(move.evidence.action, 'moved')
@@ -144,10 +146,11 @@ test('exact-SHA Releases evidence follows the base push and the Main check emits
     repository: tagRepository, version, sourceSha: moved, kind: 'production', membership: { status: 'complete' },
     pulls: [pull(1), pull(2, { freshness: 'stale' })],
     containedPulls: [{ pull: pull(3).url, mergeSha: old, state: 'included' }, { pull: pull(4).url, mergeSha: moved, state: 'included' }],
-    github: { runsStatus: 'fresh', runs: [run(4), run(5, { sha: moved }), run(6, { workflow: '.github/workflows/release-production.yml' })] },
+    github: { runsStatus: 'fresh', runs: [run(4), run(5, { sha: moved }), run(6, { url: `${url}/actions/runs/7` })] },
   }
   let tags = [row('v2.0.0', old)]
   let associationsComplete = true
+  let releasesUnavailable = false
   let associatedPulls = [pull(1), pull(3), pull(4), pull(7, { exceptions: [`Linked card unavailable: ${cardId}`] })]
   release.pulls.push(pull(8))
   associatedPulls.push(pull(8, { exceptions: [`Linked card unavailable: ${cardId}`] }))
@@ -171,6 +174,7 @@ eval "run_remote \${@: -1}"
     fetchEndpoint: async endpoint => {
       equal(endpoint.searchParams.get('tag'), version)
       equal(fixture.events()[0].label, 'tag pushed')
+      if (releasesUnavailable) return new Response(null, { status: 503 })
       return Response.json({ ok: true, data: { releases: [release], releaseSource: { status: 'partial' },
         associationsComplete, pulls: associatedPulls } })
     },
@@ -219,14 +223,36 @@ eval "run_remote \${@: -1}"
   deepEqual(partial.runs.items.map(item => item.id), [4, 10])
 
   associationsComplete = true
-  associatedPulls = [pull(9, { exceptions: [`Linked card unavailable: ${cardId}`] })]
+  associatedPulls = [pull(1, { exceptions: [`Linked card unavailable: ${cardId}`] }), pull(3), pull(4)]
+  release.containedPulls = []
   release.membership.status = 'complete'
+  await fixture.poll(observer)
+  const retired = fixture.events().at(-1).change.after.cards
+  equal(retired.coverage, 'partial')
+  deepEqual(retired.items.map(item => item.pull), [pull(3).url])
+
+  associatedPulls = [pull(9, { exceptions: [`Linked card unavailable: ${cardId}`] })]
   release.github.runsStatus = 'fresh'
   await fixture.poll(observer)
   const corrected = fixture.events().at(-1).change.after
   deepEqual(corrected.pulls, { coverage: 'complete', items: [{ url: pull(9).url, merge_sha: old, basis: 'range' }] })
   deepEqual(corrected.cards, { coverage: 'complete', items: [] })
   deepEqual(corrected.runs.items.map(({ id, freshness }) => [id, freshness]), [[10, 'fresh']])
+
+  releasesUnavailable = true
+  await fixture.poll(observer)
+  const unavailable = fixture.events().at(-1).change.after
+  deepEqual(unavailable.pulls, corrected.pulls)
+  deepEqual(unavailable.cards, corrected.cards)
+  deepEqual(unavailable.runs, { coverage: 'unknown', items: [{ ...corrected.runs.items[0], freshness: 'last_known' }] })
+
+  releasesUnavailable = false
+  release.github.runs = []
+  await fixture.poll(observer)
+  deepEqual(fixture.events().at(-1).change.after.runs, { coverage: 'complete', items: [] })
+  release.github.runs = [run(11)]
+  await fixture.poll(observer)
+  deepEqual(fixture.events().at(-1).change.after.runs.items.map(item => item.id), [11])
 
   tags = [row('v2.0.0', old)]
   await fixture.poll(observer)
@@ -253,5 +279,30 @@ test('shared GitHub reader uses status and headers for backoff', async () => {
     if (backoff) await rejects(read(), /back off/)
     else deepEqual((await read()).value, [])
     equal(calls, backoff ? 1 : 2)
+  }
+})
+
+test('overlapping GitHub responses keep the longest backoff and its reason', async () => {
+  const retry = github(null, { status: 429, extra: [['retry-after', '3600']] })
+  const quota = github(null, { status: 403, remaining: '999', extra: [['x-ratelimit-reset', '600']] })
+  for (const responses of [[retry, quota], [quota, retry]]) {
+    const requests = []
+    let time = 0
+    const reader = githubReader({
+      now: () => new Date(time),
+      get: () => new Promise(resolve => requests.push(resolve)),
+    })
+    const read = path => reader.sample(path, undefined, value => value)
+    const pending = [read('tags'), read('pulls')]
+    requests[0](responses[0])
+    await rejects(pending[0], responses[0] === retry ? /back off/ : /quota reserve/)
+    requests[1](responses[1])
+    await rejects(pending[1], /back off/)
+    time = 900_000
+    equal(reader.deferred(), 'GitHub asked the observer to back off')
+    await rejects(read('tags'), /back off/)
+    equal(requests.length, 2)
+    time = 3_600_000
+    equal(reader.deferred(), null)
   }
 })

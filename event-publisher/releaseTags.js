@@ -16,11 +16,6 @@ export const pendingTagEvidence = {
 const releasesEndpoint = 'http://127.0.0.1:5281/api/releases'
 const tagPattern = /^v\d+\.\d+\.\d+$/
 const isSha = value => typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value)
-const version = name => name.slice(1).split('.').map(Number)
-const compareTags = ([a], [b]) => {
-  const [am, an, ap] = version(a), [bm, bn, bp] = version(b)
-  return bm - am || bn - an || bp - ap || a.localeCompare(b)
-}
 const isPullUrl = url => typeof url === 'string' && /^https:\/\/github\.com\/fortresspower\/cmsandbox\/pull\/[1-9]\d*$/.test(url)
 const verifiedPull = pull => isPullUrl(pull.url) && isSha(pull.mergeSha) && pull.state === 'merged' && pull.freshness === 'fresh'
 
@@ -73,15 +68,16 @@ function releaseEvidence(data, { tag, sha }) {
   const runs = (release.github?.runs ?? [])
     .filter(run => run.sha === sha && Number.isSafeInteger(run.id) && run.id > 0 &&
       run.url === `https://github.com/${tagRepository}/actions/runs/${run.id}` &&
-      typeof run.workflow === 'string' && run.workflow.split('@')[0] !== '.github/workflows/release-production.yml')
+      typeof run.workflow === 'string')
     .map(run => ({ id: run.id, url: run.url, workflow: run.workflow, status: run.status, conclusion: run.conclusion, attempt: run.attempt,
       freshness: freshRuns ? 'fresh' : 'last_known' }))
     .sort((a, b) => a.id - b.id)
 
   return {
     pulls: { coverage, items: pulls.map(({ pull, basis }) => ({ url: pull.url, merge_sha: pull.mergeSha, basis })) },
-    cards: { coverage: data.associationsComplete ? coverage : 'unknown', items: cards },
-    runs: { coverage: !freshRuns ? 'unknown' : runs.length ? 'complete' : 'pending', items: runs },
+    cards: { coverage: data.associationsComplete ? coverage : 'unknown', items: cards,
+      availableLinks: data.associationsComplete ? links : undefined },
+    runs: { coverage: freshRuns ? 'complete' : 'unknown', items: runs },
   }
 }
 
@@ -104,7 +100,7 @@ export function releaseTagObserver({ reader = githubReader(), fetchEndpoint = fe
         if (result.value.length < 100) break
       }
       pages = sampled
-      tags = new Map([...catalog].filter(([name]) => tagPattern.test(name)).sort(compareTags))
+      tags = new Map([...catalog].filter(([name]) => tagPattern.test(name)))
     } catch (error) {
       reason = error instanceof GitHubReadError ? error.message : 'GitHub tag inventory could not be read'
     }
@@ -131,7 +127,7 @@ export function releaseTagObserver({ reader = githubReader(), fetchEndpoint = fe
     }
     if (signal?.aborted) return
     const complete = detail && Object.values(detail).every(group => group.coverage === 'complete') &&
-      detail.runs.items.every(run => run.status === 'completed')
+      detail.runs.items.length > 0 && detail.runs.items.every(run => run.status === 'completed')
     const observedAt = now()
     journal.recordReleaseTagEvidence(target, detail, observedAt.toISOString(),
       new Date(observedAt.getTime() + (complete ? 3600 : tagInterval) * 1000).toISOString())
