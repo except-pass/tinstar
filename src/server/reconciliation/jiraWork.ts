@@ -62,20 +62,27 @@ export class JiraWork extends JiraClient {
 
   private qualified(id: string) { return `jira:${this.site}:${this.config.projectId}:${id}` }
 
-  private boardFields() { return ['project', 'summary', 'status', 'updated', 'duedate', this.config.fields.owner] }
-
-  private boardCard(raw: Record<string, any>): WorkCard {
-    const fields = raw.fields, ownerField = this.config.fields.owner
-    if (!nativeId(raw.id) || typeof raw.key !== 'string' || fields?.project?.id !== this.config.projectId ||
-      typeof fields.summary !== 'string' || typeof fields.status?.name !== 'string' || !Number.isFinite(Date.parse(fields.updated)) ||
-      !Object.hasOwn(fields, ownerField) || !Object.hasOwn(fields, 'duedate') || (fields[ownerField] != null && typeof fields[ownerField]?.value !== 'string') ||
-      (fields.duedate != null && !/^\d{4}-\d{2}-\d{2}$/.test(fields.duedate))) throw new Error('Incomplete Jira work search result')
-    return this.projectCard({ issue_id: raw.id, key: raw.key, name: fields.summary, status: fields.status.name, updated_at: fields.updated,
-      owner: fields[ownerField]?.value ?? null, due_date: fields.duedate })
+  private boardFields() {
+    const { owner, blockerType, blockerTarget } = this.config.fields
+    return ['project', 'summary', 'status', 'updated', 'duedate', 'assignee', owner, blockerType, blockerTarget]
   }
 
-  private projectCard(issue: Pick<Issue, 'issue_id' | 'key' | 'name' | 'status' | 'updated_at' | 'owner' | 'due_date'>): WorkCard {
+  private boardCard(raw: Record<string, any>): WorkCard {
+    const fields = raw.fields, { owner, blockerType, blockerTarget } = this.config.fields
+    if (!nativeId(raw.id) || typeof raw.key !== 'string' || fields?.project?.id !== this.config.projectId ||
+      typeof fields.summary !== 'string' || typeof fields.status?.name !== 'string' || !Number.isFinite(Date.parse(fields.updated)) ||
+      !Object.hasOwn(fields, owner) || !Object.hasOwn(fields, 'duedate') || (fields[owner] != null && typeof fields[owner]?.value !== 'string') ||
+      (fields.duedate != null && !/^\d{4}-\d{2}-\d{2}$/.test(fields.duedate))) throw new Error('Incomplete Jira work search result')
+    return this.projectCard({ issue_id: raw.id, key: raw.key, name: fields.summary, status: fields.status.name, updated_at: fields.updated,
+      owner: fields[owner]?.value ?? null, due_date: fields.duedate, assignee: fields.assignee?.displayName ?? null,
+      externalBlocker: { type: fields[blockerType]?.value ?? null, target: text(fields[blockerTarget], 'omit') } })
+  }
+
+  private projectCard(issue: Pick<Issue, 'issue_id' | 'key' | 'name' | 'status' | 'updated_at' | 'owner' | 'due_date' | 'assignee'> &
+    { externalBlocker: Pick<Issue['externalBlocker'], 'type' | 'target'> }): WorkCard {
     const property = (id: string | null, type: string, value: unknown) => ({ id, type, value, hasMore: false })
+    const waitingForWill = issue.status === 'Waiting For' && issue.externalBlocker.type === 'Actor' &&
+      issue.externalBlocker.target.trim().toLowerCase() === 'will'
     return {
       id: this.qualified(issue.issue_id), url: `${this.config.url}/browse/${encodeURIComponent(issue.key)}`,
       last_edited_time: issue.updated_at, archived: issue.status === 'Canceled', in_trash: false,
@@ -83,6 +90,8 @@ export class JiraWork extends JiraClient {
       properties: {
         Name: property('summary', 'title', issue.name), Status: property('status', 'status', issue.status),
         Owner: property(this.config.fields.owner, 'select', issue.owner),
+        Assignee: property('assignee', 'select', issue.assignee),
+        'Waiting For': property(this.config.fields.blockerTarget, 'rich_text', waitingForWill ? 'Will' : null),
         'Next check-in': property('duedate', 'date', issue.due_date ? { start: issue.due_date, end: null, time_zone: null } : null),
         'Last touched by': property(null, 'rich_text', null), // Jira search has no last-editor field.
       },
@@ -155,7 +164,7 @@ export class JiraWork extends JiraClient {
 
   private async read(id: string, allowOtherTypes = false): Promise<Issue> {
     await this.checkProject(id)
-    const fields = [...this.boardFields(), 'issuetype', 'description', 'assignee', 'issuelinks', ...Object.values(this.config.fields).filter(field => field !== this.config.fields.owner)]
+    const fields = [...this.boardFields(), 'issuetype', 'description', 'issuelinks', this.config.fields.decisions, this.config.fields.blockerCondition]
     const raw = await this.request(`issue/${id}?fields=${fields.join(',')}`)
     const f = raw.fields
     if (!nativeId(raw.id) || raw.id !== id || f?.project?.id !== this.config.projectId || typeof raw.key !== 'string') {

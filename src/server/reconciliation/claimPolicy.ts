@@ -9,6 +9,8 @@ export const deferredDecisionCard = (card: WorkCard) => card.archived || card.in
 const isWill = (value: unknown) => typeof value === 'string' && value.trim().toLowerCase() === 'will'
 
 export const cardOwnedByWill = (card: WorkCard) => isWill(value(card, 'Owner'))
+export const jiraCardAssignedToWill = (card: WorkCard) => card.source?.synthetic === false &&
+  ['will', 'william gathright'].includes(String(value(card, 'Assignee') ?? '').trim().toLowerCase())
 
 function cardHasWillAction(card: WorkCard) {
   const actions = value(card, 'Will action')

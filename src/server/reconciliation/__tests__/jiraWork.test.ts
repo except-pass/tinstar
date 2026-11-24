@@ -361,29 +361,36 @@ it('includes matching Jira and legacy Notion cards with independent search cover
   ] })
 })
 
-it('projects the private Jira census and its coverage into the owner Desk queue', async () => {
+it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup to search', async () => {
   const f = await fixture('10639', true)
-  const { sources } = await f.connect()
+  const { call, sources } = await f.connect('Clawson')
   const owner = new IncomingMessage(new Socket())
   owner.headers['tailscale-user-login'] = 'owner@example.test'
   sources.authorizePulls = async request => request === owner
-  const issue = f.make('60101', 'TSW-101', '10639', { status: { name: 'In Progress' }, duedate: '2026-01-04', [config.fields.owner]: { value: 'Clawson' } })
+  const issue = f.make('60101', 'TSW-101', '10639', { status: { name: 'In Progress' }, duedate: '2026-01-04',
+    [config.fields.owner]: { value: 'Clawson' }, assignee: f.assignees[0] })
   const queued = f.make('60102', 'TSW-102', '10639', { status: { name: 'Queued' }, [config.fields.owner]: { value: 'Clawson' } })
-  f.issues.set(issue.id, issue)
-  f.issues.set(queued.id, queued)
+  const waiting = f.make('60103', 'TSW-103', '10639', { status: { name: 'Waiting For' }, [config.fields.owner]: { value: 'Clawson' },
+    [config.fields.blockerType]: { value: 'Actor' }, [config.fields.blockerTarget]: 'Will', [config.fields.blockerCondition]: 'Approve the proposed change' })
+  for (const card of [issue, queued, waiting]) f.issues.set(card.id, card)
+  const pickup = await call('search_work', { owner: 'Clawson', statuses: ['Queued', 'In Progress'] })
+  expect(pickup.records.map((record: any) => record.card.source.url)).toEqual([f.notionCard.url, `${config.url}/browse/${issue.key}`, `${config.url}/browse/${queued.key}`])
   const authorized = await sources.queue(owner, undefined, false, 'read')
-  expect(authorized.items).toHaveLength(3)
-  const native = (queue: typeof authorized, key: string) => queue.items.find(item => item.evidence.some(link => link.url === `${config.url}/browse/${key}`))
-  expect(native(authorized, issue.key)).toMatchObject({ title: 'Fixture', checkpoint: '2026-01-04', readiness: 'needs-readiness-verification',
-    evidence: [{ kind: 'card', url: `${config.url}/browse/${issue.key}` }], sources: [{ kind: 'jira', coverage: 'complete' }] })
-  expect(native(authorized, queued.key)).toMatchObject({ kind: 'decision', readiness: 'future-or-conditional', sources: [{ kind: 'jira' }] })
-  expect(authorized.items.find(item => item.cardIds.includes(f.notionCard.id))).toMatchObject({ kind: 'decision', readiness: 'future-or-conditional', sources: [{ kind: 'notion' }] })
+  const ownerUrls = [issue, waiting].map(card => `${config.url}/browse/${card.key}`).sort()
+  const urls = (items: typeof authorized.items) => items.flatMap(item => item.evidence.map(link => link.url)).sort()
+  expect(urls(authorized.items)).toEqual(ownerUrls)
+  expect(urls(authorized.needsWill!)).toEqual(ownerUrls)
+  const assigned = (queue: typeof authorized) => queue.needsWill?.find(item => item.evidence.some(link => link.url === `${config.url}/browse/${issue.key}`))
+  expect(assigned(authorized)).toMatchObject({ title: 'Fixture', checkpoint: '2026-01-04', readiness: 'needs-readiness-verification', oneTouch: false,
+    sources: [{ kind: 'jira', coverage: 'complete' }] })
   expect(authorized.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete', sources: [{ source: 'notion' }, { source: 'jira', coverage: 'complete' }] })
   f.controls.rejectSearch = true
   const partial = await sources.queue(owner, undefined, false, 'read')
   expect(partial.coverage.intentions).toMatchObject({ status: 'partial', coverage: 'partial' })
-  expect(native(partial, issue.key)).toMatchObject({ readiness: 'needs-readiness-verification', sources: [{ status: 'stale' }] })
-  expect((await sources.queue(undefined, undefined, false, 'read')).items.map(item => item.cardIds)).toEqual([[f.notionCard.id]])
+  expect(assigned(partial)).toMatchObject({ readiness: 'needs-readiness-verification', sources: [{ status: 'stale' }] })
+  const anonymous = await sources.queue(undefined, undefined, false, 'read')
+  expect(anonymous.items).toEqual([])
+  expect(anonymous.needsWill).toEqual([])
 })
 
 const mergeSelection = { operation_id: '39f71a89-d20e-4846-bd37-590d69f25348', targets: Array.from({ length: 10 }, (_, i) => ({
