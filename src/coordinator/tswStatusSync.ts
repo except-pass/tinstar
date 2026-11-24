@@ -410,7 +410,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           const id = identify(step, candidate, card.status, checkpoint.statusVersion).operation_id
           return (checkpoint.rejectedSteps?.[id] ?? 0) >= stepAttemptLimit ? id : undefined
         }
-        const sideUnavailable = async (candidate: StatusEvent, steps: Step[]) => {
+        const sideUnavailable = async (steps: Step[]) => {
           const transition = steps.find((step): step is JiraTransition => !isEdit(step))
           if (transition && !await jira.offersTransition(transition)) return 'side-state-transition-unavailable'
         }
@@ -431,7 +431,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
                   const steps = remaining(candidate, proposed)
                   const [next] = steps
                   operationId = next && capped(candidate, next)
-                  reason = !next ? 'event-already-applied' : operationId ? 'rejected-cap-reached' : await sideUnavailable(candidate, steps)
+                  reason = !next ? 'event-already-applied' : operationId ? 'rejected-cap-reached' : await sideUnavailable(steps)
                 }
               }
               if (reason) {
@@ -492,7 +492,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
             await log('rejected-cap-reached', cappedOperation)
             continue
           }
-          plans.push({ event, from: card.status, steps: steps.map(step => identify(step, event, card.status, checkpoint.statusVersion)) })
+          plans.push({ event, from: card.status, steps: steps.map(step => identify(step, candidate, card.status, checkpoint.statusVersion)) })
           if (!apply) { await log('planned'); break }
           if (!resumed) processed++
           for (const step of steps) {
