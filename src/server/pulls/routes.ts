@@ -10,6 +10,7 @@ import { currentOriginAllowlist } from '../api/originAllowlist'
 import { resolveCorsHeaders } from '../api/cors'
 import { ok, fail } from '../api/envelope'
 import { PullReader } from './reader'
+import type { PullsRead } from '../../shared/pulls'
 import { PullFilesReader } from './files'
 import type { AskContext } from '../../shared/ask'
 import { pullContext } from '../../shared/pullContext'
@@ -18,6 +19,8 @@ import { prepareClawsonMerge } from './clawsonMerge'
 import { actionBody } from '../actions/routes'
 import type { WorkflowOperations } from '../reconciliation/workflow'
 import { askConfigSchema } from '../ask/routes'
+
+export type ReconciliationPullsRead = PullsRead & { closedPulls?: string[] }
 
 const repositorySchema = z.string().regex(/^[\w.-]+\/[\w.-]+$/).transform(value => value.toLowerCase())
 async function configuredRepositories(root: string): Promise<string[] | null> {
@@ -53,7 +56,12 @@ export class PullsApi {
     if (!repositories.length) warnings.push('No repositories selected. Add prOperations.repositories to Tin Star config.json or register an explicit PR in the shared sources.')
     return { scene, warnings, associations, auditAvailable, repositories, associated }
   }
-  async read(force = false, requestedRepositories?: ReadonlySet<string>, scene?: import('../../shared/reconciliationPresentation').FloorScene) {
+  async read(): Promise<PullsRead> {
+    const { closedPulls: _closedPulls, ...inventory } = await this.readForReconciliation()
+    return inventory
+  }
+
+  async readForReconciliation(force = false, requestedRepositories?: ReadonlySet<string>, scene?: import('../../shared/reconciliationPresentation').FloorScene) {
     const { warnings, associations, auditAvailable, repositories, associated } = await this.scope(scene)
     const identity = await this.reader.identity()
     const reads = await this.reader.inventory(requestedRepositories ? repositories.filter(repository => requestedRepositories.has(repository)) : repositories,

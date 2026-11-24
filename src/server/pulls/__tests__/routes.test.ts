@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { PullsApi } from '../routes'
 import { PullReader } from '../reader'
+import { DomainReadTools } from '../../reconciliation/domainReads'
 import { PullFilesReader } from '../files'
 import { AssociationStore } from '../../releases/associations'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
@@ -60,9 +61,19 @@ it('reuses the shared audit for many-to-many links, keeps unlinked PRs, and refu
   await writeFile(join(root, 'config.json'), JSON.stringify({ prOperations: { repositories: ['foreign/repo'] }, ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
   const foreign = 'https://github.com/foreign/repo/pull/9'
   await store.append({ id: randomUUID(), pull: foreign, cardId: cardIds[0]!, action: 'link', reason: 'Explicit relationship' }, 'owner')
-  read.mockImplementation(async path => path.startsWith('/search/issues?') ? { total_count: 0, incomplete_results: false, items: [] } : { number: 9, title: 'Associated upstream work', html_url: foreign, user: { login: 'another-person' }, draft: false, head: { sha: 'a'.repeat(40) }, base: { ref: 'main' }, state: 'open', created_at: '2026-11-01T00:00:00Z', updated_at: '2026-11-06T00:00:00Z' })
+  let foreignState = 'open'
+  read.mockImplementation(async path => path.startsWith('/search/issues?') ? { total_count: 0, incomplete_results: false, items: [] } : { number: 9, title: 'Associated upstream work', html_url: foreign, user: { login: 'another-person' }, draft: false, head: { sha: 'a'.repeat(40) }, base: { ref: 'main' }, state: foreignState, created_at: '2026-11-01T00:00:00Z', updated_at: '2026-11-06T00:00:00Z' })
   const linked = await (await fetch(`${base}/api/pulls`, { headers })).json()
   expect(linked.data.pulls.map((pull: { url: string }) => pull.url)).toEqual([foreign])
+  foreignState = 'closed'
+  expect((await api.readForReconciliation(true)).closedPulls).toEqual(['foreign/repo#9'])
+  const closed = await (await fetch(`${base}/api/pulls`, { headers })).json()
+  expect(closed.data.pulls).toEqual([])
+  expect(closed.data).not.toHaveProperty('closedPulls')
+  const mcp = new DomainReadTools(api, { read: vi.fn() }, async () => true)
+  const inventory = await mcp.listPulls({ offset: 0, limit: 1 })
+  expect(inventory).toMatchObject({ outcome: 'available', pulls: [] })
+  expect(inventory).not.toHaveProperty('closedPulls')
   await store.append({ id: randomUUID(), pull: foreign, cardId: cardIds[0]!, action: 'unlink', reason: 'Relationship removed' }, 'owner')
   const unlinked = await (await fetch(`${base}/api/pulls`, { headers })).json()
   expect(unlinked.data.pulls).toEqual([])
