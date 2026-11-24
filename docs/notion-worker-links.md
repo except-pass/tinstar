@@ -1,7 +1,7 @@
 # Notion-owned worker links
 
-Notion declares the primary task association. First Mate owns worker identity,
-execution state and location. Tin Star reads both sources, compares identities,
+For Notion work, the card declares the primary task association. First Mate owns
+worker identity, execution state and location. Tin Star reads both sources, compares identities,
 and displays the relationship and evidence; its server, UI and MCP never write
 assignments or execute a path/command from a Notion field. A separate coordinator
 adapter may write under First Mate authority as described below. No First Mate patch or spawn CLI
@@ -66,7 +66,9 @@ invalid entry invalidates the record; no subset becomes authoritative.
 
 ## Classification
 
-All configured source cards participate before any display filter. Only a fresh,
+The table below covers Notion declarations. For native Jira dispatch links, see
+[the worker-link report](#slice-b-backfill-and-deterministic-mismatch-report).
+All configured Notion cards participate before any display filter. Only a fresh,
 complete home snapshot establishes a currently observed match. Notion reads must
 be current with complete card pagination; an unrelated truncated Parent/Sub-item
 relation can suppress absence checks without invalidating a fully read positive
@@ -191,9 +193,10 @@ existing token; it does not create one. Keep tokens and report artifacts private
 An unavailable source is a successful report containing unknown coverage; a CLI
 transport/authentication/configuration argument failure exits nonzero.
 
-The report reads configured fleet snapshots and the Notion board. When native
-[TSW Jira work mode](features/jira-work.md#private-server-configuration) is
-configured, it also looks up the exact TSW targets declared in those snapshots.
+The report reads configured fleet snapshots and the Notion board in parallel.
+When native [TSW Jira work mode](features/jira-work.md#private-server-configuration)
+is configured, it waits for the fleet snapshots before looking up their declared
+TSW targets by exact key.
 The synthetic Jira pilot is excluded. A matching issue in the open-work scope
 with fresh, complete Jira and home observations and an exact operational worker
 identity can enter `already confirmed`. Resolved targets use the canonical Jira
