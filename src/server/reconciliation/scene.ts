@@ -114,13 +114,15 @@ function expectation(card: SourceCard, now: number): Pick<SceneCard, 'expectatio
     !Number.isFinite(checkpointTime) ? 'unknown' : checkpointTime < now ? 'overdue' : 'upcoming' }
   const common = { nextAction: wait ?? word(card, 'Delegated To'), checkpoint }
   // Owner is a select in the observed board, not an inferred name in a title.
-  if (owner && owner.toLowerCase() !== 'firstmate') return { ...common, expectation: 'outside', expectationReason: `Owner ${owner} is outside the integrated First Mate execution scope` }
+  const inScope = owner?.toLowerCase() === 'firstmate' ||
+    (!!tswCardKey(card) && !!owner && /^(?:hulk|firstmate\s+\S.*)$/i.test(owner))
+  if (owner && !inScope) return { ...common, expectation: 'outside', expectationReason: `Owner ${owner} is outside the integrated First Mate execution scope` }
   if (!owner || !status) return { ...common, expectation: 'unknown', expectationReason: 'Owner or status is missing' }
   if (wait || ['backlog', 'todo', 'queued', 'planned', 'waiting for', 'ready for review', 'done', 'archived', 'spare tokens'].includes(status) ||
     (start && Number.isFinite(Date.parse(start)) && Date.parse(start) > now)) {
     return { ...common, expectation: 'wait-planned', expectationReason: wait ? `Waiting For: ${wait}` : `Status ${word(card, 'Status')}${start ? `; Start Date ${start}` : ''}; no worker required now` }
   }
-  if (status === 'in progress') return { ...common, expectation: 'expected-now', expectationReason: `${card.source?.provider === 'jira' || isJiraCard(card.id) ? 'Jira' : 'Notion'} Owner Firstmate and Status In Progress, without a published wait or future start` }
+  if (status === 'in progress') return { ...common, expectation: 'expected-now', expectationReason: `${card.source?.provider === 'jira' || isJiraCard(card.id) ? 'Jira' : 'Notion'} Owner ${owner} and Status In Progress, without a published wait or future start` }
   return { ...common, expectation: 'unknown', expectationReason: `Status ${word(card, 'Status')} has no execution expectation rule` }
 }
 

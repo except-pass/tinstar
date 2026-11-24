@@ -715,7 +715,12 @@ const tswTask = (key: string, detail = '', yolo = 'off', overrides: Record<strin
   ...overrides,
 })
 
-it.each(['Firstmate', 'Hulk'])('reports a live dispatch for a self or mate-owned TSW issue (%s) before indexing', async owner => {
+it.each([
+  { owner: 'Firstmate', outside: false },
+  { owner: 'Hulk', outside: false },
+  { owner: 'Firstmate cmsh', outside: false },
+  { owner: 'Avery', outside: true },
+])('reports a live TSW dispatch with owner $owner before indexing', async ({ owner, outside }) => {
   const f = await fixture(tswProjectId)
   const key = 'TSW-987654321', id = '987654321', home = '/fixture/crew'
   f.issues.set(id, f.make(id, key, tswProjectId, { status: { name: 'In Progress' }, [config.fields.owner]: { value: owner } }))
@@ -732,6 +737,7 @@ it.each(['Firstmate', 'Hulk'])('reports a live dispatch for a self or mate-owned
   expect(report.homes[0].tiers['already confirmed']).toMatchObject([{ task_id: `task-${key}`, cardIds: [expect.stringMatching(new RegExp(`:${id}$`))] }])
   expect(report.findings).not.toContainEqual(expect.objectContaining({ detector: 'invalid-dispatch-card' }))
   expect(report.findings).not.toContainEqual(expect.objectContaining({ detector: 'historical-link' }))
+  expect(report.findings.some((finding: { detector: string }) => finding.detector === 'outside-coverage')).toBe(outside)
   expect(report.merges).toEqual([])
   expect(JSON.stringify(report)).not.toContain(unrelated)
 })
