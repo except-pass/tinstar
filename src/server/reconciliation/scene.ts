@@ -285,7 +285,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     const spawnEvidence = fresh(source) && homeObserved &&
       (matches.length > 1 || matches.some(e => e.identity.spawn_gen && e.identity.spawn_gen !== link.first_observed_spawn_gen))
     const conflict = duplicatePrimary || spawnEvidence
-    const historical = card.source.archived || card.source.in_trash || card.expectation === 'outside' ||
+    const historical = card.source.archived || card.source.in_trash || (!dispatchSources && card.expectation === 'outside') ||
       ['done', 'archived'].includes(word(card.source, 'Status')?.toLowerCase() ?? '')
     const identity = { fm_home: link.fm_home, task_id: link.task_id, spawn_gen: link.first_observed_spawn_gen }
     // A declaration with no observed worker remains visible in diagnostics; it

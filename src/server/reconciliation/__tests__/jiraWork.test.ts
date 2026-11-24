@@ -715,10 +715,10 @@ const tswTask = (key: string, detail = '', yolo = 'off', overrides: Record<strin
   ...overrides,
 })
 
-it('reports only declared TSW issues through MCP even before indexing', async () => {
+it.each(['Firstmate', 'Hulk'])('reports a live dispatch for a self or mate-owned TSW issue (%s) before indexing', async owner => {
   const f = await fixture(tswProjectId)
   const key = 'TSW-987654321', id = '987654321', home = '/fixture/crew'
-  f.issues.set(id, f.make(id, key, tswProjectId, { status: { name: 'In Progress' }, [config.fields.owner]: { value: 'Firstmate' } }))
+  f.issues.set(id, f.make(id, key, tswProjectId, { status: { name: 'In Progress' }, [config.fields.owner]: { value: owner } }))
   const unrelated = '987654322'
   f.issues.set(unrelated, f.make(unrelated, `TSW-${unrelated}`, tswProjectId, { status: { name: 'To Do' }, [config.fields.owner]: { value: 'Firstmate' } }))
   const file = join(f.root, 'worker-link-snapshot.json')
@@ -731,6 +731,7 @@ it('reports only declared TSW issues through MCP even before indexing', async ()
   expect(f.requests.map(({ path }) => path)).toEqual([`issue/${key}`, `issue/${id}`, `issue/${id}`])
   expect(report.homes[0].tiers['already confirmed']).toMatchObject([{ task_id: `task-${key}`, cardIds: [expect.stringMatching(new RegExp(`:${id}$`))] }])
   expect(report.findings).not.toContainEqual(expect.objectContaining({ detector: 'invalid-dispatch-card' }))
+  expect(report.findings).not.toContainEqual(expect.objectContaining({ detector: 'historical-link' }))
   expect(report.merges).toEqual([])
   expect(JSON.stringify(report)).not.toContain(unrelated)
 })

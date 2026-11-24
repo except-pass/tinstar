@@ -39,7 +39,7 @@ export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
 export class WorkReader {
   leases?: CardLeases
   onConfirmed?: (card: WorkCard) => void
-  private queries = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
+  private queries = new Map<string, { scope: WorkScope; includePilot: boolean; observation: CachedObservation<WorkData> }>()
   private cards = new Map<string, { until: number; value: Promise<WorkCard>; background: boolean }>()
   private known = new Map<string, { card: WorkCard; observedAt: string }>()
   mutate<T>(id: string, perform: () => Promise<T>, intent?: SourceWriteIntent, probe?: (intent: SourceWriteIntent) => Promise<'applied' | 'different' | 'unknown'>) { return this.leases ? this.leases.mutate(id, perform, intent, probe) : perform() }
@@ -62,7 +62,7 @@ export class WorkReader {
         return { observedAt: new Date().toISOString(), coverage: complete ? 'complete' : 'partial', data: { ...available[0]!,
           cards: available.flatMap(data => data.cards), hasMore: !complete, scope: 'Independent Notion and synthetic Jira sources; no sync or dual writes' } }
       }, 60_000, 120_000, 'Work source coverage incomplete', Date.now, (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
-      entry = { scope, observation }
+      entry = { scope, includePilot: !!jira, observation }
       this.queries.set(key, entry)
     } else if (!force && entry.observation.isCached()) this.api.diagnostics.cacheHits++
     return entry.observation.get(force, background)
@@ -146,12 +146,15 @@ export class WorkReader {
     this.onConfirmed?.(card)
     this.known.set(card.id, { card, observedAt: new Date().toISOString() })
     this.cards.set(card.id, { until: Date.now() + 60_000, value: Promise.resolve(card), background: false })
-    for (const [key, { scope, observation }] of this.queries) observation.updateData(data => {
-      const matches = scopeMatches(card, scope)
-      const present = data.cards.some(item => item.id === card.id)
-      if (matches === undefined && !present && this.queries.get(key)?.observation === observation) this.queries.delete(key)
-      const retain = matches === true || matches === undefined && present
-      return { ...data, cards: [...data.cards.filter(item => item.id !== card.id), ...(retain ? [card] : [])] }
-    })
+    for (const [key, { scope, includePilot, observation }] of this.queries) {
+      if (!includePilot && isJiraCard(card.id)) continue
+      observation.updateData(data => {
+        const matches = scopeMatches(card, scope)
+        const present = data.cards.some(item => item.id === card.id)
+        if (matches === undefined && !present && this.queries.get(key)?.observation === observation) this.queries.delete(key)
+        const retain = matches === true || matches === undefined && present
+        return { ...data, cards: [...data.cards.filter(item => item.id !== card.id), ...(retain ? [card] : [])] }
+      })
+    }
   }
 }
