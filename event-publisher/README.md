@@ -81,9 +81,10 @@ events sources
 ```
 
 `--after` is exclusive. A watch without it starts at the current journal tip.
-Watch and replay both accept the same filters. The text view marks replayed and
-First Mate fixture events. In JSON mode the First Mate event's `source.mode` identifies live and fixture
-data. Replay notices go to stderr so the JSON payloads stay identical.
+Watch and replay both accept the same filters. The text view marks replays,
+First Mate fixture events, and controlled migration receipts. In JSON mode,
+`source.mode` identifies live and fixture data for First Mate and routing.
+Replay notices go to stderr so the JSON payloads stay identical.
 
 ## Receive Jira ticket changes
 
@@ -188,7 +189,9 @@ the next receipt's old route. Backfill missing receipts to restore coverage.
 Use the existing service account's journal access.
 
 The following receipt is a controlled example. Save it as `receipt.json` and
-use a separate private journal selected explicitly with `--db` for the example.
+use a separate private journal selected explicitly with `--db`. The recorder
+rejects controlled receipts for the default journal, the journal configured by
+`EVENTS_DB`, or a journal with registered live First Mate or Jira sources.
 
 ```json
 {
@@ -217,17 +220,19 @@ credentials.
 
 ### Exclude replayed routing timestamps from metrics
 
-The twice-weekly routing report uses the external ledger at
-`/srv/fleet-ledger/routing/routing.jsonl`. The report must pass its ledger rows
-as JSON Lines through `routing-metrics-input` and use stdout before selecting
-first-ready observations or calculating any metric. The filter needs
-`observation_id`, `mate_id`, `route.machine`, `route.runtime`, `route.provider`,
-and `occurred_at` (the original timestamp for the metric, with a timezone).
-Rows can carry additional report fields.
+After merge, First Mate wires the external twice-weekly report to pass rows
+from `/srv/fleet-ledger/routing/routing.jsonl` through `routing-metrics-input`
+and use stdout before selecting first-ready observations or calculating any
+metric. For route matching, supply `observation_id`, `mate_id`,
+`route.machine`, `route.runtime`, `route.provider`, and `occurred_at`
+(the original timestamp for the metric, with a timezone). Rows can carry
+additional report fields.
 
 ```sh
 events routing-metrics-input < /srv/fleet-ledger/routing/routing.jsonl
 ```
+
+For the controlled example, save these rows as `routing-observations.jsonl`.
 
 ```json
 {"observation_id":"controlled-ready-replay","mate_id":"controlled-hulk-worker","route":{"machine":"Hulk","runtime":"Codex","provider":"OpenAI"},"occurred_at":"2026-11-23T19:33:59Z"}
@@ -247,10 +252,12 @@ unsupported and should be recorded at distinct instants. The
 first old route is active before the first cutover, and each destination is
 active from its cutover until the next one when that receipt's old route
 matches the destination. A mismatch after ordering leaves the span from the
-earlier cutover up to the later cutover uncovered. The filter excludes every row for that mate
-whose original timestamp falls in the span, regardless of route, and names
-both receipts in the stderr warning. Outside uncovered spans, a timestamp in
-any visit to the exact route passes through. A timestamp outside every visit
+earlier cutover up to the later cutover uncovered. The filter excludes every
+row for that mate whose original timestamp falls in the span and names
+both receipts in the stderr warning. Gap detection requires only a valid mate
+ID and timestamp. The warning includes the observation ID when valid.
+Outside uncovered spans, a timestamp in any visit to the exact route passes
+through. A timestamp outside every visit
 to a known route is warned about and excluded. Rows with unknown routes or
 insufficient attribution pass through for the report's existing handling.
 Blank lines are ignored. Invalid JSON produces a warning with its line number
@@ -281,7 +288,8 @@ the next scheduled pass.
   configured home ID. The collector disables the fleet snapshot's
   remote-summary cache and the crew-state forge fallback.
   Worker state comes from the reconciler embedded in the fleet snapshot.
-- `events sources` reports the last attempt and the last accepted inventory.
+- For First Mate sources, `events sources` reports the last attempt and the
+  last accepted inventory.
   The `pr_links_unobserved` count reports missing PR coverage for accepted
   task rows even when no event is emitted. Each home uses one fleet snapshot
   per pass for worker state and PR link coverage. A fresh fleet response
@@ -347,8 +355,8 @@ event. Task field-change events can carry the PR coverage in their evidence.
 
 Each home's collection pass commits its accepted snapshots and their events
 in one SQLite transaction.
-An event's `sequence` is the local journal cursor and `observation.batch_id`
-groups changes witnessed by the same read. Worker and PR link events from the
+An event's `sequence` is the local journal cursor. For snapshot observations,
+`observation.batch_id` groups changes witnessed by the same read. Worker and PR link events from the
 same fleet response share a batch ID. Task inventory events have a separate
 batch ID. `occurred_at` is null for a snapshot diff. `observed_between`
 gives conservative bounds from the start of the prior saved observation,
