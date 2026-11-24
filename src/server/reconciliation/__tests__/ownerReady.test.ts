@@ -18,6 +18,7 @@ import { authorizePrReadGrant } from '../prReadGrant'
 import { mergePublication, readyHeadPublication } from '../ownerRequestEvidence'
 import { verifyOwnerMerges } from '../ownerReady'
 import { releasePull } from '../../../shared/pullIdentity'
+import { NotionApi } from '../notionApi'
 import { SceneReconciler } from '../scene'
 import { QueuePullReader } from '../queuePulls'
 import { PullReader } from '../../pulls/reader'
@@ -461,4 +462,44 @@ it('retains explicit closure when another associated PR summary fails', async ()
   verifyOwnerMerges(read, { pulls: [], closedPulls: repo!.closedPulls, repositories: [repo!.coverage],
     warnings: [], associationsComplete: true }, new Map())
   expect(read.repositories[0]?.merges).toMatchObject([{ url: moving, live: { state: 'unverified' } }])
+})
+
+it('rotates five owner histories beyond the ordinary twenty without displacing queue history', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tinstar-owner-history-'))
+  try {
+    const snapshot = fixtureSources({ size: 26 })
+    snapshot.fleet = []
+    const board = snapshot.intentions.data!
+    board.cards = board.cards.slice(-26)
+    for (const card of board.cards) {
+      card.properties.Status!.value = 'In Progress'
+      card.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Decision'], hasMore: false }
+    }
+    const historyReads: string[] = []
+    const fetcher: typeof fetch = async input => {
+      const url = new URL(String(input))
+      if (url.pathname !== '/v1/comments') throw new Error('Unexpected fixture request')
+      const id = url.searchParams.get('block_id')!
+      historyReads.push(id)
+      return Response.json({ has_more: false, results: [{
+        id, rich_text: [{ plain_text: `Tin Star request: {"id":"${id}","action":"Decision"}\nRequested from: Will\nQuestion: Review ${id}?` }],
+      }] })
+    }
+    const sources = new ReconciliationSources({ fleet: [], warnings: [], notion: { dataSourceId: board.dataSourceId, token: 'fixture' } },
+      fetcher, new NotionApi(fetcher, 0), root)
+    vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+    await sources.queue(undefined, undefined, true, 'read')
+    const ordinary = historyReads.splice(0)
+    expect(ordinary).toHaveLength(20)
+    const remaining = board.cards.map(card => card.id).filter(id => !ordinary.includes(id))
+    expect(remaining).toHaveLength(6)
+    const first = await sources.queue(undefined, undefined, true, 'read', true)
+    expect(historyReads.splice(0)).toEqual([...ordinary, ...remaining.slice(0, 5)])
+    const lastQuestion = `Review ${remaining[5]}?`
+    const questions = (result: typeof first) => result.ownerReady?.repositories.flatMap(group => group.decisions.map(decision => decision.question))
+    expect(questions(first)).not.toContain(lastQuestion)
+    const next = await sources.queue(undefined, undefined, true, 'read', true)
+    expect(historyReads).toEqual([...ordinary, remaining[5], ...remaining.slice(0, 4)])
+    expect(questions(next)).toContain(lastQuestion)
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
