@@ -206,22 +206,23 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     let coordinatorStatus = 'In Progress'
     let coordinatorAssignee: string | null = null
     const coordinatorHistory: Array<{ field: 'status' | 'assignee'; from: string | null; to: string; byService: boolean; occurredAt: number; entryId: string }> = []
+    const coordinatorCard = () => ({
+      id: 'fixture:10', issue_id: '10', key: 'TSW-10', url: `${jiraSite}/browse/TSW-10`,
+      project_id: project, issue_type: 'Task', name: 'Fixture delivery', status: coordinatorStatus,
+      updated_at: generated, owner: 'Firstmate mate-a', assignee: coordinatorAssignee && 'William Gathright', assignee_id: coordinatorAssignee,
+      description: '', links: [], decision_questions: [], decision_text: questions, blocker: null,
+    })
     const edit = vi.fn(async (input: { note?: string }, actor: string) => {
       if (!input.note) throw new Error('Expected a coordinator merge note')
       comments.get('10')!.unshift({ id: '21', author: { accountId: 'fixture-service' }, body: `${input.note}\n\nRecorded via Tin Star (${actor})`, created: '2026-11-23T12:00:00Z' })
       coordinatorHistory.push({ field: 'assignee', from: coordinatorAssignee, to: 'fixture-will', byService: true, occurredAt: Date.now(), entryId: '1' })
       coordinatorAssignee = 'fixture-will'
-      return { outcome: 'saved' }
+      return { outcome: 'saved' as const, code: 'confirmed', card: coordinatorCard() }
     })
     const sync = async () => runTswStatusSync(await sources.fleetSnapshot(true), {
       apply: true, maxCards: 1, stateFile: join(root, 'status-checkpoint.json'), audit: async () => {},
       jira: {
-        readTswCard: async () => ({
-          id: 'fixture:10', issue_id: '10', key: 'TSW-10', url: `${jiraSite}/browse/TSW-10`,
-          project_id: project, issue_type: 'Task', name: 'Fixture delivery', status: coordinatorStatus,
-          updated_at: generated, owner: 'Firstmate mate-a', assignee: coordinatorAssignee && 'William Gathright', assignee_id: coordinatorAssignee,
-          description: '', links: [], decision_questions: [], decision_text: questions, blocker: null,
-        }),
+        readTswCard: async () => coordinatorCard(),
         statusHistory: async (_id, after) => ({
           cursor: { total: coordinatorHistory.length, last: coordinatorHistory.at(-1)?.entryId ?? null },
           changes: coordinatorHistory.slice(after?.total ?? 0),
@@ -235,7 +236,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
         transition: async () => {
           coordinatorHistory.push({ field: 'status', from: coordinatorStatus, to: 'Ready for Review', byService: true, occurredAt: Date.now(), entryId: '2' })
           coordinatorStatus = 'Ready for Review'
-          return { outcome: 'saved' }
+          return { outcome: 'saved', code: 'confirmed', card: coordinatorCard() }
         },
         repairTransitionAudit: vi.fn(),
       },
