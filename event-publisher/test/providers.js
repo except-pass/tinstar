@@ -478,7 +478,7 @@ test('deployment parser projects synthetic audit receipts and a failure marker',
   const events = parseFloorAudit(audit + audit, { target, failureMarker })
   deepEqual(events.map(event => event.event_type), [
     'deployment.started', 'deployment.smoke_passed', 'deployment.smoke_passed',
-    'deployment.started', 'deployment.gate_failed', 'deployment.block_clear_requested',
+    'deployment.started', 'deployment.gate_failed',
     'deployment.smoke_passed',
   ])
   equal(events[0].id, events[1].id)
@@ -489,11 +489,7 @@ test('deployment parser projects synthetic audit receipts and a failure marker',
   equal(events[4].fields.phase, 'post-deploy-smoke')
   equal(events[4].fields.native_deployment_id, null)
   equal(events[4].occurredAt, '2026-01-01T00:03:00.000Z')
-  deepEqual(events[5].fields, {
-    environment: 'floor', revision: null, lifecycle: 'block_clear_requested', native_deployment_id: null,
-  })
-  equal(events[5].occurredAt, '2026-01-01T00:05:00.000Z')
-  equal(events[3].id, events[6].id)
+  equal(events[3].id, events[5].id)
   const smokeOnly = audit.split('\n')[1]
   deepEqual(parseFloorAudit(smokeOnly, { target }).map(event => event.event_type), ['deployment.smoke_passed'])
   const override = JSON.stringify({ action: 'override', gate: 'block', head: revision, time: at(0) })

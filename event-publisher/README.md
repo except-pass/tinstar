@@ -169,10 +169,9 @@ the publisher has no read-only reader there. The audit path is
 Run from the repository root. The parser reads synthetic audit JSONL and the
 separate failure marker format. It emits `deployment.started` for deployment
 receipts, `deployment.smoke_passed` for passing smoke, `deployment.gate_failed`
-with the phase and revision from the failure marker, and
-`deployment.block_clear_requested` for audited clear requests. A passing smoke
-can come from a check-only run, so the audit cannot establish deployment
-completion. Every replayed event is labeled `fixture`.
+with the phase and revision from the failure marker. A passing smoke can come
+from a check-only run, so the audit cannot establish deployment completion.
+Every replayed event is labeled `fixture`.
 
 ```sh
 fixture_dir=$(mktemp -d)

@@ -196,8 +196,7 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
     counts.linked = attempted.size + counts.deferred
     const taskSources = journal.sources().filter(source =>
       source.source_id.startsWith('firstmate:home:') && source.type === 'task' && source.mode === 'live' && source.health !== 'deconfigured')
-    const discoveryIncomplete = taskSources.filter(source =>
-      source.health !== 'ok' || source.counts?.pr_links_unobserved || source.counts?.fleet_backlog_absent).length
+    const discoveryIncomplete = taskSources.filter(source => source.health !== 'ok' || source.counts?.pr_links_unobserved).length
     if (discoveryIncomplete) {
       counts.task_sources_incomplete = discoveryIncomplete
       reason ??= 'verified PR link discovery incomplete'

@@ -27,7 +27,7 @@ export function parseFloorAudit(jsonl, { target, failureMarker = '' }) {
   function add(time, lifecycle, action, revision, nativeId, extra = {}) {
     const occurredAt = auditTime(time)
     if (!occurredAt) return
-    const id = `deployment:${encodeURIComponent(target)}:${nativeId ?? revision ?? 'block'}`
+    const id = `deployment:${encodeURIComponent(target)}:${nativeId ?? revision}`
     const event_type = `deployment.${lifecycle}`
     const key = JSON.stringify([id, event_type, occurredAt])
     if (observations.has(key)) return
@@ -45,15 +45,13 @@ export function parseFloorAudit(jsonl, { target, failureMarker = '' }) {
     } catch {
       continue
     }
-    const { action, time, newSha, gate } = row ?? {}
+    const { action, time, newSha } = row ?? {}
     if (action === 'floor-deployment' && typeof newSha === 'string' &&
         shaPattern.test(newSha) && row.id === `floor:${newSha}`) {
       add(time, 'started', action, newSha, row.id)
     } else if (action === 'floor-smoke' && row.passed === true && typeof newSha === 'string' &&
         shaPattern.test(newSha) && row.deploymentId === `floor:${newSha}`) {
       add(time, 'smoke_passed', action, newSha, row.deploymentId)
-    } else if (gate === 'block' && action === 'clear-block') {
-      add(time, 'block_clear_requested', action, null, null)
     }
   }
 
