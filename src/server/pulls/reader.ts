@@ -28,7 +28,7 @@ export class PullReader {
   private identityCache?: { until: number; data: PullActor }
   private identityPending?: Promise<PullActor>
   constructor(private read = githubJson, private now = Date.now, private readiness = new QueuePullReader()) {}
-  readinessFor(urls: string[]) { return this.readiness.get(urls) }
+  readinessFor(...args: Parameters<QueuePullReader['get']>) { return this.readiness.get(...args) }
   async identity(): Promise<PullActor> {
     if (this.identityCache && this.identityCache.until > this.now()) return this.identityCache.data
     if (!this.identityPending) this.identityPending = (async () => {
@@ -50,7 +50,7 @@ export class PullReader {
     })().finally(() => { this.identityPending = undefined })
     return this.identityPending
   }
-  async inventory(repositories: string[], scope: PullScope) {
+  async inventory(repositories: string[], scope: PullScope, force = false) {
     const result: RepoRead[] = []
     for (let index = 0; index < repositories.length; index += 4) {
       result.push(...await Promise.all(repositories.slice(index, index + 4).map(repository => {
@@ -59,7 +59,7 @@ export class PullReader {
         // Never reuse a broader inventory after identity or explicit links change.
         const key = JSON.stringify([repository, scope.account, owned, owned ? [] : [...new Set(associated.map(pull => pull.number))].sort((a, b) => a - b)])
         const cached = this.repos.get(key)
-        if (cached && cached.until > this.now()) return cached.data
+        if (!force && cached && cached.until > this.now()) return cached.data
         let pending = this.pending.get(key)
         if (!pending) { pending = this.refresh(repository, key, owned, scope.account, associated).finally(() => this.pending.delete(key)); this.pending.set(key, pending) }
         return pending

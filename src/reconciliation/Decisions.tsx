@@ -21,6 +21,7 @@ import { useWorkSave, WorkActions } from './WorkActions'
 import { WorkerNotes, ResponseRetry } from '../cockpit/shell/present'
 import { findLinkedWorker, homeName } from '../cockpit/overviewQuery'
 import { requestAnchor } from '../shared/deskSource'
+import { OwnerReady } from './OwnerReady'
 import './decisions.css'
 import '../ask/ask-actions.css'
 
@@ -174,6 +175,7 @@ export function Decisions() {
         <div className="decisions-queue-title"><strong>Decision queue</strong><span>{visible.length} shown</span></div>
         <label className="decisions-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="Search decisions" value={query} onChange={event => { interaction.current++; setExpiredFlash(state.flash?.until ?? null); setQuery(event.target.value) }} placeholder="Find a decision…" /></label>
       </div><div className="decisions-list" ref={list} aria-label="Decision requests">
+        {queue?.ownerReady && <OwnerReady read={queue.ownerReady} />}
         {!queue && !queueError && <p role="status">Reading decision sources…</p>}
         {!queue && queueError && <p role="status">Decision sources are unavailable.</p>}
         {queue && !visible.length && <p role="status">{unavailable || incomplete ? 'No matching requests in available records. Some evidence needs verification.' : query ? 'No matching requests.' : 'No decisions in the current queue.'}</p>}

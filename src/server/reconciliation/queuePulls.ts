@@ -46,13 +46,15 @@ export async function readGithubScalars(path: string, projection: string, onStar
   return await githubCliJson(path, projection, { timeout: 5_000, maxBuffer: 64 * 1024 }, true, onStart) as Record<string, unknown>
 }
 
-async function readPull(url: string, read = readGithubScalars): Promise<Omit<PullReadiness, 'status' | 'observedAt' | 'expiresAt'>> {
+async function readPull(url: string, read = readGithubScalars, expectedHead?: string): Promise<Omit<PullReadiness, 'status' | 'observedAt' | 'expiresAt'>> {
   const pull = parsePullUrl(url)
   if (!pull) throw new Error('Unsupported PR URL')
   const info = await read(pull.apiPath, '{state,merged,draft,head:.head.sha,mergeable,mergeable_state}')
   if (!['open', 'closed'].includes(String(info.state)) || typeof info.merged !== 'boolean' || typeof info.draft !== 'boolean' || !/^[a-f0-9]{40,64}$/.test(String(info.head))) throw new Error('Incomplete PR response')
   const state = info.merged ? 'merged' : info.state as 'open' | 'closed'
-  if (state !== 'open') return { state, head: String(info.head), draft: info.draft, checks: 'unknown', mergeability: 'unknown' }
+  if (state !== 'open' || expectedHead && info.head !== expectedHead) {
+    return { state, head: String(info.head), draft: info.draft, checks: 'unknown', mergeability: 'unknown' }
+  }
   const headPath = `/repos/${pull.repository}/commits/${info.head}`
   const [checks, statuses] = await Promise.all([
     read(`${headPath}/check-runs?per_page=100`, '{total:.total_count,returned:(.check_runs|length),pending:([.check_runs[]|select(.status!="completed")]|length),failed:([.check_runs[]|select(.status=="completed" and (.conclusion!="success" and .conclusion!="neutral" and .conclusion!="skipped"))]|length)}'),
@@ -72,15 +74,17 @@ async function readPull(url: string, read = readGithubScalars): Promise<Omit<Pul
 /** Demand-driven cache; at most four PRs (12 GETs) per refresh, no retries/poller.
  * Missing CLI/auth/access is an unknown observation, never permission to merge.
  */
+export const queuePullReadBudget = 4
+
 export class QueuePullReader {
   private cache = new Map<string, { value: PullReadiness; retryAt: number }>()
   private pending = new Map<string, Promise<PullReadiness>>()
   private cursor = 0
   constructor(private readonly read = readGithubScalars, private readonly now = Date.now) {}
 
-  async get(urls: string[]): Promise<Map<string, PullReadiness>> {
+  async get(urls: string[], options?: { force?: boolean; expectedHeads?: ReadonlyMap<string, string>; readBudget?: number }): Promise<Map<string, PullReadiness>> {
     const result = new Map<string, PullReadiness>()
-    let budget = 4
+    let budget = options?.readBudget ?? queuePullReadBudget
     const work: Promise<void>[] = []
     const candidates = [...new Set(urls)].filter(url => parsePullUrl(url))
     const start = this.cursor % candidates.length
@@ -89,14 +93,14 @@ export class QueuePullReader {
       const url = candidates[index]!
       const cached = this.cache.get(url)
       let pending = this.pending.get(url)
-      if (!pending && (!cached || this.now() >= cached.retryAt) && budget > 0 && this.pending.size < 4) {
+      if (!pending && (options?.force || !cached || this.now() >= cached.retryAt) && budget > 0 && this.pending.size < queuePullReadBudget) {
         budget--
         this.cursor = (index + 1) % candidates.length
-        pending = this.refresh(url).finally(() => { this.pending.delete(url) })
+        pending = this.refresh(url, options?.expectedHeads?.get(url)).finally(() => { this.pending.delete(url) })
         this.pending.set(url, pending)
       }
       if (pending) work.push(pending.then(value => { result.set(url, this.age(value)) }))
-      else if (cached) result.set(url, this.age(cached.value))
+      else if (cached && !options?.force) result.set(url, this.age(cached.value))
     }
     await Promise.all(work)
     return result
@@ -106,10 +110,10 @@ export class QueuePullReader {
     return value.expiresAt && this.now() >= Date.parse(value.expiresAt) ? { ...value, status: 'stale' } : value
   }
 
-  private async refresh(url: string): Promise<PullReadiness> {
+  private async refresh(url: string, expectedHead?: string): Promise<PullReadiness> {
     let value: PullReadiness
     try {
-      const result = await readPull(url, this.read)
+      const result = await readPull(url, this.read, expectedHead)
       const observedAt = new Date(this.now()).toISOString()
       value = { ...result, status: 'fresh', observedAt, expiresAt: new Date(this.now() + 60_000).toISOString() }
     } catch {

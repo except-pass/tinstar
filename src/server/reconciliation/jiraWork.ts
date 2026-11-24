@@ -6,6 +6,8 @@ import { isDeepStrictEqual } from 'node:util'
 import { acquireLock } from '../infra/lock'
 import type { JiraWorkConfig } from './config'
 import { adfText, JiraAttachmentPreflightError, JiraClient, JiraWriteError, jiraText, type JiraSection } from './jira'
+import { CachedObservation, retainMissing } from './observation'
+import { mergePublication, repositoryPublication } from './ownerRequestEvidence'
 import {
   checkJiraTransition, editJiraDecisions, formatJiraDecisions, jiraTransitionDestination, jiraWorkIdentity, JiraWorkInputError, readJiraDecisions,
   type JiraCreate, type JiraEdit, type JiraExternalBlocker, type JiraLink, type JiraTransition,
@@ -17,6 +19,17 @@ import type { WorkCard } from './workReader'
 const createProperty = 'tinstar.work.create'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 const nativeId = (id: unknown): id is string => typeof id === 'string' && /^[1-9]\d*$/.test(id)
+const reviewStatus = 'Ready for Review'
+type OwnerIssue = {
+  id: string; key: string; url: string; repository: string | null
+  decisions: ReturnType<typeof readJiraDecisions>
+  reviewAssigned: boolean
+  merges: Array<NonNullable<ReturnType<typeof mergePublication>> & { comment: string }>
+  notesUnavailable?: boolean
+  warning?: string
+}
+type ReviewChange = { fieldId?: string; field?: string; fromString?: string; toString?: string }
+
 function text(value: unknown, unsupported: true | 'omit' = true) {
   if (typeof value === 'string') return value
   return adfText(value, unsupported)
@@ -51,6 +64,12 @@ type BeforeWrite = (current: JiraWorkCard) => void
 export class JiraWork extends JiraClient {
   private readonly receipts: CreationReceipts
   private readonly site: string
+  readonly ownerRequests = new CachedObservation(() => this.readOwnerRequests(), 20_000, 60_000,
+    'Jira owner requests unavailable; retained records require verification.', Date.now, (previous: OwnerIssue[], current: OwnerIssue[]) =>
+      retainMissing(previous, current, issue => issue.id), (previous, current) => {
+    const known = new Map(previous?.map(issue => [issue.id, issue]))
+    return current.map(issue => issue.notesUnavailable ? { ...issue, merges: known.get(issue.id)?.merges ?? [] } : issue)
+  })
   constructor(private readonly config: JiraWorkConfig, private readonly root: string, fetcher?: (input: string, init?: RequestInit) => Promise<Response>) {
     super(`https://api.atlassian.com/ex/jira/${config.cloudId}`, `Bearer ${config.token}`, fetcher)
     this.site = new URL(config.url).hostname
@@ -145,6 +164,92 @@ export class JiraWork extends JiraClient {
     return { comments: body.comments.map((comment: Record<string, any>) => ({
       id: comment.id, body: comment.visibility == null ? text(comment.body) : undefined, created_at: comment.created, updated_at: comment.updated, author_id: comment.author?.accountId,
     })), total: body.total as number }
+  }
+
+  /** A review note can precede the move into review. Exclude notes from before
+   * the last exit from review so a new review cycle cannot revive an old ask. */
+  private async previousReviewExit(issueId: string, signal: AbortSignal) {
+    let after = -Infinity
+    let offset = 0
+    for (let page = 0; page < 5; page++) {
+      const history = await this.request(`issue/${issueId}/changelog?startAt=${offset}&maxResults=100`, 'GET', undefined, signal)
+      if (history.startAt !== offset || !Number.isSafeInteger(history.total) || !Array.isArray(history.values)) throw new Error('Incomplete Jira review history')
+      for (const row of history.values) {
+        if (!Array.isArray(row.items)) throw new Error('Incomplete Jira review history')
+        if (row.items.some((item: ReviewChange) => (item.fieldId ?? item.field) === 'status' &&
+            item.fromString === reviewStatus && item.toString !== reviewStatus)) {
+          if (!Number.isFinite(Date.parse(row.created))) throw new Error('Jira review history has no timestamp')
+          after = Math.max(after, Date.parse(row.created))
+        }
+      }
+      offset += history.values.length
+      if (offset >= history.total) return after
+      if (!history.values.length) break
+    }
+    throw new Error('Jira review history exceeds the read budget')
+  }
+
+  private async readOwnerRequests() {
+    const signal = AbortSignal.timeout(12_000)
+    const issues = new Map<string, OwnerIssue>()
+    const decisions = this.config.fields.decisions
+    const jql = `project = ${this.config.projectId} AND status NOT IN (Done, Canceled) AND (cf[${decisions.slice('customfield_'.length)}] IS NOT EMPTY OR status = "${reviewStatus}") ORDER BY id`
+    const fields = ['project', 'status', 'assignee', 'description', decisions]
+    const cursors = new Set<string>()
+    let nextPageToken: string | undefined, last = false
+    for (let page = 0; page < 10 && !last; page++) {
+      try {
+        const body = await this.request('search/jql', 'POST', { jql, maxResults: 100, fields, ...(nextPageToken ? { nextPageToken } : {}) }, signal)
+        if (!Array.isArray(body.issues) || typeof body.isLast !== 'boolean') throw new Error('Incomplete Jira owner census')
+        for (const raw of body.issues) {
+          const f = raw.fields
+          if (!nativeId(raw.id) || !/^[A-Z][A-Z0-9_]*-[1-9]\d*$/.test(raw.key) || f?.project?.id !== this.config.projectId ||
+              typeof f.status?.name !== 'string' || !Object.hasOwn(f, decisions) || !Object.hasOwn(f, 'assignee')) {
+            throw new Error('Jira search did not confirm issue identity, project and request fields')
+          }
+          if (['Done', 'Canceled'].includes(f.status.name)) continue
+          const issue: OwnerIssue = { id: this.qualified(raw.id), key: raw.key, url: `${this.config.url}/browse/${raw.key}`,
+            repository: repositoryPublication(text(f.description)), decisions: [], merges: [],
+            // Matches the native assignee used by the TSW status coordinator.
+            reviewAssigned: f.status.name === reviewStatus && f.assignee?.displayName === 'William Gathright' && !!f.assignee?.accountId && f.assignee.active !== false }
+          try { issue.decisions = readJiraDecisions(text(f[decisions])).filter(item => item.answer === undefined) }
+          catch { issue.warning = 'Decision Questions could not be read.' }
+          issues.set(raw.id, issue)
+        }
+        last = body.isLast
+        if (!last) {
+          if (typeof body.nextPageToken !== 'string' || cursors.has(body.nextPageToken)) throw new Error('Invalid Jira search cursor')
+          nextPageToken = body.nextPageToken
+          cursors.add(body.nextPageToken)
+        }
+      } catch (error) {
+        if (!issues.size) throw error
+        break
+      }
+    }
+    const reviews = [...issues].filter(([, issue]) => issue.reviewAssigned)
+    for (let offset = 0; offset < reviews.length; offset += 4) {
+      await Promise.all(reviews.slice(offset, offset + 4).map(async ([id, issue]) => {
+        try {
+          signal.throwIfAborted()
+          const [notes, after] = await Promise.all([this.notes(id), this.previousReviewExit(id, signal)])
+          const merges = new Map<string, OwnerIssue['merges'][number]>()
+          for (const note of notes.comments) {
+            if (!nativeId(note.id) || !note.body || !(Date.parse(note.created_at) > after)) continue
+            for (const line of note.body.split(/\r?\n/)) {
+              const pull = mergePublication(line, true)
+              if (pull && !merges.has(pull.id)) merges.set(pull.id, { ...pull, comment: note.id })
+            }
+          }
+          issue.merges = [...merges.values()]
+          if (notes.total > notes.comments.length) issue.warning = [issue.warning, 'Only the latest 50 comments were inspected.'].filter(Boolean).join(' ')
+        } catch {
+          issue.notesUnavailable = true
+          issue.warning = [issue.warning, 'Current merge notes or review history could not be verified.'].filter(Boolean).join(' ')
+        }
+      }))
+    }
+    return { observedAt: new Date().toISOString(), coverage: last ? 'complete' as const : 'partial' as const, data: [...issues.values()] }
   }
 
   async get(cardId: string, details: boolean) {
