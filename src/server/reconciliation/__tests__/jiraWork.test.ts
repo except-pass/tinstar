@@ -86,7 +86,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const search = { directoryUnavailable: false, pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
+  const search = { directoryUnavailable: false, deniedRead: '', pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
@@ -128,6 +128,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
     const method = init?.method ?? 'GET'
     const body = init?.body && !(init.body instanceof FormData) ? JSON.parse(String(init.body)) : undefined
     requests.push({ method, path, fields: url.searchParams.get('fields') })
+    if (method === 'GET' && search.deniedRead === path) return response({}, 403)
     if (controls.beforeWrite === `${method} ${path}`) {
       controls.beforeWrite = ''
       throw new Error('Process stopped before Jira received the write')
@@ -255,6 +256,11 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       return response({ id, created }, 201)
     }
     if (part === 'transitions' && method === 'GET') {
+      if (controls.beforeWrite === 'change-handoff-blocker') {
+        issue.fields[config.fields.blockerType] = { value: 'Actor' }
+        issue.fields[config.fields.blockerTarget] = 'Will'
+        issue.fields[config.fields.blockerCondition] = 'Approval needed.'
+      }
       if (controls.beforeWrite === 'change-handoff-owner') issue.fields[config.fields.owner] = { value: 'Taylor' }
       const available = controls.transitionList ?? transitions.filter(transition => jiraTransitions[transition.name][0].some(status => status === issue.fields.status.name))
       const offered = available.map(transition => ({
@@ -472,6 +478,10 @@ it('queues one Jira admin-merge handoff and lets Clawson pick up, comment and re
   expect(pickedUp).toMatchObject({ total: 1, coverage: { intentions: { status: 'fresh', coverage: 'complete' } }, records: [{ card: { source: { id: card.id } } }] })
   expect(await call('get_work', { card_id: card.id })).toMatchObject({ outcome: 'available', card: { description: card.description }, comments: [] })
   const work = { card_id: card.id }
+  const queuedIssue = f.issues.get('60001')!
+  queuedIssue.fields[config.fields.owner] = { value: 'Firstmate' }
+  expect(await call('search_work', { ...lookup, refresh: true })).toMatchObject({ total: 0, coverage: { intentions: { coverage: 'complete' } } })
+  queuedIssue.fields[config.fields.owner] = { value: 'Clawson' }
   expect(await call('transition_work', { ...work, operation_id: 'begin-fixture', verb: 'Start', evidence: 'Pickup acknowledged.' })).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
   expect(await call('update_work', { ...work, operation_id: 'report-fixture', kind: 'jira_edit', note: 'Fixture report for the requester.' })).toMatchObject({ outcome: 'saved' })
   const issue = [...f.issues.values()].find(issue => card.id.endsWith(`:${issue.id}`))!
@@ -501,6 +511,26 @@ it('rechecks an undispatched merge handoff and rejects changed fields before Fas
   expect(await sources.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'partially-saved', code: 'queue-unconfirmed' })
   expect(f.requests.some(request => request.method === 'POST' && request.path.endsWith('/transitions'))).toBe(false)
   expect(f.issues.get('60001')?.fields.status.name).toBe('Backlog')
+})
+
+it('rejects a blocker added during the Fast-track offer read', async () => {
+  const f = await fixture()
+  const { sources } = await f.connect()
+  f.controls.beforeWrite = 'change-handoff-blocker'
+  expect(await sources.workflow.createClawsonMerge(mergeSelection, mergeActor, mergePlan)).toMatchObject({ outcome: 'partially-saved', code: 'queue-unconfirmed' })
+  expect(f.requests.some(request => request.method === 'POST' && request.path.endsWith('/transitions'))).toBe(false)
+})
+
+it.each(['issue/60101', 'issue/60101/comment'])('purges cached pickup after a direct denial on %s', async path => {
+  const f = await fixture()
+  const { call } = await f.connect('Clawson')
+  const issue = f.make('60101', 'WORK-101', config.projectId, { status: { name: 'Queued' }, [config.fields.owner]: { value: 'Clawson' } })
+  f.issues.set(issue.id, issue)
+  const lookup = { owner: 'Clawson', statuses: ['Queued'] }
+  expect(await call('search_work', lookup)).toMatchObject({ total: 1 })
+  f.search.deniedRead = path
+  expect(await call('get_work', { card_id: 'jira:sample.atlassian.net:10001:60101' })).toMatchObject({ outcome: 'unavailable' })
+  expect(await call('search_work', lookup)).toMatchObject({ total: 0 })
 })
 
 it.each(['creation', 'transition'])('recovers an admin-merge handoff after losing the Jira %s response', async phase => {

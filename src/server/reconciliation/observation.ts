@@ -9,7 +9,7 @@ interface ObservationMetadata {
 
 export interface Observation<T> extends ObservationMetadata {
   data: T | null
-  sources?: Array<ObservationMetadata & { source: string }>
+  sources?: Array<ObservationMetadata & { source: string; hasMore?: boolean }>
 }
 
 export interface ReadResult<T> { data: T; observedAt: string; coverage: 'complete' | 'partial' }
@@ -39,9 +39,9 @@ export class CachedObservation<T> {
     this.changes = []
   }
 
-  updateData(change: (data: T) => T) {
+  updateData(change: (data: T) => T, includePending = true) {
     if (this.cached?.data) this.cached = { ...this.cached, data: change(this.cached.data) }
-    if (this.pending) this.changes.push(change)
+    if (includePending && this.pending) this.changes.push(change)
   }
 
   constructor(private readonly read: (background: boolean) => Promise<ReadResult<T>>, private readonly ttlMs: number,

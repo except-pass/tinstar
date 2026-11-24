@@ -17,7 +17,7 @@ export function legacyWorkObservation(value: Observation<WorkData>): Observation
     attemptedAt: value.attemptedAt, expiresAt: null, error: null }
   const { source: _source, ...metadata } = board
   return { ...metadata, data: value.data && board.observedAt
-    ? { ...value.data, cards: value.data.cards.filter(card => card.source?.synthetic !== false), hasMore: board.coverage !== 'complete' }
+    ? { ...value.data, cards: value.data.cards.filter(card => card.source?.synthetic !== false), hasMore: board.hasMore ?? board.coverage !== 'complete' }
     : null }
 }
 
@@ -77,7 +77,7 @@ export class WorkReader {
     return this.combine(scope, board, revision === this.native.accessRevision ? jira : { ...jira, data: null, status: 'unknown', coverage: 'unknown', observedAt: null, expiresAt: null })
   }
   private combine(scope: WorkScope, board: Observation<WorkData> | null, jira: Observation<WorkData>): Observation<WorkData> {
-    const sources = [...(board ? [sourceCoverage(this.config ? 'notion' : 'jira-pilot', board)] : []), sourceCoverage('jira', jira)]
+    const sources = [...(board ? [{ ...sourceCoverage(this.config ? 'notion' : 'jira-pilot', board), hasMore: board.data?.hasMore }] : []), sourceCoverage('jira', jira)]
     const complete = sources.every(source => source.status === 'fresh' && source.coverage === 'complete')
     const data = board?.data ?? jira.data
     const oldest = (key: 'observedAt' | 'expiresAt') => sources.flatMap(source => source[key] ?? []).sort()[0] ?? null
