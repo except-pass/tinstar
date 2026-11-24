@@ -238,7 +238,9 @@ function publishedSources(journal) {
     githubSource, deploymentSource,
   ]
   for (const source of defaults) {
-    if (!sources.some(current => current.type === source.type)) {
+    const present = sources.some(current => source.type === 'deployment'
+      ? current.source_id === source.source_id : current.type === source.type)
+    if (!present) {
       sources.push({ ...source, mode: null, health: 'unconnected', reason: 'observer is not configured' })
     }
   }

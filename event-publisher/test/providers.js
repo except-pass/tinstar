@@ -296,20 +296,24 @@ test('GitHub distinguishes an empty verified backlog from incomplete discovery',
   })
   equal(await observe(journal), false)
   equal(health(), 'unavailable')
-  journal.record({ source, health: 'unavailable', started_at: at(5), observed_at: at(6) })
-  equal(await observe(journal), false)
-  equal(health(), 'unavailable')
   equal(calls, 0)
+  const task = journal.sources().find(current => current.source_id === source.source_id)
+  equal(task.health, 'partial')
+  equal(task.counts.fleet_backlog_absent, 1)
   const other = { ...openHome, id: 'example-other', path: '/example/other' }
   taskLinks(journal, other, { two: [pullUrl] })
   equal(await observe(journal), false)
   equal(health(), 'partial')
   equal(calls, 2)
+  journal.record({ source, health: 'unavailable', started_at: at(5), observed_at: at(6) })
+  equal(await observe(journal), false)
+  equal(health(), 'partial')
+  equal(calls, 4)
   taskLinks(journal, openHome, { one: [pullUrl.replace('/12', '/13')] }, 10)
   taskLinks(journal, openHome, { one: [] }, 15, false)
   equal(await observe(journal), false)
   equal(health(), 'partial')
-  equal(calls, 4)
+  equal(calls, 6)
 })
 
 test('text replay identifies checks that swap outcomes with unchanged totals', async t => {
@@ -447,6 +451,22 @@ test('the GitHub configuration rejects owner-wide allowlist entries', async t =>
   await rejects(exec(cli, ['observe', '--db', path, '--config', config]), {
     stderr: /github\.repositories must list exact owner\/repo entries/,
   })
+})
+
+test('deployment status shows the local endpoint alongside other targets', async t => {
+  const path = await journalPath(t)
+  const journal = new Journal(path)
+  t.after(() => journal.close())
+  const otherSources = [
+    { ...deploymentSource, source_id: 'deployment:fixture-endpoint', mode: 'fixture' },
+    { ...deploymentSource, source_id: 'deployment:example-host:http://127.0.0.1:5281/api/deployment' },
+  ]
+  for (const source of otherSources) {
+    journal.registerSources([source])
+    const { stdout } = await exec(cli, ['sources', '--db', path])
+    ok(stdout.includes(`${deploymentSource.source_id} unconnected ·`))
+    ok(stdout.includes(`${source.source_id} [${source.mode}] pending ·`))
+  }
 })
 
 test('deployment parser projects synthetic audit receipts and a failure marker', async () => {
