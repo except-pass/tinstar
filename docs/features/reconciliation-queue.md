@@ -59,7 +59,8 @@ under **Repository unspecified**.
 
 Merge entries share the canonical repository and PR identity while the source
 records remain separately linked. The newest open Jira comment by creation time
-determines the requested head and whether checks run in Decisions and on recheck.
+determines the requested head and whether the bundle runs checks. The regular
+Decisions queue uses its existing readiness rules.
 Earlier Jira requests remain linked with their heads and are marked **Superseded**.
 Notion requests and worker notices retain their own links and heads and are
 marked **Not used for readiness**. Uncertainty about earlier Jira requests and

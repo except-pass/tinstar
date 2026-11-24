@@ -311,8 +311,14 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(queue.items).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'merge',
       evidence: expect.arrayContaining([expect.objectContaining({ kind: 'pull-request', url: moving })]) })]))
     expect(merge(queue.ownerReady!, moving)?.unverifiedRequest).toBe(true)
-    expect(schedule.mock.calls.length).toBeGreaterThan(0)
-    expect(schedule.mock.calls.flatMap(([urls]) => urls)).not.toContain(moving)
+    const normal = await sources.queue(req, undefined, true, 'read')
+    const mergeRow = (result: typeof queue) => result.items.find(item => item.kind === 'merge' && item.evidence.some(link => link.url === moving))
+    expect(mergeRow(queue)).toEqual(mergeRow(normal))
+    const ordinaryCalls = schedule.mock.calls.filter(([, options]) => !options)
+    expect(ordinaryCalls.map(([urls]) => urls)).toEqual([expect.arrayContaining([moving]), expect.arrayContaining([moving])])
+    const bundleCalls = schedule.mock.calls.filter(([, options]) => options?.expectedHeads)
+    expect(bundleCalls).toHaveLength(1)
+    expect(bundleCalls[0]?.[0]).not.toContain(moving)
     comments.get('10')!.shift()
     notionNotes.push('Tin Star answer: "notion-merge"')
 
