@@ -1,3 +1,4 @@
+import { selectJiraMergeRequests } from '../ownerReady'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,7 +12,7 @@ import { ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { jiraTransitions, jiraVerbs } from '../jiraWorkRules'
 import { JiraWork } from '../jiraWork'
-import { adfText } from '../jira'
+import { adfText, jiraText } from '../jira'
 import { runTswStatusSync } from '../../../coordinator/tswStatusSync'
 
 const cloudId = '5bac40b8-c168-4931-90d1-2c8dfe15c6ea'
@@ -191,13 +192,6 @@ async function fixture(projectId = config.projectId) {
       const startAt = Number(url.searchParams.get('startAt'))
       return response({ startAt, total: issue.comments.length, comments: issue.comments.slice(startAt, startAt + 50) })
     }
-    if (method === 'PUT' && part?.startsWith('comment/')) {
-      const comment = issue.comments.find(comment => comment.id === part.slice('comment/'.length))
-      if (!comment) return response({}, 404)
-      comment.body = jiraStoredBody(body.body)
-      comment.updated = jiraNow()
-      return response(comment)
-    }
     if (part === 'comment' && method === 'POST') {
       if (controls.commentResponse === 'rejected') return response({}, 403)
       if (controls.commentResponse === 'unavailable') return response({}, 503)
@@ -360,11 +354,14 @@ async function tswFixture() {
 }
 
 const fixturePull = 'https://github.com/fixture/project/pull/123'
+const fixtureHead = 'a'.repeat(40)
 const tswTask = (key: string, detail = '', yolo = 'off', overrides: Record<string, unknown> = {}) => ({
   id: 'task-' + key, kind: 'crewmate', spawn_gen: 'attempt-1', yolo, endpoint: { exists: true },
   current_state: { state: detail ? 'done' : 'working', detail, freshness: 'fresh' },
   backlog: { id: 'task-' + key, body_lines: [`card: ${key}`] },
-  pr: { url: detail ? fixturePull : null }, ...overrides,
+  pr: { url: detail ? fixturePull : null, head: fixtureHead },
+  hints: { last_event_text: detail && yolo === 'off' ? `done: PR ${fixturePull} checks green at head ${fixtureHead}` : '' },
+  ...overrides,
 })
 
 it('blocks both card keys in conflicting dispatch copies even with separate live candidates', async () => {
@@ -435,7 +432,7 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   expect(f.requests.some(request => request.path.includes('OTHER-1') || request.path.includes('70001'))).toBe(false)
 })
 
-it.each(['late publisher', 'new head', 'publisher after submit'] as const)('updates the same review note for %s', async scenario => {
+it.each(['late publisher', 'new head', 'publisher after submit', 'deleted note'] as const)('reconciles append-only review notes for %s', async scenario => {
   const f = await tswFixture()
   await f.create('delivery')
   await f.publish([tswTask('TSW-1')])
@@ -452,6 +449,14 @@ it.each(['late publisher', 'new head', 'publisher after submit'] as const)('upda
   expect(issue.fields.status.name).toBe(submitted ? 'Ready for Review' : 'In Progress')
   expect(mergeNotes()).toHaveLength(1)
   const id = mergeNotes()[0].id
+  if (scenario === 'deleted note') {
+    issue.comments.splice(issue.comments.indexOf(mergeNotes()[0]), 1)
+    const result = await f.run(true)
+    expect(result.audits).toContainEqual(expect.objectContaining({ result: 'review-note-needs-attention' }))
+    expect(issue.fields.status.name).toBe('In Progress')
+    expect(mergeNotes()).toHaveLength(0)
+    return
+  }
   if (scenario === 'new head') await f.publish([ready(next)])
   else {
     await f.publishBackup([ready(original)])
@@ -459,11 +464,16 @@ it.each(['late publisher', 'new head', 'publisher after submit'] as const)('upda
   }
   expect(await f.run(true)).toMatchObject({ stopped: false })
   expect(issue.fields.status.name).toBe('Ready for Review')
-  expect(mergeNotes()).toHaveLength(1)
+  expect(mergeNotes()).toHaveLength(scenario === 'new head' ? 2 : 1)
   expect(mergeNotes()[0].id).toBe(id)
-  const body = adfText(mergeNotes()[0].body)
-  expect(body.split('\n')[0]).toBe(`Will: merge ${fixturePull} head ${scenario === 'new head' ? next : original}`)
-  expect(body).toContain(scenario === 'new head' ? 'Publishers: ["Firstmate fleet"]' : 'Publishers: ["Firstmate backup","Firstmate fleet"]')
+  expect(adfText(mergeNotes()[0].body)).toContain('Publishers: ["Firstmate fleet"]')
+  if (scenario === 'new head') {
+    expect(adfText(mergeNotes()[1].body).split('\n')[0]).toBe(`Will: merge ${fixturePull} head ${next}`)
+    issue.comments.push({ id: '99', body: jiraText(`Will: merge ${fixturePull} head ${original}`), created: new Date().toISOString(),
+      author: { accountId: 'fixture-mate' } })
+    const read = await f.jira().ownerRequests.get(true)
+    expect(selectJiraMergeRequests(read).get('fixture/project#123')?.merge).toMatchObject({ head: next, coordinator: true })
+  }
   expect(issue.comments.filter(comment => adfText(comment.body).startsWith('Submit for Review via Tin Star'))).toHaveLength(1)
 })
 
@@ -497,7 +507,10 @@ it('preserves the owner’s Reject Review until First Mate supplies a new event'
     expect(await f.run(apply)).toMatchObject({ plans: [], stopped: false })
     expect(issue.fields.status.name).toBe('Queued')
   }
-  await f.publish([tswTask('TSW-1', detail, 'off', { pr: { url: 'https://github.com/fixture/project/pull/124' } })])
+  const nextHead = 'b'.repeat(40)
+  await f.publish([tswTask('TSW-1', detail, 'off', {
+    pr: { url: fixturePull, head: nextHead }, hints: { last_event_text: `done: PR ${fixturePull} checks green at head ${nextHead}` },
+  })])
   expect(await f.run(true)).toMatchObject({ stopped: false })
   expect(issue.fields.status.name).toBe('Ready for Review')
 })

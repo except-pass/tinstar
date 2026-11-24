@@ -22,7 +22,7 @@ type OwnerIssue = {
   id: string; key: string; url: string
   decisions: ReturnType<typeof readJiraDecisions>
   reviewAssigned: boolean
-  merges: Array<NonNullable<ReturnType<typeof mergePublication>> & { comment: string; createdAt: number }>
+  merges: Array<NonNullable<ReturnType<typeof mergePublication>> & { comment: string; createdAt: number; coordinator?: boolean }>
   notesUnavailable?: boolean
   reviewAfter?: number
   readComments?: Set<string>
@@ -57,7 +57,8 @@ type WriteInput = JiraCreate | JiraEdit | JiraTransition | JiraLink
 export type JiraWorkCard = ReturnType<JiraWork['view']>
 export type JiraHistoryCursor = { total: number; last: string | null }
 export type JiraTrackedChange = { field: 'status' | 'assignee'; from: string | null; to: string | null; byService: boolean; occurredAt: number | null; entryId: string }
-type BeforeWrite = (current: JiraWorkCard) => void
+const coordinatorReviewNote = (body: string) => /^Operation: tsw-[a-f0-9]{64}-edit-review(?:-(?:attempt-\d+|retry-1))*$/m.test(body)
+type BeforeWrite = (current: JiraWorkCard) => void | Promise<void>
 
 /** Native Jira work records share Tin Star's MCP and Jira transport. This
  * adapter only calls issue APIs and has no dispatch or Jira admin capability. */
@@ -236,6 +237,7 @@ export class JiraWork extends JiraClient {
     const candidates = [...issues].filter(([, issue]) => issue.reviewAssigned)
     const start = candidates.findIndex(([id]) => id === this.reviewHistoryCursor) + 1
     const reviews = [...candidates.slice(start), ...candidates.slice(0, start)]
+    let serviceAccount: Promise<string> | undefined
     for (let offset = 0; offset < reviews.length; offset += 4) {
       const batch = reviews.slice(offset, offset + 4)
       if (!signal.aborted) this.reviewHistoryCursor = batch.at(-1)?.[0]
@@ -266,7 +268,11 @@ export class JiraWork extends JiraClient {
               if (!note.body || createdAt <= after) continue
               for (const line of note.body.split(/\r?\n/)) {
                 const pull = mergePublication(line, true)
-                if (pull) issue.merges.push({ ...pull, comment: note.id, createdAt })
+                if (pull) {
+                  const coordinator = !!pull.head && !!note.author_id && coordinatorReviewNote(note.body) &&
+                    note.author_id === await (serviceAccount ??= this.serviceAccountId(signal))
+                  issue.merges.push({ ...pull, comment: note.id, createdAt, coordinator })
+                }
               }
             }
             if (shifted) throw new Error('Jira comment history shifted between pages')
@@ -414,8 +420,8 @@ export class JiraWork extends JiraClient {
     return note ? { update: { comment: [{ add: { body: jiraText(note) } }] } } : {}
   }
 
-  private async serviceAccountId(): Promise<string> {
-    const { accountId } = await this.request('myself')
+  private async serviceAccountId(signal?: AbortSignal): Promise<string> {
+    const { accountId } = await this.request('myself', 'GET', undefined, signal)
     if (typeof accountId !== 'string' || !accountId) throw new Error('Missing Jira service account identity')
     return accountId
   }
@@ -632,48 +638,43 @@ export class JiraWork extends JiraClient {
     const signal = AbortSignal.timeout(12_000)
     await this.checkProject(id, signal)
     const after = await this.previousReviewExit(id, signal)
-    const account = await this.serviceAccountId()
+    const account = await this.serviceAccountId(signal)
     let offset = 0
+    let boundary: Awaited<ReturnType<JiraWork['notes']>>['comments'][number] | undefined
+    let expectedTotal: number | undefined
+    const heads = new Set<string>()
+    let newest: { head: string; createdAt: number; id: string } | undefined
     for (let page = 0; page < 5; page++) {
       const { comments, total } = await this.notes(id, offset, signal)
-      for (const comment of comments) {
-        const body = comment.body
-        if (!body || comment.author_id !== account || !nativeId(comment.id) || !(Date.parse(comment.created_at) > after)) continue
-        const [line, ...metadata] = body.split('\n')
-        const request = mergePublication(line!, true)
-        const operation = metadata.find(line => /^Operation: tsw-[a-f0-9]{64}-edit-review(?:-|$)/.test(line))
-        if (!operation || request?.url !== pull || request.conditional) continue
-        const credits = metadata.find(line => line.startsWith('Publishers: '))
-        const publishers: string[] = credits ? JSON.parse(credits.slice('Publishers: '.length))
-          : (metadata.at(-1)?.match(/^Recorded via Tin Star \((.*)\)$/)?.[1] ?? '').split(', ').filter(Boolean)
-        if (!Array.isArray(publishers) || publishers.some(name => typeof name !== 'string')) throw new Error('Invalid Jira review credits')
-        return { id: comment.id, body, head: request.head, publishers }
+      if (expectedTotal !== undefined && (expectedTotal !== total || !isDeepStrictEqual(comments[0], boundary))) {
+        throw new Error('Jira review comments shifted between pages')
       }
-      offset += comments.length
-      if (offset >= total) return undefined
+      for (const comment of page ? comments.slice(1) : comments) {
+        const body = comment.body
+        const createdAt = Date.parse(comment.created_at)
+        if (!body || comment.author_id !== account || !nativeId(comment.id) || !(createdAt > after) || !coordinatorReviewNote(body)) continue
+        const request = mergePublication(body.split('\n', 1)[0]!, true)
+        if (request?.url !== pull || !request.head) continue
+        heads.add(request.head)
+        if (!newest || createdAt > newest.createdAt || createdAt === newest.createdAt && BigInt(comment.id) > BigInt(newest.id)) {
+          newest = { head: request.head, createdAt, id: comment.id }
+        }
+      }
+      if (offset + comments.length >= total) return { current: newest?.head, heads }
+      if (comments.length < 2) break
+      expectedTotal = total
+      boundary = comments.at(-1)
+      offset += comments.length - 1
     }
     throw new Error('Jira review comments exceed the read budget')
   }
 
-  edit(input: JiraEdit & { reviewComment?: { id: string; body: string } }, actor: string, beforeWrite?: BeforeWrite) {
+  edit(input: JiraEdit, actor: string, beforeWrite?: BeforeWrite) {
     return this.mutate('edit', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = input.note ? `${input.note}\n\nRecorded via Tin Star (${actor})` : undefined
       if (!note && [input.name, input.owner, input.assignee, input.description, input.blocker, input.add_questions, input.answers].every(value => value === undefined)) {
         throw new JiraWorkInputError('Supply a ticket edit or comment')
-      }
-      if (input.reviewComment && note && beforeWrite) {
-        const { id: commentId, body } = input.reviewComment
-        await this.checkProject(id)
-        const current = await this.read(id)
-        if (!attempt.dispatched) {
-          await this.checkComment(id, body, commentId)
-          beforeWrite(this.view(await this.read(id)))
-          await attempt.dispatch()
-          await this.request(`issue/${id}/comment/${commentId}`, 'PUT', { body: jiraText(note) })
-        }
-        await this.checkComment(id, note, commentId)
-        return attempt.confirm(current)
       }
       const baseline = !attempt.dispatched && note ? await this.commentBaseline(id) : undefined
       const current = await this.read(id)
@@ -703,7 +704,7 @@ export class JiraWork extends JiraClient {
         fields[mapping.blockerCondition] = input.blocker ? jiraText(input.blocker.unblocks_when) : null
       }
       if (input.add_questions || input.answers) fields[mapping.decisions] = this.editDecisionDocument(current, input)
-      if (beforeWrite) beforeWrite(this.view(await this.read(id)))
+      if (beforeWrite) await beforeWrite(this.view(await this.read(id)))
       await attempt.dispatch()
       await this.request(`issue/${id}`, 'PUT', { fields, ...this.commentUpdate(note) })
       const saved = await this.read(id)
@@ -778,7 +779,7 @@ export class JiraWork extends JiraClient {
       const response = await this.request(`issue/${id}/transitions`)
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
       if (candidates?.length !== 1 || !nativeId(candidates[0]?.id)) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
-      if (beforeWrite) beforeWrite(this.view(await this.read(id)))
+      if (beforeWrite) await beforeWrite(this.view(await this.read(id)))
       await attempt.dispatch()
       await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id } }).catch(error => {
         if (!note || isWriteRejection(error)) throw error
