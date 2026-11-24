@@ -11,7 +11,7 @@ export function mergePublication(line: string, jira = false) {
   const pull = match && releasePull(match[1]!)
   if (!pull) return null
   const suffix = (match[2] ?? '').trim()
-  const head = requestedHead(suffix.replace(/^(?:at )?head /i, ''))
+  const head = requestedHead(suffix.replace(/^head /i, ''))
   // Unfamiliar qualifiers may be conditions. Retain the exact target but hold
   // readiness until a current publication records an unconditional request.
   return { ...pull, head, conditional: !!suffix && !head }
