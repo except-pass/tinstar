@@ -23,7 +23,7 @@ import { HandoffOperations } from './workflowHandoff'
 import { hasCurrentExecution } from '../../shared/workerEvidence'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
 import { CHECK_IN_ZONE, checkInTime, checkInCeiling } from '../../shared/checkIn'
-import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
+import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
 import { CreationReceipts } from './workflowReceipts'
 import { notionCard } from './notion'
 import type { JiraWork, JiraWorkCard } from './jiraWork'
@@ -1163,5 +1163,4 @@ export class WorkflowOperations {
       cursors.add(nextCursor)
     }
   }
-
 }
