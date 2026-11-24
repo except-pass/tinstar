@@ -1,8 +1,8 @@
 # Event Publisher
 
-A standalone, read-only observer for First Mate tasks, worker incarnations and
-signed Jira ticket changes. All sources share one SQLite journal and terminal
-reader.
+A standalone publisher for First Mate task and worker observations, signed
+Jira ticket changes, and operator-recorded mate migrations. All sources share
+one SQLite journal and terminal reader.
 
 ## Start on the farm host
 
@@ -81,9 +81,10 @@ events sources
 ```
 
 `--after` is exclusive. A watch without it starts at the current journal tip.
-Watch and replay both accept the same filters. The text view marks replayed and
-First Mate fixture events. In JSON mode the First Mate event's `source.mode` identifies live and fixture
-data. Replay notices go to stderr so the JSON payloads stay identical.
+Watch and replay both accept the same filters. The text view marks replays,
+First Mate fixture events, and controlled migration receipts. In JSON mode,
+`source.mode` identifies live and fixture data for First Mate and routing.
+Replay notices go to stderr so the JSON payloads stay identical.
 
 ## Receive Jira ticket changes
 
@@ -178,6 +179,91 @@ Run `npm test -- --test-concurrency=2` from this directory. The Jira tests use s
 restart and replay. Validate native issue, comment and link delivery coverage
 against the actual project before accepting the integration.
 
+## Record a mate migration
+
+Use a stable `mate_id` that stays the same across machine, runtime, and provider
+changes. The effective start is when the destination began handling work. Give
+it a timezone and cite the operator, handoff, or source record that establishes
+the change. Record each intervening move so the previous destination matches
+the next receipt's old route. Backfill missing receipts to restore coverage.
+Use the existing service account's journal access.
+
+The following receipt is a controlled example. Save it as `receipt.json` and
+use a separate private journal selected explicitly with `--db`. The recorder
+rejects controlled receipts for the default journal, the journal configured by
+`EVENTS_DB`, or a journal with registered live First Mate or Jira sources.
+
+```json
+{
+  "mate_id": "controlled-hulk-worker",
+  "old": { "machine": "Hulk", "runtime": "Cursor", "provider": "Grok" },
+  "new": { "machine": "Hulk", "runtime": "Codex", "provider": "OpenAI" },
+  "effective_start_at": "2026-11-23T19:34:00Z",
+  "recorded_by": "example-operator",
+  "source_reference": "controlled proof",
+  "controlled": true
+}
+```
+
+```sh
+proof_dir=$(mktemp -d)
+events record-migration receipt.json --db "$proof_dir/journal.sqlite"
+events replay --db "$proof_dir/journal.sqlite" --source routing --type mate --after 0 --json
+```
+
+The command returns the durable `mate.migration.recorded` receipt. The mate ID,
+old and new contexts, normalized effective instant, and source mode determine the event ID.
+Repeating the command returns the original receipt with its first provenance
+and observation time. For actual migrations, omit `controlled` and supply the
+real operator and source reference. Use a source identifier or link without
+credentials.
+
+### Exclude replayed routing timestamps from metrics
+
+After merge, First Mate wires the external twice-weekly report to pass rows
+from `/srv/fleet-ledger/routing/routing.jsonl` through `routing-metrics-input`
+and use stdout before selecting first-ready observations or calculating any
+metric. For route matching, supply `observation_id`, `mate_id`,
+`route.machine`, `route.runtime`, `route.provider`, and `occurred_at`
+(the original timestamp for the metric, with a timezone). Rows can carry
+additional report fields.
+
+```sh
+events routing-metrics-input < /srv/fleet-ledger/routing/routing.jsonl
+```
+
+For the controlled example, save these rows as `routing-observations.jsonl`.
+
+```json
+{"observation_id":"controlled-ready-replay","mate_id":"controlled-hulk-worker","route":{"machine":"Hulk","runtime":"Codex","provider":"OpenAI"},"occurred_at":"2026-11-23T19:33:59Z"}
+{"observation_id":"controlled-ready-current","mate_id":"controlled-hulk-worker","route":{"machine":"Hulk","runtime":"Codex","provider":"OpenAI"},"occurred_at":"2026-11-23T19:34:00Z"}
+```
+
+```sh
+events routing-metrics-input --db "$proof_dir/journal.sqlite" < routing-observations.jsonl
+```
+
+The first row yields a JSON warning on stderr with its identity, original
+time, and the cutoff and receipt ID. The second row passes through to stdout.
+The recorder requires a change in machine, runtime, or provider. The filter
+orders each mate's migration receipts by effective start. Receipts sharing an
+instant are chained from the previous destination, and ambiguous sets are
+unsupported and should be recorded at distinct instants. The
+first old route is active before the first cutover, and each destination is
+active from its cutover until the next one when that receipt's old route
+matches the destination. A mismatch after ordering leaves the span from the
+earlier cutover up to the later cutover uncovered. The filter excludes every
+row for that mate whose original timestamp falls in the span and names
+both receipts in the stderr warning. Gap detection requires only a valid mate
+ID and timestamp. The warning includes the observation ID when valid.
+Outside uncovered spans, a timestamp in any visit to the exact route passes
+through. A timestamp outside every visit
+to a known route is warned about and excluded. Rows with unknown routes or
+insufficient attribution pass through for the report's existing handling.
+Blank lines are ignored. Invalid JSON produces a warning with its line number
+and the running count of skipped malformed rows, and the filter continues.
+The filter opens the journal read-only and leaves the activity ledger intact.
+
 ## Re-observe and troubleshoot
 
 Stop the publisher, run `events observe`, and check `events sources` before
@@ -202,7 +288,8 @@ the next scheduled pass.
   configured home ID. The collector disables the fleet snapshot's
   remote-summary cache and the crew-state forge fallback.
   Worker state comes from the reconciler embedded in the fleet snapshot.
-- `events sources` reports the last attempt and the last accepted inventory.
+- For First Mate sources, `events sources` reports the last attempt and the
+  last accepted inventory.
   The `pr_links_unobserved` count reports missing PR coverage for accepted
   task rows even when no event is emitted. Each home uses one fleet snapshot
   per pass for worker state and PR link coverage. A fresh fleet response
@@ -268,8 +355,8 @@ event. Task field-change events can carry the PR coverage in their evidence.
 
 Each home's collection pass commits its accepted snapshots and their events
 in one SQLite transaction.
-An event's `sequence` is the local journal cursor and `observation.batch_id`
-groups changes witnessed by the same read. Worker and PR link events from the
+An event's `sequence` is the local journal cursor. For snapshot observations,
+`observation.batch_id` groups changes witnessed by the same read. Worker and PR link events from the
 same fleet response share a batch ID. Task inventory events have a separate
 batch ID. `occurred_at` is null for a snapshot diff. `observed_between`
 gives conservative bounds from the start of the prior saved observation,

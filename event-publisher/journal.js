@@ -3,6 +3,7 @@ import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { entityId, fleetCommand, prLinkSource, withPullRequests } from './firstmate.js'
+import { migrationSource, migrationSourceId } from './routing.js'
 
 const insertEvent = 'INSERT INTO events (event_id, source_id, subject_type, subject_id, envelope) VALUES (?, ?, ?, ?, ?)'
 
@@ -171,10 +172,11 @@ export class Journal {
     try {
       for (const source of sources) this.register(source)
       if (reconcile) {
+        // Local CLI receipts have no collector entry in the configuration.
         this.db.prepare(`
           UPDATE sources SET description = json_set(description, '$.configured', 0)
-          WHERE source_id NOT IN (SELECT value FROM json_each(?))
-        `).run(JSON.stringify(sources.map(source => source.source_id)))
+          WHERE source_id <> ? AND source_id NOT IN (SELECT value FROM json_each(?))
+        `).run(migrationSourceId, JSON.stringify(sources.map(source => source.source_id)))
       }
       this.db.exec('COMMIT')
     } catch (error) {
@@ -205,6 +207,46 @@ export class Journal {
 
   record(observation) {
     return this.recordAttempt(observation).written
+  }
+
+  recordMigration(event) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (event.source.mode === 'fixture' && this.db.prepare(`
+        SELECT 1 FROM sources
+        WHERE json_extract(description, '$.mode') = 'live'
+           OR json_extract(description, '$.provider') = 'jira'
+        LIMIT 1
+      `).get()) {
+        throw new JournalConfigurationError('use a separate journal for live and fixture baselines')
+      }
+      this.register(migrationSource(event.source.mode))
+      let receipt = this.inspect(event.event_id)
+      if (!receipt) {
+        const { lastInsertRowid: sequence } = this.db.prepare(insertEvent)
+          .run(event.event_id, migrationSourceId, event.subject.type, event.subject.id, JSON.stringify(event))
+        this.db.prepare(`
+          UPDATE sources SET last_attempt_at = ?, last_success_at = ?, health = 'ok'
+          WHERE source_id = ?
+        `).run(event.observed_at, event.observed_at, migrationSourceId)
+        receipt = { ...event, sequence }
+      }
+      this.db.exec('COMMIT')
+      return receipt
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  *migrationReceipts() {
+    const rows = this.db.prepare(`
+      SELECT sequence, envelope FROM events JOIN sources USING (source_id)
+      WHERE source_id = ?
+        AND json_extract(envelope, '$.source.mode') = json_extract(description, '$.mode')
+      ORDER BY sequence
+    `)
+    for (const row of rows.iterate(migrationSourceId)) yield readEvent(row)
   }
 
   hasJiraDelivery(sourceId, deliveryId, native) {
