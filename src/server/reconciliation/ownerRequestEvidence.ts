@@ -20,8 +20,10 @@ export function mergePublication(line: string, jira = false) {
 /** An exact-head ready notice supplements a routed merge ask. A ready notice
  * alone does not route work or change which head the owner was asked to merge. */
 export function readyHeadPublication(event: string) {
-  const notice = /^done: PR (https:\/\/\S+) checks green(?:\s+(.*))?$/i.exec(event)
-  return notice ? mergePublication(`Will: merge ${notice[1]} ${notice[2] ?? ''}`, true) : null
+  const notice = /^done: PR (https:\/\/\S+) checks green at head (\S+)$/.exec(event)
+  const pull = notice && releasePull(notice[1]!)
+  const head = requestedHead(notice?.[2])
+  return pull && head ? { ...pull, head } : null
 }
 
 export function declaredRepository(value: unknown) {

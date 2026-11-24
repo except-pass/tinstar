@@ -11,11 +11,11 @@ const mergeLabel = (merge: OwnerMergeAsk) => {
   return 'Needs verification'
 }
 
-function Sources({ sources }: { sources: Array<OwnerRequestSource & { requestedHead?: string | null; superseded?: true }> }) {
+function Sources({ sources }: { sources: Array<OwnerRequestSource & { requestedHead?: string | null; superseded?: true; readinessEvidenceOnly?: true }> }) {
   return <ul className="owner-ready-sources">{sources.map(source =>
     <li key={`${source.kind}:${source.id}`}>{source.url
       ? <a href={source.url} target="_blank" rel="noreferrer">{source.label}</a>
-      : source.label}{source.requestedHead && <> · Requested <code>{source.requestedHead}</code></>}{source.superseded && ' · Superseded'}</li>)}</ul>
+      : source.label}{source.requestedHead && <> · Requested <code>{source.requestedHead}</code></>}{source.superseded && ' · Superseded'}{source.readinessEvidenceOnly && ' · Not used for readiness'}</li>)}</ul>
 }
 
 export function OwnerReady({ read }: { read: OwnerReadyRead }) {
