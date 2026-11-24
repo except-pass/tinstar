@@ -4,11 +4,10 @@ import { dispatchForTask } from './dispatchProvenance'
 import { declaredLinks, reconcileScene, type Execution } from './scene'
 import { BLANK_PROPERTY_REASON, FIRST_MATE_TASKS, workerLinkRecord, parseWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from './workerLinks'
 
-// pr.url is the recorded pull request. current_state.detail is the forge disposition
-// published by crew state (open, held for merge, or ready for review). Title text is not evidence.
-// Only an inactive worker that passes this check is admitted to the write tier.
+// Match the forge disposition that crew state publishes in current_state.detail.
 export const isPublishedReviewDetail = (detail: unknown) => typeof detail === 'string' &&
   /^(?:run passed: PR open|checks green: PR (?:held for merge|ready for review))\b/.test(detail)
+// An inactive worker needs a recorded review PR to enter the Notion write tier.
 const reviewPrOpen = (execution: Execution) => {
   const url = execution.source.pr.url
   return typeof url === 'string' && url.length > 0 && isPublishedReviewDetail(execution.source.current_state.detail)
