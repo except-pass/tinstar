@@ -64,6 +64,16 @@ The main path is Backlog → To Do → Queued → In Progress. Review and releas
 
 Decision Questions uses headings such as `D1 [Open]: Which option should we adopt?`. Options and answers follow on indented lines, for example `  Answer: Use the first option.` Change the heading to `[Answered]` when answering in Jira. MCP edits reread the field before applying targeted changes, preserve untouched ADF content, and leave field history in Jira. Jira has no conditional field write, so a native edit between the reread and the write can still race with the MCP edit. Before entering Queued, provide an owner, instructions and a clear success condition, with the primary blocker removed. Start rechecks instructions and blockers, including blockers staged before Block. Return a Queued ticket to To Do before clearing its instructions. Tin Star checks the declared evidence and Jira readback. Jira remains the place to inspect the underlying work and its history.
 
+### Owner review merge notes
+
+On a Ready for Review ticket assigned to Will, use an unrestricted Jira comment
+with `Will: merge <GitHub PR URL> head <full SHA>` on its own line to bind the
+request to an exact revision. A line with only the URL leaves the requested
+head unverified. Other suffixes leave the request conditional. Only comments
+created after the ticket's last exit from Ready for Review count toward the
+current request. See [Owner-ready by repository](reconciliation-queue.md#owner-ready-by-repository)
+for how Tin Star groups notes and verifies heads.
+
 ## Local smoke check
 
 ```sh

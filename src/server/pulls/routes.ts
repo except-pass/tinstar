@@ -56,7 +56,7 @@ export class PullsApi {
     if (!repositories.length) warnings.push('No repositories selected. Add prOperations.repositories to Tin Star config.json or register an explicit PR in the shared sources.')
     return { scene, warnings, associations, auditAvailable, repositories, associated }
   }
-  async read(): Promise<PullsRead> {
+  async read() {
     const { closedPulls: _closedPulls, ...inventory } = await this.readForReconciliation()
     return inventory
   }
