@@ -48,12 +48,12 @@ export class WorkReader {
   constructor(readonly config: ReconciliationConfig['notion'], readonly api: NotionApi, jira?: ReconciliationConfig['jira'], private readonly native?: JiraWork) {
     if (jira) this.jira = new JiraAdapter(jira, api.fetch, api.backgroundFetch, api.parallelFetch)
   }
-  private board(scope: WorkScope, force: boolean, background: boolean) {
-    const key = scopeKey(scope)
+  private board(scope: WorkScope, force: boolean, background: boolean, includePilot = true) {
+    const key = !includePilot && this.jira ? `notion:${scopeKey(scope)}` : scopeKey(scope)
     let entry = this.queries.get(key)
     if (!entry) {
       if (this.queries.size >= 100) this.queries.delete(this.queries.keys().next().value!)
-      const notion = notionObservation(this.config, this.api.parallelFetch, scope, this.api.backgroundFetch), jira = this.jira?.observation(scope)
+      const notion = notionObservation(this.config, this.api.parallelFetch, scope, this.api.backgroundFetch), jira = includePilot ? this.jira?.observation(scope) : undefined
       const observation = !jira ? notion : !this.config ? jira : new CachedObservation<WorkData>(async background => {
         const reads = await Promise.all([notion.get(true, background), jira.get(true, background)])
         const available = reads.flatMap(read => read.data ? [read.data] : [])
@@ -67,15 +67,25 @@ export class WorkReader {
     } else if (!force && entry.observation.isCached()) this.api.diagnostics.cacheHits++
     return entry.observation.get(force, background)
   }
-  async query(scope: WorkScope = {}, force = false, background = false, includeNative = false, jiraKeys?: ReadonlySet<string>): Promise<Observation<WorkData>> {
+  async query(scope: WorkScope = {}, force = false, background = false, includeNative = false): Promise<Observation<WorkData>> {
     if (!includeNative || !this.native) return this.board(scope, force, background)
     const revision = this.native.accessRevision
     const [board, jira] = await Promise.all([
       this.config || this.jira ? this.board(scope, force, background) : null,
-      (jiraKeys ? this.native.observationForKeys(jiraKeys) : this.native.observationFor(scope)).get(force, background),
+      this.native.observationFor(scope).get(force, background),
     ])
     return this.combine(scope, board, revision === this.native.accessRevision ? jira : { ...jira, data: null, status: 'unknown', coverage: 'unknown', observedAt: null, expiresAt: null })
   }
+  async workerLinkQuery(keys: readonly string[]): Promise<Observation<WorkData>> {
+    if (!keys.length || !this.native) return this.board({}, false, false, false)
+    const revision = this.native.accessRevision
+    const [board, jira] = await Promise.all([
+      this.config ? this.board({}, false, false, false) : null,
+      this.native.readTswTargets(keys),
+    ])
+    return this.combine({}, board, revision === this.native.accessRevision ? jira : { ...jira, data: null, status: 'unknown', coverage: 'unknown', observedAt: null, expiresAt: null })
+  }
+
   private combine(scope: WorkScope, board: Observation<WorkData> | null, jira: Observation<WorkData>): Observation<WorkData> {
     const sources = [...(board ? [{ ...sourceCoverage(this.config ? 'notion' : 'jira-pilot', board), hasMore: board.data?.hasMore }] : []), sourceCoverage('jira', jira)]
     const complete = sources.every(source => source.status === 'fresh' && source.coverage === 'complete')

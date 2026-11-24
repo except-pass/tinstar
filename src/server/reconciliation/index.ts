@@ -463,11 +463,10 @@ export class ReconciliationSources {
     return verifyRetractions ? this.context.verifyRetractions(context) : context
   }
 
-  private async workerLinkSnapshot() {
-    if (this.config.jiraWork?.projectId !== tswProjectId) return this.snapshot()
+  async workerLinkSnapshot(includeTsw = true) {
     const fleet = await this.fleetSnapshot()
     const keys = new Set<string>()
-    for (const { observation } of fleet) {
+    for (const { observation } of includeTsw && this.config.jiraWork?.projectId === tswProjectId ? fleet : []) {
       for (const task of observation.data?.tasks ?? []) {
         const backlog = observation.data?.backlog?.find(row => row.id === (task.backlog.id ?? task.identity.task_id))
         const dispatch = dispatchForTask(task, backlog)
@@ -475,7 +474,7 @@ export class ReconciliationSources {
         if (key) keys.add(key)
       }
     }
-    const intentions = await this.workReader.query({}, false, false, keys.size > 0, keys)
+    const intentions = await this.workReader.workerLinkQuery([...keys])
     return this.sourceSnapshot(fleet, intentions)
   }
 

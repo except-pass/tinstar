@@ -38,13 +38,13 @@ async function main() {
   const config = loadReconciliationConfig(root)
   const runNotion = !notionCards || notionCards.length > 0
   const runTsw = !tswCards || tswCards.length > 0
-  const sources = new ReconciliationSources(runTsw ? config : { ...config, jira: undefined }, fetch, undefined, root)
+  const sources = new ReconciliationSources(config, fetch, undefined, root)
   if (values.apply && runNotion && (!config.notion || !values['write-token-file'])) throw new Error('Notion write-token file and board required')
   const file = await open(auditFile, 'a', 0o600)
   try {
     await file.chmod(0o600)
     const audit = async (entry: unknown) => { await file.writeFile(`${JSON.stringify(entry)}\n`); await file.sync() }
-    const input = runNotion ? await sources.snapshot() : null
+    const input = runNotion ? await sources.workerLinkSnapshot(runTsw) : null
     const transport = runNotion && values.apply && config.notion
       ? notionLinkTransport((await readFile(values['write-token-file']!, 'utf8')).trim(), config.notion.dataSourceId) : undefined
     const result = input ? await runWorkerLinkAdapter(input, { apply: values.apply, maxCards, cards: notionCards, transport, audit }) : null
