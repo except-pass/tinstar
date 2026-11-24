@@ -45,8 +45,7 @@ function planDecision(event: Extract<StatusEvent, { target: 'Decision' }>, card:
     let index = 1
     while (used.has(`D${index}`)) index++
     steps.push({ ...base, kind: 'jira_edit', operation_id: 'edit-decision', assignee: reviewer,
-      ...(!card.owner && { owner: event.owner }), add_questions: [{ id: `D${index}`, question: event.question }],
-      note: `Will: ${event.question}` })
+      ...(!card.owner && { owner: event.owner }), add_questions: [{ id: `D${index}`, question: event.question }] })
   }
   if (card.status !== event.target) steps.push({ ...base, verb: 'Request Decision', operation_id: 'decision', evidence: event.evidence })
   return steps

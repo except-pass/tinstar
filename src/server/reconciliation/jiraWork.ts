@@ -798,7 +798,7 @@ export class JiraWork extends JiraClient {
     }, !!mergeDueDate, beforeDispatch)
   }
 
-  private checkEdit(issue: Issue, input: JiraEdit, assigneeId: string | null | undefined) {
+  private checkEdit(issue: Issue, input: JiraEdit, assigneeId: string | undefined) {
     const equal = (actual: unknown, expected: unknown) => expected === undefined || isDeepStrictEqual(actual, expected)
     const questions = input.add_questions || input.answers ? readJiraDecisions(issue.decisions) : []
     const blocker = input.blocker === undefined ? undefined : input.blocker ?? { type: null, target: '', unblocks_when: '' }
@@ -943,8 +943,8 @@ export class JiraWork extends JiraClient {
       }
       const baseline = !attempt.dispatched && note ? await this.commentBaseline(id) : undefined
       const current = await this.read(id)
-      const assigneeId = typeof input.assignee === 'string' ? await this.findAssignableAccount(input.card_id, input.assignee) : input.assignee
-      if (typeof input.assignee === 'string' && assigneeId === null) {
+      const assigneeId = input.assignee === undefined ? undefined : await this.findAssignableAccount(input.card_id, input.assignee)
+      if (assigneeId === null) {
         throw new JiraWorkInputError('Choose one unambiguous assignable Jira user by display name')
       }
       if (attempt.dispatched) {
@@ -961,7 +961,7 @@ export class JiraWork extends JiraClient {
       const fields: Record<string, unknown> = {}
       if (input.name !== undefined) fields.summary = input.name
       if (input.owner !== undefined) fields[mapping.owner] = input.owner === null ? null : { value: input.owner }
-      if (assigneeId !== undefined) fields.assignee = assigneeId === null ? null : { accountId: assigneeId }
+      if (assigneeId !== undefined) fields.assignee = { accountId: assigneeId }
       if (input.description !== undefined) fields.description = input.description === null ? null : jiraText(input.description)
       if (input.blocker !== undefined) Object.assign(fields, this.blockerFields(input.blocker))
       if (input.add_questions || input.answers) fields[mapping.decisions] = this.editDecisionDocument(current, input)

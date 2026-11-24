@@ -648,6 +648,7 @@ it('publishes update_work schemas that accept Notion IDs for shared updates', as
   }
   const jiraEdit = { kind: 'jira_edit', operation_id, note: 'Fixture' }
   expect(update({ ...jiraEdit, card_id: jira })).toBe(true)
+  expect(update({ ...jiraEdit, card_id: jira, assignee: null })).toBe(false)
   expect(update({ ...jiraEdit, card_id: notion })).toBe(false)
 })
 
@@ -743,9 +744,12 @@ it('applies each TSW decision and external wait once even after an answer, wait 
       { id: 'D1', question: 'Which region?', answer: 'East.' }, { id: 'D2', question: decision.summary },
     ],
   })
+  expect(issue.comments.map(comment => adfText(comment.body))).not.toEqual(
+    expect.arrayContaining([expect.stringContaining(decision.summary)]),
+  )
   const edit = (operation_id: string, fields: Record<string, unknown>) => f.call('update_work',
     { card_id, operation_id, kind: 'jira_edit', ...fields })
-  expect(await edit('answer-decision', { answers: [{ id: 'D2', answer: 'Tonight.' }], assignee: null })).toMatchObject({ outcome: 'saved' })
+  expect(await edit('answer-decision', { answers: [{ id: 'D2', answer: 'Tonight.' }] })).toMatchObject({ outcome: 'saved' })
   expect(await f.call('transition_work', {
     card_id, operation_id: 'decision-exit', verb: 'Answer Decision', to: 'In Progress', evidence: 'The worker has resumed.',
   })).toMatchObject({ outcome: 'saved' })
