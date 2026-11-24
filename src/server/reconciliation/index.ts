@@ -464,17 +464,20 @@ export class ReconciliationSources {
   }
 
   async workerLinkSnapshot(includeTsw = true) {
-    const fleet = await this.fleetSnapshot()
-    const keys = new Set<string>()
-    for (const { observation } of includeTsw && this.config.jiraWork?.projectId === tswProjectId ? fleet : []) {
-      for (const task of observation.data?.tasks ?? []) {
-        const backlog = observation.data?.backlog?.find(row => row.id === (task.backlog.id ?? task.identity.task_id))
-        const dispatch = dispatchForTask(task, backlog)
-        const key = dispatch.status === 'card' ? tswKey(dispatch.cardId) : null
-        if (key) keys.add(key)
+    const fleetRead = this.fleetSnapshot()
+    const declaredKeys = fleetRead.then(fleet => {
+      const keys = new Set<string>()
+      for (const { observation } of includeTsw && this.config.jiraWork?.projectId === tswProjectId ? fleet : []) {
+        for (const task of observation.data?.tasks ?? []) {
+          const backlog = observation.data?.backlog?.find(row => row.id === (task.backlog.id ?? task.identity.task_id))
+          const dispatch = dispatchForTask(task, backlog)
+          const key = dispatch.status === 'card' ? tswKey(dispatch.cardId) : null
+          if (key) keys.add(key)
+        }
       }
-    }
-    const intentions = await this.workReader.workerLinkQuery([...keys])
+      return [...keys]
+    })
+    const [fleet, intentions] = await Promise.all([fleetRead, this.workReader.workerLinkQuery(declaredKeys)])
     return this.sourceSnapshot(fleet, intentions)
   }
 

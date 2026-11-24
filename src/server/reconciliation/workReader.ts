@@ -76,14 +76,19 @@ export class WorkReader {
     ])
     return this.combine(scope, board, revision === this.native.accessRevision ? jira : { ...jira, data: null, status: 'unknown', coverage: 'unknown', observedAt: null, expiresAt: null })
   }
-  async workerLinkQuery(keys: readonly string[]): Promise<Observation<WorkData>> {
-    if (!keys.length || !this.native) return this.board({}, false, false, false)
-    const revision = this.native.accessRevision
-    const [board, jira] = await Promise.all([
-      this.config ? this.board({}, false, false, false) : null,
-      this.native.readTswTargets(keys),
+  async workerLinkQuery(declaredKeys: Promise<readonly string[]>): Promise<Observation<WorkData>> {
+    const native = this.native
+    const [board, targets] = await Promise.all([
+      this.board({}, false, false, false),
+      declaredKeys.then(async keys => {
+        if (!keys.length || !native) return null
+        const revision = native.accessRevision
+        return { revision, jira: await native.readTswTargets(keys) }
+      }),
     ])
-    return this.combine({}, board, revision === this.native.accessRevision ? jira : { ...jira, data: null, status: 'unknown', coverage: 'unknown', observedAt: null, expiresAt: null })
+    if (!targets) return board
+    const { revision, jira } = targets
+    return this.combine({}, this.config ? board : null, revision === native?.accessRevision ? jira : { ...jira, data: null, status: 'unknown', coverage: 'unknown', observedAt: null, expiresAt: null })
   }
 
   private combine(scope: WorkScope, board: Observation<WorkData> | null, jira: Observation<WorkData>): Observation<WorkData> {
