@@ -16,7 +16,7 @@ type Task = Fleet['tasks'][number]
 type Backlog = NonNullable<Fleet['backlog']>[number]
 type EventDetails =
   | { target: 'In Progress' }
-  | { target: 'Ready for Review'; pull: string; head: string | null }
+  | { target: 'Ready for Review'; pull: string; head: string | null; publishers?: string[] }
   | { target: 'Done' }
 
 export type StatusEvent = EventDetails & {
@@ -149,14 +149,14 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
       candidate.target === 'Ready for Review' && candidate.head === head && releasePull(candidate.pull)?.id === pull.id)
       ? pull : null
     const conflicting = findings.some(finding => finding.key === key && finding.reason === 'conflicting-card-declarations')
-    if (first && !others.length && !conflicting) {
-      events.push(first)
-    } else if (equivalent && !conflicting) {
+    if (first?.target === 'Ready for Review' && equivalent && !conflicting) {
       const ordered = [...candidates].sort((a, b) => a.id.localeCompare(b.id))
       const actors = [...new Set(ordered.map(candidate => candidate.actor))].sort()
       const expiresAt = ordered.flatMap(candidate => candidate.expiresAt ?? []).sort()[0] ?? null
-      events.push({ ...ordered[0]!, actor: actors.join(', '), expiresAt,
-        id: eventId([key, equivalent.id, head, ordered.map(candidate => candidate.id)]) })
+      events.push({ ...first, owner: ordered[0]!.owner, pull: equivalent.url, publishers: actors,
+        actor: actors.join(', '), expiresAt, id: eventId([key, equivalent.url, head]) })
+    } else if (first && !others.length && !conflicting) {
+      events.push(first)
     } else {
       for (const candidate of candidates) findings.push({ key, home: candidate.home, task: candidate.task, reason: 'competing-task-events' })
     }

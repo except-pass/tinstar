@@ -229,6 +229,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
           changes: coordinatorHistory.slice(after?.total ?? 0),
         }),
         findAssignableAccount: async () => 'fixture-will',
+        tswReviewNote: async () => undefined,
         edit,
         transition: async () => {
           coordinatorHistory.push({ field: 'status', from: coordinatorStatus, to: 'Ready for Review', byService: true, occurredAt: Date.now(), entryId: '2' })

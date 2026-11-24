@@ -191,6 +191,13 @@ async function fixture(projectId = config.projectId) {
       const startAt = Number(url.searchParams.get('startAt'))
       return response({ startAt, total: issue.comments.length, comments: issue.comments.slice(startAt, startAt + 50) })
     }
+    if (method === 'PUT' && part?.startsWith('comment/')) {
+      const comment = issue.comments.find(comment => comment.id === part.slice('comment/'.length))
+      if (!comment) return response({}, 404)
+      comment.body = jiraStoredBody(body.body)
+      comment.updated = jiraNow()
+      return response(comment)
+    }
     if (part === 'comment' && method === 'POST') {
       if (controls.commentResponse === 'rejected') return response({}, 403)
       if (controls.commentResponse === 'unavailable') return response({}, 503)
@@ -329,7 +336,7 @@ async function tswFixture() {
   const home = '/fixture/fm-unrelated-basename'
   const file = join(f.root, 'snapshot.json')
   const sources = new ReconciliationSources({ warnings: [], fleet: [
-    { home, label: 'fleet', snapshotFile: file }, { home: '/fixture/fm-offline', snapshotFile: join(f.root, 'missing.json') },
+    { home, label: 'fleet', snapshotFile: file }, { home: '/fixture/fm-offline', label: 'backup', snapshotFile: join(f.root, 'missing.json') },
   ] })
   const { call } = await f.connect()
   const create = (type: string) => call('create_work', {
@@ -339,10 +346,17 @@ async function tswFixture() {
     await writeFile(file, JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: home, generated: new Date().toISOString(),
       main_inventory: { valid: true }, tasks, backlog: { present: true, records } }))
   }
-  const run = async (apply: boolean, maxCards = 5) => runTswStatusSync(await sources.fleetSnapshot(true), {
-    jira: f.jira(), stateFile: join(f.root, 'status-checkpoints.json'), apply, maxCards, audit: async () => {},
+  const publishBackup = async (tasks: unknown[]) => {
+    await writeFile(join(f.root, 'missing.json'), JSON.stringify({ schema: 'fm-fleet-snapshot.v1',
+      fm_home: '/fixture/fm-offline', generated: new Date().toISOString(),
+      main_inventory: { valid: true }, tasks, backlog: { present: true, records: [] } }))
+  }
+  const run = async (apply: boolean, maxCards = 5, interruptSubmit = false) => runTswStatusSync(await sources.fleetSnapshot(true), {
+    jira: f.jira(), stateFile: join(f.root, 'status-checkpoints.json'), apply, maxCards, audit: async entry => {
+      if (interruptSubmit && entry.result === 'write-planned' && entry.operationId?.endsWith('-ready-for-review')) throw new Error('Interrupted before submit')
+    },
   })
-  return { ...f, call, create, publish, run }
+  return { ...f, call, create, publish, publishBackup, run }
 }
 
 const fixturePull = 'https://github.com/fixture/project/pull/123'
@@ -419,6 +433,38 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   expect(issue.comments.map(comment => adfText(comment.body))).toContainEqual(expect.stringContaining(`Accept Final via Tin Star (Firstmate fleet)\nEvidence: First Mate reported delivery for task-TSW-1. ${fixturePull}`))
   expect(await f.run(true)).toMatchObject({ plans: [] })
   expect(f.requests.some(request => request.path.includes('OTHER-1') || request.path.includes('70001'))).toBe(false)
+})
+
+it.each(['late publisher', 'new head', 'publisher after submit'] as const)('updates the same review note for %s', async scenario => {
+  const f = await tswFixture()
+  await f.create('delivery')
+  await f.publish([tswTask('TSW-1')])
+  await f.run(true)
+  const original = 'a'.repeat(40), next = 'b'.repeat(40)
+  const ready = (head: string) => tswTask('TSW-1', 'checks green: PR ready for review', 'off', {
+    pr: { url: fixturePull, head }, hints: { last_event_text: `done: PR ${fixturePull} checks green at head ${head}` },
+  })
+  await f.publish([ready(original)])
+  const submitted = scenario === 'publisher after submit'
+  expect(await f.run(true, 5, !submitted)).toMatchObject({ stopped: !submitted })
+  const issue = f.issues.get('60001')!
+  const mergeNotes = () => issue.comments.filter(comment => adfText(comment.body).startsWith('Will: merge'))
+  expect(issue.fields.status.name).toBe(submitted ? 'Ready for Review' : 'In Progress')
+  expect(mergeNotes()).toHaveLength(1)
+  const id = mergeNotes()[0].id
+  if (scenario === 'new head') await f.publish([ready(next)])
+  else {
+    await f.publishBackup([ready(original)])
+    if (submitted) await f.publish([])
+  }
+  expect(await f.run(true)).toMatchObject({ stopped: false })
+  expect(issue.fields.status.name).toBe('Ready for Review')
+  expect(mergeNotes()).toHaveLength(1)
+  expect(mergeNotes()[0].id).toBe(id)
+  const body = adfText(mergeNotes()[0].body)
+  expect(body.split('\n')[0]).toBe(`Will: merge ${fixturePull} head ${scenario === 'new head' ? next : original}`)
+  expect(body).toContain(scenario === 'new head' ? 'Publishers: ["Firstmate fleet"]' : 'Publishers: ["Firstmate backup","Firstmate fleet"]')
+  expect(issue.comments.filter(comment => adfText(comment.body).startsWith('Submit for Review via Tin Star'))).toHaveLength(1)
 })
 
 it('blocks review without overwriting an owner assignee', async () => {
