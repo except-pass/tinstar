@@ -63,12 +63,14 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     JSON.stringify({ schema: 'fm-fleet-snapshot.v1', generated: generatedAt, fm_home: source.home, tasks,
       backlog: { present: true, records: [] }, main_inventory: { valid: true } }))
   // Two independently published ready notices corroborate the same durable ask.
-  for (const [index, source] of mates.entries()) await snapshotFile(source, [{
+  const publishReady = (index: number, url: string, head = original) => snapshotFile(mates[index]!, [{
     id: `delivery-${index}`, kind: 'ship', spawn_gen: `attempt-${index}`, backlog: { body_lines: ['card: TSW-10'] },
     yolo: 'off',
-    current_state: { state: 'done', freshness: 'fresh', detail: index === 0 ? 'checks green: PR ready for review' : '' },
-    pr: { url: moving, head: original }, hints: { last_event_text: `done: PR ${index === 0 ? moving : moving + '?source=mate'} checks green at head ${original}` },
+    current_state: { state: 'done', freshness: 'fresh', detail: 'checks green: PR ready for review' },
+    pr: { url, head }, hints: { last_event_text: `done: PR ${url} checks green at head ${head}` },
   }])
+  await publishReady(0, moving)
+  await publishReady(1, moving + '/')
   const liveHeads = new Map([[moving, original], [closing, sibling], [legacy, original], [unchanged, sibling], [releaseWait, sibling]])
   const questions = 'D1 [Open]: Choose launch wording\n\nD2 [Open]: Confirm the launch date'
   const review = issue('10', questions)
@@ -203,23 +205,52 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     await snapshotFile(main!, [])
     expect((await sources.fleetSnapshot(true))[0]!.observation.status).toBe('fresh')
     await rm(main!.snapshotFile)
-    const planned = await runTswStatusSync(await sources.fleetSnapshot(true), {
-      apply: false, stateFile: join(root, 'status-checkpoint.json'), audit: async () => {},
+    let coordinatorStatus = 'In Progress'
+    let coordinatorAssignee: string | null = null
+    const coordinatorHistory: Array<{ field: 'status' | 'assignee'; from: string | null; to: string; byService: boolean; occurredAt: number; entryId: string }> = []
+    const edit = vi.fn(async (input: { note?: string }, actor: string) => {
+      if (!input.note) throw new Error('Expected a coordinator merge note')
+      comments.get('10')!.unshift({ id: '21', body: `${input.note}\n\nRecorded via Tin Star (${actor})`, created: '2026-11-23T12:00:00Z' })
+      coordinatorHistory.push({ field: 'assignee', from: coordinatorAssignee, to: 'fixture-will', byService: true, occurredAt: Date.now(), entryId: '1' })
+      coordinatorAssignee = 'fixture-will'
+      return { outcome: 'saved' }
+    })
+    const sync = async () => runTswStatusSync(await sources.fleetSnapshot(true), {
+      apply: true, maxCards: 1, stateFile: join(root, 'status-checkpoint.json'), audit: async () => {},
       jira: {
         readTswCard: async () => ({
           id: 'fixture:10', issue_id: '10', key: 'TSW-10', url: `${jiraSite}/browse/TSW-10`,
-          project_id: project, issue_type: 'Task', name: 'Fixture delivery', status: 'In Progress',
-          updated_at: generated, owner: 'Firstmate mate-a', assignee: null, assignee_id: null,
+          project_id: project, issue_type: 'Task', name: 'Fixture delivery', status: coordinatorStatus,
+          updated_at: generated, owner: 'Firstmate mate-a', assignee: coordinatorAssignee && 'William Gathright', assignee_id: coordinatorAssignee,
           description: '', links: [], decision_questions: [], decision_text: questions, blocker: null,
         }),
-        statusHistory: async () => ({ cursor: { total: 0, last: null }, changes: [] }),
+        statusHistory: async (_id, after) => ({
+          cursor: { total: coordinatorHistory.length, last: coordinatorHistory.at(-1)?.entryId ?? null },
+          changes: coordinatorHistory.slice(after?.total ?? 0),
+        }),
         findAssignableAccount: async () => 'fixture-will',
-        edit: vi.fn(), transition: vi.fn(), repairTransitionAudit: vi.fn(),
+        edit,
+        transition: async () => {
+          coordinatorHistory.push({ field: 'status', from: coordinatorStatus, to: 'Ready for Review', byService: true, occurredAt: Date.now(), entryId: '2' })
+          coordinatorStatus = 'Ready for Review'
+          return { outcome: 'saved' }
+        },
+        repairTransitionAudit: vi.fn(),
       },
     })
-    const reviewEdit = planned.plans[0]?.steps?.find(step => 'kind' in step && step.note)
-    if (!reviewEdit || !('kind' in reviewEdit) || !reviewEdit.note) throw new Error('Expected a coordinator merge note')
-    comments.get('10')!.unshift({ id: '21', body: reviewEdit.note, created: '2026-11-23T12:00:00Z' })
+    for (const [url, head] of [[moving, changed], [closing, original]] as const) {
+      await publishReady(1, url, head)
+      const conflict = await sync()
+      expect(conflict.plans).toEqual([])
+      expect(conflict.audits.filter(entry => entry.result === 'competing-task-events')).toHaveLength(2)
+    }
+    expect(edit).not.toHaveBeenCalled()
+    await publishReady(1, moving + '/')
+    expect(await sync()).toMatchObject({ stopped: false, plans: [{ event: { head: original } }] })
+    expect(await sync()).toMatchObject({ stopped: false, plans: [] })
+    expect(coordinatorStatus).toBe('Ready for Review')
+    expect(edit).toHaveBeenCalledTimes(1)
+    expect(comments.get('10')![0]?.body).toContain('Recorded via Tin Star (Firstmate mate-a, Firstmate mate-b)')
     const journal = new Journal(join(root, 'outage-events.sqlite'))
     const publisherConfig = jiraConfig({ site: jiraSite, cloudId, projectId: project, fields })
     const secret = randomBytes(32).toString('hex')

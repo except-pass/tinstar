@@ -142,8 +142,21 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
   }
   const events: StatusEvent[] = []
   for (const [key, candidates] of byKey) {
-    if (candidates.length === 1 && !findings.some(finding => finding.key === key && finding.reason === 'conflicting-card-declarations')) {
-      events.push(candidates[0]!)
+    const [first, ...others] = candidates
+    const head = first?.target === 'Ready for Review' ? first.head : null
+    const pull = first?.target === 'Ready for Review' && head ? releasePull(first.pull) : null
+    const equivalent = pull && others.every(candidate =>
+      candidate.target === 'Ready for Review' && candidate.head === head && releasePull(candidate.pull)?.id === pull.id)
+      ? pull : null
+    const conflicting = findings.some(finding => finding.key === key && finding.reason === 'conflicting-card-declarations')
+    if (first && !others.length && !conflicting) {
+      events.push(first)
+    } else if (equivalent && !conflicting) {
+      const ordered = [...candidates].sort((a, b) => a.id.localeCompare(b.id))
+      const actors = [...new Set(ordered.map(candidate => candidate.actor))].sort()
+      const expiresAt = ordered.flatMap(candidate => candidate.expiresAt ?? []).sort()[0] ?? null
+      events.push({ ...ordered[0]!, actor: actors.join(', '), expiresAt,
+        id: eventId([key, equivalent.id, head, ordered.map(candidate => candidate.id)]) })
     } else {
       for (const candidate of candidates) findings.push({ key, home: candidate.home, task: candidate.task, reason: 'competing-task-events' })
     }
