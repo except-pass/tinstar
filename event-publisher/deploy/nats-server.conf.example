@@ -3,6 +3,7 @@ listen: "127.0.0.1:4222"
 
 jetstream {
   store_dir: "/var/lib/tinstar-jetstream"
+  sync_interval: always
   max_file_store: 1GB
   max_memory_store: 64MB
 }
