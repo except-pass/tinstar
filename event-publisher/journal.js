@@ -3,6 +3,7 @@ import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { entityId, fleetCommand, prLinkSource, withPullRequests } from './firstmate.js'
+import { pendingTagEvidence, tagRepository, tagSource } from './releaseTags.js'
 import { migrationSource, migrationSourceId } from './routing.js'
 
 const insertEvent = 'INSERT INTO events (event_id, source_id, subject_type, subject_id, envelope) VALUES (?, ?, ?, ?, ?)'
@@ -66,6 +67,11 @@ CREATE TABLE IF NOT EXISTS events (
   subject_type TEXT NOT NULL,
   subject_id TEXT NOT NULL,
   envelope TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS release_tag_evidence (
+  event_id TEXT PRIMARY KEY REFERENCES events(event_id),
+  next_attempt_at TEXT NOT NULL,
+  detail TEXT NOT NULL
 );
 `
 
@@ -154,6 +160,21 @@ function eventChanges(type, before, fields) {
 
 function readEvent(row) {
   return row ? { ...JSON.parse(row.envelope), sequence: row.sequence } : null
+}
+
+function releaseTagEvent(subject, tag, sha, observed_at, event_type, label, change, extra = {}) {
+  return {
+    schema: 'event-publisher.event.v1', event_type, label,
+    source: { provider: tagSource.provider, source_id: tagSource.source_id, mode: tagSource.mode },
+    subject: { type: tagSource.type, id: subject }, observed_at, occurred_at: null,
+    observation: {
+      method: 'snapshot-diff',
+      read_method: event_type === 'tag.evidence.updated' ? 'loopback GET /api/releases' : tagSource.command,
+      coverage: tagSource.coverage,
+    },
+    related: [], change,
+    evidence: { source_reference: { repository: tagRepository, tag, sha }, ...extra },
+  }
 }
 
 export class JournalConfigurationError extends Error {}
@@ -304,6 +325,123 @@ export class Journal {
         AND (? IS NULL OR link.value = ?)
       ORDER BY url, task_id
     `).all(prLinkSource, url, url)
+  }
+
+  recordReleaseTags({ startedAt, observedAt, tags, reason }) {
+    const { source_id: sourceId, type } = tagSource
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const previous = this.db.prepare('SELECT last_attempt_at, last_success_at FROM sources WHERE source_id = ?').get(sourceId)
+      if (observedAt < startedAt || startedAt <= (previous.last_attempt_at ?? '')) {
+        this.db.exec('COMMIT')
+        return false
+      }
+      const counts = { observed: tags?.size ?? 0, unconfirmed_missing: 0, deleted: 0 }
+      if (tags) {
+        const baseline = new Map(this.db.prepare('SELECT entity_id, fields FROM entities WHERE source_id = ?').all(sourceId)
+          .map(row => [row.entity_id, JSON.parse(row.fields)]))
+        const save = this.db.prepare(`
+          INSERT INTO entities (source_id, entity_id, last_seen_snapshot, observed_at, fields)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(source_id, entity_id) DO UPDATE SET
+            last_seen_snapshot = excluded.last_seen_snapshot, observed_at = excluded.observed_at, fields = excluded.fields
+        `)
+        const snapshot = randomUUID()
+        const write = (id, fields) => save.run(sourceId, id, snapshot, observedAt, JSON.stringify(fields))
+        const append = this.db.prepare(insertEvent + ' ON CONFLICT(event_id) DO NOTHING')
+        const publish = (id, event, event_id = `event:${randomUUID()}`) =>
+          append.run(event_id, sourceId, type, id, JSON.stringify({ ...event, event_id })).changes
+        const seed = !previous.last_success_at
+        const newest = tags.keys().next().value
+        for (const [tag, sha] of tags) {
+          const id = `github:tag:${tagRepository}:${tag}`
+          const prior = baseline.get(id)
+          baseline.delete(id)
+          if (prior?.sha === sha && prior.missing < 2) {
+            if (prior.missing) write(id, { ...prior, missing: 0 })
+            continue
+          }
+          let push_event_id = null
+          if (!seed || tag === newest) {
+            const action = seed ? 'seeded' : !prior ? 'created' : prior.sha === sha ? 'restored' : 'moved'
+            const change = { field: 'sha', before: prior?.sha ?? null, after: sha }
+            push_event_id = `event:github:tag:${tagRepository}:${tag}:${sha}`
+            const entry = releaseTagEvent(id, tag, sha, observedAt, 'tag.pushed', 'tag pushed', change,
+              { action, enrichment: pendingTagEvidence })
+            if (publish(id, entry, push_event_id)) {
+              this.db.prepare('INSERT INTO release_tag_evidence VALUES (?, ?, ?)').run(push_event_id, observedAt, JSON.stringify(pendingTagEvidence))
+            } else {
+              // Record the ref transition even when its exact identity already
+              // has a push event. A replay consumer receives that push only once.
+              publish(id, releaseTagEvent(id, tag, sha, observedAt, 'tag.ref.changed', 'tag ref changed', change,
+                { action, push_event_id }))
+            }
+          }
+          write(id, { tag, sha, missing: 0, push_event_id })
+        }
+        for (const [id, prior] of baseline) {
+          if (prior.missing === 2) continue
+          // Two complete inventories protect against a temporary absence at a
+          // GitHub pagination boundary. Failed inventories never count.
+          const missing = prior.missing + 1
+          write(id, { ...prior, missing })
+          if (missing === 1) counts.unconfirmed_missing++
+          else {
+            counts.deleted++
+            publish(id, releaseTagEvent(id, prior.tag, prior.sha, observedAt, 'tag.deleted', 'tag deleted',
+              { field: 'sha', before: prior.sha, after: null }, { action: 'deleted' }))
+          }
+        }
+        this.db.prepare('UPDATE sources SET last_success_at = ?, last_snapshot_id = ? WHERE source_id = ?')
+          .run(observedAt, snapshot, sourceId)
+      }
+      this.db.prepare('UPDATE sources SET last_attempt_at = ?, health = ?, reason = ?, counts = ? WHERE source_id = ?')
+        .run(observedAt, tags ? 'ok' : 'unavailable', reason, JSON.stringify(counts), sourceId)
+      this.db.exec('COMMIT')
+      return !!tags
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  nextReleaseTagEvidence(now) {
+    return this.db.prepare(`
+      SELECT entity_id AS subject, json_extract(fields, '$.tag') AS tag,
+        json_extract(fields, '$.sha') AS sha, event_id, next_attempt_at
+      FROM entities JOIN release_tag_evidence ON event_id = json_extract(fields, '$.push_event_id')
+      WHERE source_id = ? AND json_extract(fields, '$.missing') = 0 AND next_attempt_at <= ?
+      ORDER BY next_attempt_at, entity_id LIMIT 1
+    `).get(tagSource.source_id, now)
+  }
+
+  recordReleaseTagEvidence(target, detail, observedAt, nextAttemptAt) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const current = this.db.prepare(`
+        SELECT detail FROM release_tag_evidence JOIN entities
+          ON event_id = json_extract(fields, '$.push_event_id')
+        WHERE source_id = ? AND entity_id = ? AND event_id = ? AND next_attempt_at = ?
+          AND json_extract(fields, '$.missing') = 0
+      `).get(tagSource.source_id, target.subject, target.event_id, target.next_attempt_at)
+      // An overlapping poll can move the tag while Releases is still reading.
+      if (current) {
+        const updated = detail ? JSON.stringify(detail) : current.detail
+        if (updated !== current.detail) {
+          const event_id = `event:${randomUUID()}`
+          const event = releaseTagEvent(target.subject, target.tag, target.sha, observedAt,
+            'tag.evidence.updated', 'tag evidence updated', { field: 'enrichment', after: detail },
+            { push_event_id: target.event_id })
+          this.db.prepare(insertEvent).run(event_id, tagSource.source_id, tagSource.type, target.subject, JSON.stringify({ ...event, event_id }))
+        }
+        this.db.prepare('UPDATE release_tag_evidence SET next_attempt_at = ?, detail = ? WHERE event_id = ?')
+          .run(nextAttemptAt, updated, target.event_id)
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   recordProviderPoll(source, { startedAt, observedAt, entries, health, reason, counts }, diff) {

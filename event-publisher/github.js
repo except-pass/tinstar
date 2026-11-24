@@ -17,7 +17,7 @@ const sha = /^[a-f0-9]{40}$/
 const checkStates = new Set(['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending'])
 const conclusions = new Set(['action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'startup_failure', 'success', 'timed_out'])
 
-class GitHubReadError extends Error {}
+export class GitHubReadError extends Error {}
 
 function prFields(body, repository, number) {
   const fullName = body?.base?.repo?.full_name
@@ -105,9 +105,7 @@ async function githubGet(path, etag, signal) {
     body: stdout.slice(boundary.index + boundary[0].length) }
 }
 
-export function githubObserver({ repositories = [], get = githubGet, now = () => new Date() } = {}) {
-  const allowed = new Set(repositories.map(repository => repository.toLowerCase()))
-  const caches = new Map()
+export function githubReader({ get = githubGet, now = () => new Date() } = {}) {
   let notBefore = 0
   let deferReason = null
 
@@ -117,7 +115,8 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
     const remaining = Number(headers.get('x-ratelimit-remaining'))
     const reset = Number(headers.get('x-ratelimit-reset')) * 1000
     const retry = Number(headers.get('retry-after')) * 1000
-    if (remaining <= coreReserve || status === 429 || retry > 0) {
+    const secondaryLimit = status === 403 && /secondary rate limit|abuse detection/i.test(body)
+    if (remaining <= coreReserve || status === 429 || retry > 0 || secondaryLimit) {
       notBefore = Math.max(now().getTime() + Math.max(githubInterval * 1000, retry || 0),
         remaining <= coreReserve ? reset || 0 : 0)
       deferReason = remaining <= coreReserve ? 'shared GitHub API quota reserve reached' : 'GitHub asked the observer to back off'
@@ -128,6 +127,16 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
     return { etag: headers.get('etag'), value: normalize(JSON.parse(body), headers) }
   }
 
+  return {
+    sample,
+    deferred: () => now() < notBefore ? deferReason : null,
+  }
+}
+
+export function githubObserver({ repositories = [], get, now = () => new Date(), reader = githubReader({ get, now }) } = {}) {
+  const allowed = new Set(repositories.map(repository => repository.toLowerCase()))
+  const caches = new Map()
+  const { sample, deferred } = reader
   const eligibleTargets = journal => new Set(journal.linkedPulls().map(({ url }) => url)
     .filter(url => allowed.has(pullUrl.exec(url)?.[1])))
 
@@ -142,7 +151,7 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
     const counts = { linked: 0, observed: 0, failed: 0, deferred: 0, checks_unavailable: 0 }
     let reason = null
     for (const url of candidates.slice(0, pullsPerPass)) {
-      if (signal?.aborted || now() < notBefore) break
+      if (signal?.aborted || deferred()) break
       if (!journal.linkedPulls(url).length) continue
       const [, repository, numberText] = pullUrl.exec(url)
       const number = Number(numberText)
@@ -201,7 +210,7 @@ export function githubObserver({ repositories = [], get = githubGet, now = () =>
       counts.task_sources_incomplete = discoveryIncomplete
       reason ??= 'verified PR link discovery incomplete'
     }
-    if (counts.deferred) reason ??= now() < notBefore ? deferReason : 'some linked PRs were deferred'
+    if (counts.deferred) reason ??= deferred() ?? 'some linked PRs were deferred'
     const health = reason ? entries.length ? 'partial' : 'unavailable' : counts.linked ? 'ok' : 'unconnected'
     if (health === 'unconnected') reason = 'no allowlisted PR links in the accepted live task backlog'
     return journal.recordProviderPoll(githubSource, {
