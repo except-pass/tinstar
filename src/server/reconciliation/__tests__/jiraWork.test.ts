@@ -395,7 +395,11 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   await f.publish([tswTask('TSW-1', green, 'on')])
   expect(await f.run(true)).toMatchObject({ plans: [] })
   expect(issue.fields.assignee).toBeNull()
-  await f.publish([tswTask('TSW-1', green)])
+  const head = 'a'.repeat(40)
+  await f.publish([tswTask('TSW-1', green, 'off', {
+    pr: { url: fixturePull, head },
+    hints: { last_event_text: `done: PR ${fixturePull} checks green at head ${head}` },
+  })])
   // Lose an edit response after Jira has committed it. A new adapter instance
   // reconciles the saved operation and submits once, without adding a duplicate note.
   f.controls.loseEdit = true
@@ -405,7 +409,7 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   expect(issue.fields.assignee.displayName).toBe('William Gathright')
   const mergeNotes = issue.comments.map(comment => adfText(comment.body)).filter(note => note.startsWith('Will: merge'))
   expect(mergeNotes).toHaveLength(1)
-  expect(mergeNotes[0]).toContain(`Will: merge ${fixturePull}`)
+  expect(mergeNotes[0]?.split('\n')[0]).toBe(`Will: merge ${fixturePull} head ${head}`)
   expect(mergeNotes[0]).toContain('Recorded via Tin Star (Firstmate fleet)')
 
   f.appendHistory(issue.id, [{ fieldId: 'status', from: '9', to: '10', fromString: 'Ready for Review', toString: 'Ready for Review' }], 'workflow-admin')

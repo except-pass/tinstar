@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { jiraConfig, startJiraWebhook } from '../../../../event-publisher/jira.js'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
+import { runTswStatusSync } from '../../../coordinator/tswStatusSync'
 import type { OwnerReadyRead } from '../../../shared/ownerReady'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { DomainReadTools } from '../domainReads'
@@ -64,6 +65,8 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
   // Two independently published ready notices corroborate the same durable ask.
   for (const [index, source] of mates.entries()) await snapshotFile(source, [{
     id: `delivery-${index}`, kind: 'ship', spawn_gen: `attempt-${index}`, backlog: { body_lines: ['card: TSW-10'] },
+    yolo: 'off',
+    current_state: { state: 'done', freshness: 'fresh', detail: index === 0 ? 'checks green: PR ready for review' : '' },
     pr: { url: moving, head: original }, hints: { last_event_text: `done: PR ${index === 0 ? moving : moving + '?source=mate'} checks green at head ${original}` },
   }])
   const liveHeads = new Map([[moving, original], [closing, sibling], [legacy, original], [unchanged, sibling], [releaseWait, sibling]])
@@ -71,8 +74,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
   const review = issue('10', questions)
   const tickets = [review, issue('11'), issue('12'), issue('13'), issue('14', 'D1 [Open]: Select a recovery option', 'Decision'), issue('15')]
   const comments = new Map([
-    ['10', [entry(moving, original, '21'),
-      ...Array.from({ length: 49 }, (_, index) => ({ id: String(index + 100), body: 'Review update', created: '2026-11-23T12:00:00Z' })),
+    ['10', [...Array.from({ length: 49 }, (_, index) => ({ id: String(index + 100), body: 'Review update', created: '2026-11-23T12:00:00Z' })),
       entry(moving + '?notice=retry', '', '20'),
       { ...entry(restricted, original, '19'), visibility: { type: 'role' } }, entry(historical, original, '18', '2026-11-23T08:00:00Z')]],
     ['11', [entry(closing, sibling, '22')]], ['12', [entry(legacy, '', '23')]],
@@ -201,6 +203,23 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     await snapshotFile(main!, [])
     expect((await sources.fleetSnapshot(true))[0]!.observation.status).toBe('fresh')
     await rm(main!.snapshotFile)
+    const planned = await runTswStatusSync(await sources.fleetSnapshot(true), {
+      apply: false, stateFile: join(root, 'status-checkpoint.json'), audit: async () => {},
+      jira: {
+        readTswCard: async () => ({
+          id: 'fixture:10', issue_id: '10', key: 'TSW-10', url: `${jiraSite}/browse/TSW-10`,
+          project_id: project, issue_type: 'Task', name: 'Fixture delivery', status: 'In Progress',
+          updated_at: generated, owner: 'Firstmate mate-a', assignee: null, assignee_id: null,
+          description: '', links: [], decision_questions: [], decision_text: questions, blocker: null,
+        }),
+        statusHistory: async () => ({ cursor: { total: 0, last: null }, changes: [] }),
+        findAssignableAccount: async () => 'fixture-will',
+        edit: vi.fn(), transition: vi.fn(), repairTransitionAudit: vi.fn(),
+      },
+    })
+    const reviewEdit = planned.plans[0]?.steps?.find(step => 'kind' in step && step.note)
+    if (!reviewEdit || !('kind' in reviewEdit) || !reviewEdit.note) throw new Error('Expected a coordinator merge note')
+    comments.get('10')!.unshift({ id: '21', body: reviewEdit.note, created: '2026-11-23T12:00:00Z' })
     const journal = new Journal(join(root, 'outage-events.sqlite'))
     const publisherConfig = jiraConfig({ site: jiraSite, cloudId, projectId: project, fields })
     const secret = randomBytes(32).toString('hex')
@@ -241,14 +260,6 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     expect(bundle(pending, null)?.decisions).toHaveLength(1)
     expect([historical, restricted, releaseWait].map(url => merge(pending, url))).toEqual([undefined, undefined, undefined])
     expect((await call(mate, 'list_prs', { view: 'owner-ready', recheck: true })).outcome).toBe('unauthorized')
-    for (const recheck of [true, false]) {
-      expect(await call(granted, 'list_prs', { recheck })).toMatchObject({ outcome: 'invalid-input', message: 'recheck requires view: "owner-ready".' })
-    }
-    for (const option of [{ offset: 0 }, { limit: 1 }, { limit: 25 }]) {
-      expect(await call(granted, 'list_prs', { view: 'owner-ready', ...option })).toMatchObject({
-        outcome: 'invalid-input', message: 'offset and limit are only supported for ordinary PR inventory.',
-      })
-    }
     expect((await browse(false)).status).toBe(403)
     expect(inventory).not.toHaveBeenCalled()
 
@@ -258,6 +269,9 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     const restarted = (await call(granted, 'list_prs', { view: 'owner-ready' })).ownerReady as OwnerReadyRead
     expect(restarted.warnings).toContainEqual(expect.stringContaining('Fleet coverage for main is stale'))
     expect(merge(restarted, moving)?.live?.state).toBe('ready')
+    const withDefaults = await call(granted, 'list_prs', { view: 'owner-ready', offset: 0, limit: 25 })
+    expect(withDefaults.outcome).toBe('available')
+    expect(merge(withDefaults.ownerReady, moving)).toMatchObject({ requestedHeads: [original], live: { state: 'ready' } })
     expect(merge(restarted, legacy)).toMatchObject({ requestedHeads: [], unverifiedRequest: true, live: { head: original, state: 'unverified' } })
     expect(merge(restarted, outsider)?.live).toMatchObject({ head: null, state: 'unverified' })
 

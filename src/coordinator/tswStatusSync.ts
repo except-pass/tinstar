@@ -61,7 +61,7 @@ function plan(event: StatusEvent, card: JiraWorkCard): Step[] | string {
   // A review or completion PR also supplies evidence for an intermediate Start.
   if (!active && !review) move('Start')
   if (event.target === 'Ready for Review') {
-    edit('review', { assignee: reviewer, note: `Will: merge ${event.pull}` })
+    edit('review', { assignee: reviewer, note: `Will: merge ${event.pull}${event.head ? ` head ${event.head}` : ''}` })
     move('Submit for Review')
   }
   if (event.target === 'Done') move(review ? 'Accept Final' : 'Complete Directly')

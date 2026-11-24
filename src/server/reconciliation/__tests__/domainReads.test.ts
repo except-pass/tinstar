@@ -107,6 +107,7 @@ it('adapts real PR readers behind a server-owned test grant, preserving multiple
   const domain = new DomainReadTools(api, releases, async () => true)
   const listed = await domain.listPulls(input)
   expect(listed).toMatchObject({ pagination: { total: 3, next_offset: 1 }, pulls: [{ id: 'owner/repo#1', head, links: expect.any(Array) }] })
+  expect(await domain.listPulls({ ...input, recheck: false })).toEqual(listed)
   expect(await domain.listPulls({ ...input, offset: 2 })).toMatchObject({ pulls: [{ id: 'owner/repo#3', links: [] }], pagination: { next_offset: null } })
   const inspected = await domain.getPull({ ...input, url, head, include_files: true })
   expect(inspected).toMatchObject({ outcome: 'available', pull: { id: 'owner/repo#1', links: expect.arrayContaining([expect.objectContaining({ cardId: scene.cards[0]!.id }), expect.objectContaining({ cardId: scene.cards[1]!.id })]) },
