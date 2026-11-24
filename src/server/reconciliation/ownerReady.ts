@@ -10,7 +10,7 @@ import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from '
 import { deferredDecisionCard } from './claimPolicy'
 import { dispatchForTask } from './dispatchProvenance'
 import type { JiraWork } from './jiraWork'
-import { declaredRepository, mergePublication, readyHeadPublication, requestedHead } from './ownerRequestEvidence'
+import { declaredRepository, mergePublication, workerReviewPublication } from './ownerRequestEvidence'
 import { buildQueue } from './queue'
 import type { PullReadiness } from './queuePulls'
 import { tswEvidence } from './tswSnapshot'
@@ -220,9 +220,8 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     const dispatch = dispatchForTask(task[tswEvidence] ?? {}, row?.[tswEvidence])
     const issue = dispatch.status === 'card' ? jiraIssues.get(dispatch.cardId) : undefined
     if (!issue?.reviewAssigned) continue
-    const publication = readyHeadPublication(task.lastEventText ?? '')
-    if (!publication || publication.head !== requestedHead(task.pr.head) ||
-        publication.id !== releasePull(String(task.pr.url))?.id) continue
+    const publication = workerReviewPublication(task)
+    if (!publication) continue
     if (!issue.merges.some(merge => merge.id === publication.id)) continue
     addMerge({ kind: 'firstmate', id: JSON.stringify([home, task.id, task.identity.spawn_gen]), label: `${issue.key} · worker publication`, url: task.identity.task_id ? workerLink(home, task.identity.task_id) : null },
       publication.url, publication.head)

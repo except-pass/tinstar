@@ -428,7 +428,7 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   const head = 'a'.repeat(40)
   await f.publish([tswTask('TSW-1', green, 'off', {
     pr: { url: fixturePull, head },
-    hints: { last_event_text: `done: PR ${fixturePull} checks green at head ${head}` },
+    hints: { last_event_text: 'done [at=1]: checks green' },
   })])
   // Lose an edit response after Jira has committed it. A new adapter instance
   // reconciles the saved operation and submits once, without adding a duplicate note.

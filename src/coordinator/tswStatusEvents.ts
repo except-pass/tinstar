@@ -5,7 +5,7 @@ import { releasePull } from '../shared/pullIdentity'
 import { parsePullUrl } from '../server/fleet/attention'
 import type { SourceSnapshot } from '../server/reconciliation'
 import { dispatchForTask } from '../server/reconciliation/dispatchProvenance'
-import { readyHeadPublication, requestedHead } from '../server/reconciliation/ownerRequestEvidence'
+import { workerReviewPublication } from '../server/reconciliation/ownerRequestEvidence'
 import { ageObservation } from '../server/reconciliation/observation'
 import { tswEvidence } from '../server/reconciliation/tswSnapshot'
 import { isPublishedReviewDetail } from '../server/reconciliation/workerLinkReport'
@@ -70,10 +70,8 @@ function classify(id: string, task: Task | undefined, row: Backlog | undefined, 
   if (isPublishedReviewDetail(detail) && attempt?.yolo !== 'on') {
     if (!pull) return 'review-without-pull-evidence'
     if (attempt?.yolo === 'off') {
-      const publication = readyHeadPublication(last ?? '')
-      const head = publication && publication.id === releasePull(pull)?.id &&
-        publication.id === releasePull(String(task?.pr.url))?.id && publication.head === requestedHead(task?.pr.head)
-        ? publication.head : null
+      const publication = task && workerReviewPublication(task)
+      const head = publication && publication.id === releasePull(pull)?.id ? publication.head : null
       return event({ target: 'Ready for Review', pull, head }, pull, `First Mate reported checks green. ${pull}`)
     }
     return 'merge-authority-unavailable'

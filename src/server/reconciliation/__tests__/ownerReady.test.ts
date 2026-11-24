@@ -64,7 +64,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     id: `delivery-${index}`, kind: 'ship', spawn_gen: `attempt-${index}`, backlog: { body_lines: ['card: TSW-10'] },
     yolo: 'off',
     current_state: { state: 'done', freshness: 'fresh', detail: 'checks green: PR ready for review' },
-    pr: { url, head }, hints: { last_event_text: `done: PR ${url} checks green at head ${head}` },
+    pr: { url, head }, hints: { last_event_text: index === 0 ? 'done [at=1]: checks green' : `done: PR ${url} checks green at head ${head}` },
   }])
   await publishReady(0, moving)
   await publishReady(1, moving + '/')
