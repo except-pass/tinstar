@@ -32,13 +32,13 @@ batch=$(printf '%s' "$rows" | jq -er -s --argjson after "$after" '
   if all(.[]; (.sequence | type) == "number" and .sequence > $after and (.sequence | floor) == .sequence)
   then
     ([$after, .[].sequence] | max),
-    (.[] | select(.source.source_id == "github:cmsandbox-tags" and .source.mode == "live" and .event_type == "tag.pushed")
+    (.[] | select(.source.source_id == "github:cmsandbox-tags" and .source.mode == "live" and .event_type == "tag.pushed" and .evidence.action != "seeded")
       | .evidence.source_reference as $ref
       | if $ref.repository == "fortresspower/cmsandbox"
           and ($ref.tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
           and ($ref.sha | test("^[a-f0-9]{40,64}$"))
           and (.observed_at | test("^[0-9T:.-]+Z$"))
-          and (.evidence.action | IN("seeded", "created", "moved", "restored"))
+          and (.evidence.action | IN("created", "moved", "restored"))
         then "tag pushed \($ref.repository) \($ref.tag) \($ref.sha) \(.observed_at) \(.evidence.action) #\(.sequence)"
         else error("invalid push event")
         end)

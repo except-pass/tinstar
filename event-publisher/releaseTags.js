@@ -45,30 +45,43 @@ function releaseEvidence(data, { tag, sha }) {
   if (!release) return null
 
   const range = release.membership?.status ?? 'unknown'
-  const verified = new Map((release.pulls ?? []).filter(verifiedPull).map(pull => [pull.url, { pull, basis: 'range' }]))
-  const ancestry = new Map((release.containedPulls ?? []).filter(row => row.state === 'included').map(row => [row.pull, row.mergeSha]))
-  for (const pull of data.pulls ?? []) {
-    if (!verified.has(pull.url) && verifiedPull(pull) && ancestry.get(pull.url) === pull.mergeSha && pull.links?.some(link => link.active)) {
-      verified.set(pull.url, { pull, basis: 'ancestry' })
+  const rangePulls = release.pulls ?? []
+  const verified = new Map(rangePulls.filter(verifiedPull).map(pull => [pull.url, { pull, basis: 'range' }]))
+  const associations = new Map((data.pulls ?? []).map(pull => [pull.url, pull]))
+  const links = new Map([...associations].map(([url, pull]) => [url, (pull.links ?? []).flatMap(link => {
+    const cardUrl = link.active && !pull.exceptions?.includes(`Linked card unavailable: ${link.cardId}`) && cardLink(link.cardId)
+    return cardUrl ? [{ pull: url, card_id: link.cardId, url: cardUrl }] : []
+  })]))
+  const ancestry = new Map((release.containedPulls ?? []).map(row => [row.pull, row]))
+  let ancestryPending = false
+  for (const [url, pull] of associations) {
+    if (verified.has(url) || !isPullUrl(url) || !links.get(url).length) continue
+    if (pull.freshness === 'fresh' && (pull.state === 'open' || pull.state === 'closed')) continue
+    const proof = ancestry.get(url)
+    if (!verifiedPull(pull) || !proof || proof.mergeSha !== pull.mergeSha || proof.state === 'unknown') {
+      ancestryPending = true
+    } else if (proof.state === 'included') {
+      verified.set(url, { pull, basis: 'ancestry' })
     }
   }
   const pulls = [...verified.values()].sort((a, b) => a.pull.url.localeCompare(b.pull.url))
-  const cards = data.associationsComplete ? pulls.flatMap(({ pull }) =>
-    (pull.links ?? []).flatMap(link => {
-      const url = link.active && cardLink(link.cardId)
-      return url ? [{ pull: pull.url, card_id: link.cardId, url }] : []
-    })).sort((a, b) => a.pull.localeCompare(b.pull) || a.card_id.localeCompare(b.card_id)) : []
-  const runs = release.github?.runsStatus === 'fresh' ? (release.github.runs ?? [])
+  const coverage = range === 'complete' && (!data.associationsComplete || ancestryPending ||
+    rangePulls.some(pull => !verifiedPull(pull))) ? 'partial' : range
+  const cards = data.associationsComplete ? pulls.flatMap(({ pull }) => links.get(pull.url) ?? [])
+    .sort((a, b) => a.pull.localeCompare(b.pull) || a.card_id.localeCompare(b.card_id)) : []
+  const freshRuns = release.github?.runsStatus === 'fresh'
+  const runs = (release.github?.runs ?? [])
     .filter(run => run.sha === sha && Number.isSafeInteger(run.id) && run.id > 0 &&
       run.url === `https://github.com/${tagRepository}/actions/runs/${run.id}` &&
       typeof run.workflow === 'string' && run.workflow.split('@')[0] !== '.github/workflows/release-production.yml')
-    .map(run => ({ id: run.id, url: run.url, workflow: run.workflow, status: run.status, conclusion: run.conclusion, attempt: run.attempt }))
-    .sort((a, b) => a.id - b.id) : []
+    .map(run => ({ id: run.id, url: run.url, workflow: run.workflow, status: run.status, conclusion: run.conclusion, attempt: run.attempt,
+      freshness: freshRuns ? 'fresh' : 'last_known' }))
+    .sort((a, b) => a.id - b.id)
 
   return {
-    pulls: { coverage: range, items: pulls.map(({ pull, basis }) => ({ url: pull.url, merge_sha: pull.mergeSha, basis })) },
-    cards: { coverage: data.associationsComplete ? range : 'unknown', items: cards },
-    runs: { coverage: release.github?.runsStatus !== 'fresh' ? 'unknown' : runs.length ? 'complete' : 'pending', items: runs },
+    pulls: { coverage, items: pulls.map(({ pull, basis }) => ({ url: pull.url, merge_sha: pull.mergeSha, basis })) },
+    cards: { coverage: data.associationsComplete ? coverage : 'unknown', items: cards },
+    runs: { coverage: !freshRuns ? 'unknown' : runs.length ? 'complete' : 'pending', items: runs },
   }
 }
 

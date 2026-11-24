@@ -115,8 +115,7 @@ export function githubReader({ get = githubGet, now = () => new Date() } = {}) {
     const remaining = Number(headers.get('x-ratelimit-remaining'))
     const reset = Number(headers.get('x-ratelimit-reset')) * 1000
     const retry = Number(headers.get('retry-after')) * 1000
-    const secondaryLimit = status === 403 && /secondary rate limit|abuse detection/i.test(body)
-    if (remaining <= coreReserve || status === 429 || retry > 0 || secondaryLimit) {
+    if (remaining <= coreReserve || status === 429 || retry > 0) {
       notBefore = Math.max(now().getTime() + Math.max(githubInterval * 1000, retry || 0),
         remaining <= coreReserve ? reset || 0 : 0)
       deferReason = remaining <= coreReserve ? 'shared GitHub API quota reserve reached' : 'GitHub asked the observer to back off'

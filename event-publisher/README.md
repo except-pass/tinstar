@@ -95,10 +95,13 @@ authenticated `gh` CLI with read access to `fortresspower/cmsandbox`. It reads
 all pages of GitHub's tag catalog and keeps refs named `vMAJOR.MINOR.PATCH`.
 It polls on startup and every 90 seconds after a pass, independently of fleet
 reads. It uses conditional GETs and shares the linked-PR observer's quota
-reserve and backoff.
+reserve and backoff. Hulk’s deployed service journal is
+`~/srv/event-publisher/data/journal.sqlite`. The standalone setup above uses
+`~/srv/event-publisher/journal.sqlite`. The [Main wake check](cmsandbox-tag-wake.md)
+defaults to the deployed service journal.
 
-The first complete inventory seeds all current tags and records a single
-`tag pushed` event for the highest version, marked `seeded`. Subsequent
+The first complete inventory records all current tags as a silent baseline.
+Restarting with the same inventory produces no new events. Subsequent
 `tag.pushed` events name the repository, tag, commit SHA and time the publisher
 observed it. A move to a SHA with no recorded push emits a push with action
 `moved` and the previous SHA in `change.before`. Returning to an already
@@ -113,9 +116,10 @@ projection and journals `tag.evidence.updated` against the original event ID
 when evidence changes for that exact tag and SHA. PR evidence identifies the
 consecutive tag range and any separately confirmed ancestry for card-linked
 PRs. Card links come from the projection's verified active associations, and
-component runs include the attempt and workflow status. Coverage fields
-describe which evidence is still pending, partial or unknown. The publisher
-checks at most one due tag per pass and checks completed evidence less often.
+component runs include the attempt, workflow status and freshness. Incomplete
+reads retain last-known entries. Complete coverage can correct earlier evidence.
+The publisher checks at most one due tag per pass and checks completed evidence
+less often.
 A tag and its Actions runs describe release activity. PROD delivery requires
 separate verification.
 

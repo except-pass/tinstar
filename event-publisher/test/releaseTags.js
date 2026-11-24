@@ -41,7 +41,7 @@ async function setup(t) {
   }
 }
 
-test('cmsandbox poll seeds only the newest tag, keeps ref transitions and dedupes moved and restored identities across restart', async t => {
+test('cmsandbox poll baselines existing tags silently, keeps ref transitions and dedupes moved and restored identities across restart', async t => {
   const fixture = await setup(t)
   fixture.register()
   let pages = [
@@ -60,33 +60,31 @@ test('cmsandbox poll seeds only the newest tag, keeps ref transitions and dedupe
     fetchEndpoint: async () => new Response(null, { status: 503 }) })
   let poll = observe()
   equal(await fixture.poll(poll), true)
-  const [seed] = fixture.events()
-  deepEqual(seed.evidence.source_reference, { repository: tagRepository, tag: 'v1.10.0', sha: head })
-  equal(seed.evidence.action, 'seeded')
-  equal(seed.label, 'tag pushed')
-  equal(seed.occurred_at, null)
-  equal(seed.observed_at, fixture.now().toISOString())
+  deepEqual(fixture.events(), [])
 
   cached = true
   await fixture.poll(poll)
-  deepEqual(fixture.events(), [seed])
+  deepEqual(fixture.events(), [])
   cached = false
   fixture.reopen()
   poll = observe()
   await fixture.poll(poll)
-  deepEqual(fixture.events(), [seed])
+  deepEqual(fixture.events(), [])
 
   pages[1] = [row('v1.10.0', moved), row('v1.11.0')]
   await fixture.poll(poll)
   pages[1] = [row('v1.10.0'), row('v1.11.0')]
   await fixture.poll(poll)
-  const [, created, move, returned] = fixture.events()
+  pages[1] = [row('v1.10.0', moved), row('v1.11.0')]
+  await fixture.poll(poll)
+  const [created, move, firstReturn, returned] = fixture.events()
   deepEqual(created.evidence.source_reference, { repository: tagRepository, tag: 'v1.11.0', sha: head })
   equal(created.evidence.action, 'created')
   equal(move.evidence.action, 'moved')
   deepEqual(move.change, { field: 'sha', before: head, after: moved })
+  equal(firstReturn.event_type, 'tag.pushed')
   equal(returned.event_type, 'tag.ref.changed')
-  equal(returned.evidence.push_event_id, seed.event_id)
+  equal(returned.evidence.push_event_id, move.event_id)
 
   pages[1] = [row('v1.11.0')]
   failed = true
@@ -101,8 +99,8 @@ test('cmsandbox poll seeds only the newest tag, keeps ref transitions and dedupe
   await fixture.poll(observe())
   const deleted = fixture.events().at(-1)
   equal(deleted.event_type, 'tag.deleted')
-  deepEqual(deleted.change, { field: 'sha', before: head, after: null })
-  pages[1].push(row('v1.10.0'))
+  deepEqual(deleted.change, { field: 'sha', before: moved, after: null })
+  pages[1].push(row('v1.10.0', moved))
   await fixture.poll(observe())
   const restored = fixture.events().at(-1)
   equal(restored.event_type, 'tag.ref.changed')
@@ -110,7 +108,7 @@ test('cmsandbox poll seeds only the newest tag, keeps ref transitions and dedupe
   equal(fixture.events().filter(event => event.event_type === 'tag.pushed').length, 3)
 })
 
-test('a limited or overlapping inventory cannot seed or delete tags', async t => {
+test('a limited or overlapping inventory cannot establish a baseline or delete tags', async t => {
   const fixture = await setup(t)
   fixture.register()
   let calls = 0
@@ -148,60 +146,112 @@ test('exact-SHA Releases evidence follows the base push and the Main check emits
     containedPulls: [{ pull: pull(3).url, mergeSha: old, state: 'included' }, { pull: pull(4).url, mergeSha: moved, state: 'included' }],
     github: { runsStatus: 'fresh', runs: [run(4), run(5, { sha: moved }), run(6, { workflow: '.github/workflows/release-production.yml' })] },
   }
-  let tags = [row(version)]
+  let tags = [row('v2.0.0', old)]
+  let associationsComplete = true
+  let associatedPulls = [pull(1), pull(3), pull(4), pull(7, { exceptions: [`Linked card unavailable: ${cardId}`] })]
+  release.pulls.push(pull(8))
+  associatedPulls.push(pull(8, { exceptions: [`Linked card unavailable: ${cardId}`] }))
+  release.containedPulls.push({ pull: pull(7).url, mergeSha: old, state: 'included' })
+  release.github.runsStatus = 'unknown'
+
+  const ssh = join(fixture.dir, 'ssh')
+  await writeFile(ssh, `#!/bin/bash
+if [[ \$FAIL_SSH ]]; then exit 255; fi
+run_remote() {
+  [[ \$3 == --db && \$4 == /home/farm/srv/event-publisher/data/journal.sqlite ]] || exit 2
+  "\$1" "\$2" "\$3" "\$FIXTURE_DB" "\${@:5}"
+}
+eval "run_remote \${@: -1}"
+`, { mode: 0o700 })
+  const cursor = join(fixture.dir, 'cursor')
+  const env = { ...process.env, PATH: `${fixture.dir}:${process.env.PATH}`, TAG_WAKE_CURSOR: cursor,
+    TAG_WAKE_REMOTE_EVENTS: cli, TAG_WAKE_REMOTE_DB: '', FIXTURE_DB: fixture.path }
   const observer = releaseTagObserver({
     reader: githubReader({ get: async () => github(tags) }), now: fixture.now,
     fetchEndpoint: async endpoint => {
       equal(endpoint.searchParams.get('tag'), version)
       equal(fixture.events()[0].label, 'tag pushed')
       return Response.json({ ok: true, data: { releases: [release], releaseSource: { status: 'partial' },
-        associationsComplete: true, pulls: [pull(3), pull(4)] } })
+        associationsComplete, pulls: associatedPulls } })
     },
   })
   await fixture.poll(observer)
-  const [seed] = fixture.events()
+  equal((await exec(check, [], { env })).stdout, '')
+  fixture.reopen()
+  await fixture.poll(observer)
+  equal((await exec(check, [], { env })).stdout, '')
+  tags.push(row(version))
+  await fixture.poll(observer)
+  const [push] = fixture.events()
+  equal(push.occurred_at, null)
+  equal(push.observed_at, fixture.now().toISOString())
   equal(fixture.events().length, 1)
   release.sourceSha = head
   await fixture.poll(observer)
   const evidence = fixture.events().at(-1)
   equal(evidence.event_type, 'tag.evidence.updated')
-  equal(evidence.evidence.push_event_id, seed.event_id)
+  equal(evidence.evidence.push_event_id, push.event_id)
   deepEqual(evidence.change.after.pulls.items, [
     { url: pull(1).url, merge_sha: old, basis: 'range' },
     { url: pull(3).url, merge_sha: old, basis: 'ancestry' },
+    { url: pull(8).url, merge_sha: old, basis: 'range' },
   ])
   deepEqual(evidence.change.after.cards.items.map(card => card.url), [
     `https://www.notion.so/${cardId}`, `https://www.notion.so/${cardId}`,
   ])
-  deepEqual(evidence.change.after.runs.items.map(({ id, status }) => [id, status]), [[4, 'in_progress']])
+  deepEqual(evidence.change.after.runs.items.map(({ id, status, freshness }) => [id, status, freshness]),
+    [[4, 'in_progress', 'last_known']])
   fixture.reopen()
   await fixture.poll(observer)
-  deepEqual(fixture.events(), [seed, evidence])
+  deepEqual(fixture.events(), [push, evidence])
 
-  tags = [row(version, moved)]
+  associationsComplete = false
+  release.membership.status = 'pending'
+  release.pulls = [pull(9)]
+  release.github.runs = [run(10)]
   await fixture.poll(observer)
-  const next = fixture.events().at(-1)
-  equal(next.event_type, 'tag.pushed')
-  equal(next.evidence.action, 'moved')
-  tags = []
+  const partial = fixture.events().at(-1).change.after
+  equal(partial.pulls.coverage, 'pending')
+  deepEqual(partial.pulls.items.map(item => item.url), [1, 3, 8, 9].map(number => pull(number).url))
+  equal(partial.cards.coverage, 'unknown')
+  deepEqual(partial.cards.items, evidence.change.after.cards.items)
+  equal(partial.runs.coverage, 'unknown')
+  deepEqual(partial.runs.items.map(item => item.id), [4, 10])
+
+  associationsComplete = true
+  associatedPulls = [pull(9, { exceptions: [`Linked card unavailable: ${cardId}`] })]
+  release.membership.status = 'complete'
+  release.github.runsStatus = 'fresh'
+  await fixture.poll(observer)
+  const corrected = fixture.events().at(-1).change.after
+  deepEqual(corrected.pulls, { coverage: 'complete', items: [{ url: pull(9).url, merge_sha: old, basis: 'range' }] })
+  deepEqual(corrected.cards, { coverage: 'complete', items: [] })
+  deepEqual(corrected.runs.items.map(({ id, freshness }) => [id, freshness]), [[10, 'fresh']])
+
+  tags = [row('v2.0.0', old)]
   await fixture.poll(observer)
   await fixture.poll(observer)
   const last = fixture.events().at(-1)
   equal(last.event_type, 'tag.deleted')
 
-  const ssh = join(fixture.dir, 'ssh')
-  await writeFile(ssh, '#!/bin/bash\nif [[ ${FAIL_SSH:-} ]]; then exit 255; fi\nexec /bin/bash -c "${@: -1}"\n', { mode: 0o700 })
-  const cursor = join(fixture.dir, 'cursor')
-  const env = { ...process.env, PATH: `${fixture.dir}:${process.env.PATH}`, TAG_WAKE_CURSOR: cursor,
-    TAG_WAKE_REMOTE_EVENTS: cli, TAG_WAKE_REMOTE_DB: fixture.path }
   const first = await exec(check, [], { env })
-  equal(first.stdout, [
-    `tag pushed ${tagRepository} ${version} ${head} ${seed.observed_at} seeded #${seed.sequence}`,
-    `tag pushed ${tagRepository} ${version} ${moved} ${next.observed_at} moved #${next.sequence}`,
-    '',
-  ].join('\n'))
+  equal(first.stdout, `tag pushed ${tagRepository} ${version} ${head} ${push.observed_at} created #${push.sequence}\n`)
   equal(await readFile(cursor, 'utf8'), `${last.sequence}\n`)
   equal((await exec(check, [], { env })).stdout, '')
   await rejects(exec(check, [], { env: { ...env, FAIL_SSH: '1' } }), { code: 1, stdout: '' })
   equal(await readFile(cursor, 'utf8'), `${last.sequence}\n`)
+})
+
+test('shared GitHub reader uses status and headers for backoff', async () => {
+  for (const [status, extra, backoff] of [[403, [], false], [403, [['retry-after', '60']], true], [429, [], true]]) {
+    let calls = 0
+    const reader = githubReader({ get: async () => ++calls === 1
+      ? github({ message: 'secondary rate limit' }, { status, extra })
+      : github([]) })
+    const read = () => reader.sample('tags', undefined, value => value)
+    await rejects(read(), backoff ? /back off/ : /HTTP 403/)
+    if (backoff) await rejects(read(), /back off/)
+    else deepEqual((await read()).value, [])
+    equal(calls, backoff ? 1 : 2)
+  }
 })

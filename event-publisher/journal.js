@@ -352,7 +352,6 @@ export class Journal {
         const publish = (id, event, event_id = `event:${randomUUID()}`) =>
           append.run(event_id, sourceId, type, id, JSON.stringify({ ...event, event_id })).changes
         const seed = !previous.last_success_at
-        const newest = tags.keys().next().value
         for (const [tag, sha] of tags) {
           const id = `github:tag:${tagRepository}:${tag}`
           const prior = baseline.get(id)
@@ -362,8 +361,8 @@ export class Journal {
             continue
           }
           let push_event_id = null
-          if (!seed || tag === newest) {
-            const action = seed ? 'seeded' : !prior ? 'created' : prior.sha === sha ? 'restored' : 'moved'
+          if (!seed) {
+            const action = !prior ? 'created' : prior.sha === sha ? 'restored' : 'moved'
             const change = { field: 'sha', before: prior?.sha ?? null, after: sha }
             push_event_id = `event:github:tag:${tagRepository}:${tag}:${sha}`
             const entry = releaseTagEvent(id, tag, sha, observedAt, 'tag.pushed', 'tag pushed', change,
@@ -426,11 +425,25 @@ export class Journal {
       `).get(tagSource.source_id, target.subject, target.event_id, target.next_attempt_at)
       // An overlapping poll can move the tag while Releases is still reading.
       if (current) {
-        const updated = detail ? JSON.stringify(detail) : current.detail
+        const previous = JSON.parse(current.detail)
+        const merged = detail && Object.fromEntries(Object.entries({
+          pulls: item => item.url,
+          cards: item => JSON.stringify([item.pull, item.card_id]),
+          runs: item => item.id,
+        }).map(([name, identity]) => {
+          const group = detail[name]
+          if (group.coverage === 'complete') return [name, group]
+          const items = new Map(previous[name].items.map(item => [
+            identity(item), name === 'runs' ? { ...item, freshness: 'last_known' } : item,
+          ]))
+          for (const item of group.items) items.set(identity(item), item)
+          return [name, { ...group, items: [...items.values()] }]
+        }))
+        const updated = merged ? JSON.stringify(merged) : current.detail
         if (updated !== current.detail) {
           const event_id = `event:${randomUUID()}`
           const event = releaseTagEvent(target.subject, target.tag, target.sha, observedAt,
-            'tag.evidence.updated', 'tag evidence updated', { field: 'enrichment', after: detail },
+            'tag.evidence.updated', 'tag evidence updated', { field: 'enrichment', after: merged },
             { push_event_id: target.event_id })
           this.db.prepare(insertEvent).run(event_id, tagSource.source_id, tagSource.type, target.subject, JSON.stringify({ ...event, event_id }))
         }
