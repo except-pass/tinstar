@@ -83,7 +83,6 @@ export function routingReplayCheck(receipts) {
   for (const receipt of ordered) {
     const oldKey = routeKey(receipt.change.before)
     const newKey = routeKey(receipt.change.after)
-    if (oldKey === newKey) continue
     const key = JSON.stringify([receipt.subject.id, receipt.effective_start_at])
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push({ receipt, oldKey, newKey })
