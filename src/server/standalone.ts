@@ -108,9 +108,9 @@ export function startServer(opts: ServerOptions) {
   prepTimer.unref()
   void reconciliation.preparation.replenish()
   reconciliation.authorizePulls = req => pulls.authorized(req)
-  reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.read() : null
+  reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.readForReconciliation() : null
   reconciliation.readPullReadiness = (...args) => pulls.readiness(...args)
-  reconciliation.readOwnerInventory = (repositories, force, scene) => pulls.read(force, repositories, scene)
+  reconciliation.readOwnerInventory = (repositories, force, scene) => pulls.readForReconciliation(force, repositories, scene)
   const reviewHandoffs = new ReviewDeploymentReconciler(reconciliation.reviewAudit, { scene: () => reconciliation.scene(true), associations: releases.store,
     update: (input, actor) => reconciliation.updateWork(input, actor), deliver: (home, id, text) => fleet.deliverReviewException(home, id, text) })
   reconciliation.reconcileReviewHandoffs = force => reviewHandoffs.run(force)

@@ -159,8 +159,8 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     sources.waitingOnMain = vi.fn(async () => { throw new Error('Return recheck must not invoke Main wait notifications') })
     const pulls = new PullsApi(sources, new AssociationStore(root), root, new PullReader(inventory, Date.now, new QueuePullReader(readScalars)))
     sources.authorizePulls = req => pulls.authorized(req)
-    sources.readOwnerInventory = (repositories, force, scene) => pulls.read(force, repositories, scene)
-    sources.readPulls = async () => pulls.read(false, undefined, new SceneReconciler().project(await sources.snapshot()))
+    sources.readOwnerInventory = (repositories, force, scene) => pulls.readForReconciliation(force, repositories, scene)
+    sources.readPulls = async () => pulls.readForReconciliation(false, undefined, new SceneReconciler().project(await sources.snapshot()))
     sources.readPullReadiness = (...args) => pulls.readiness(...args)
     return { sources, pulls }
   }

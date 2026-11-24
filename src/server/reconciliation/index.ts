@@ -44,7 +44,8 @@ import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
 import { reconcileDecision, type DecisionResolution } from './decisionResolution'
-import { inventoryPullState, type PullsRead } from '../../shared/pulls'
+import { inventoryPullState } from '../../shared/pulls'
+import type { ReconciliationPullsRead } from '../pulls/routes'
 import type { PullReadiness } from './queuePulls'
 import { notionReleaseTransport } from '../releases/writer'
 import { ownerCards, ownerReadyRequests, selectJiraMergeRequests, verifyOwnerMerges } from './ownerReady'
@@ -66,9 +67,9 @@ export class ReconciliationSources {
   readonly reviewAudit: ReviewDeploymentAudit
   releaseDesk?: () => Promise<import('./queue').QueueItem[]>
   authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
-  readPulls?: (req?: IncomingMessage) => Promise<PullsRead | null>
+  readPulls?: (req?: IncomingMessage) => Promise<ReconciliationPullsRead | null>
   readPullReadiness?: (...args: Parameters<QueuePullReader['get']>) => Promise<Map<string, PullReadiness>>
-  readOwnerInventory?: (repositories: ReadonlySet<string>, force: boolean, scene: FloorScene) => Promise<PullsRead>
+  readOwnerInventory?: (repositories: ReadonlySet<string>, force: boolean, scene: FloorScene) => Promise<ReconciliationPullsRead>
   onWorkRefresh?: (cards: WorkCard[]) => Promise<void>
   checkInIndicators?: () => Promise<Map<string, NonNullable<SceneCard['checkInRequest']>>>
   private associations: AssociationStore
@@ -549,7 +550,7 @@ export class ReconciliationSources {
     return workReadback(read)
   }
 
-  private readOwnerMergeStates(merges: OwnerReadyRead['repositories'][number]['merges'], jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined, inventory: PullsRead | null, force: boolean, readBudget: number) {
+  private readOwnerMergeStates(merges: OwnerReadyRead['repositories'][number]['merges'], jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined, inventory: ReconciliationPullsRead | null, force: boolean, readBudget: number) {
     const selected = selectJiraMergeRequests(jira)
     const expectedHeads = new Map<string, string | null>()
     for (const pull of inventory?.pulls ?? []) {
@@ -577,7 +578,7 @@ export class ReconciliationSources {
       : Promise.resolve(new Map<string, PullReadiness>())
   }
 
-  private async enrichOwnerReady(read: OwnerReadyRead, recheck: boolean, scene: FloorScene, jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined, knownInventory?: PullsRead | null, readBudget = queuePullReadBudget) {
+  private async enrichOwnerReady(read: OwnerReadyRead, recheck: boolean, scene: FloorScene, jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined, knownInventory?: ReconciliationPullsRead | null, readBudget = queuePullReadBudget) {
     const merges = read.repositories.flatMap(group => group.merges)
     const repositories = new Set(merges.flatMap(ask => ask.url ? [releasePull(ask.url)!.repository] : []))
     const inventory = knownInventory ?? (repositories.size ? await this.readOwnerInventory?.(repositories, recheck, scene).catch(() => null) : null) ?? null

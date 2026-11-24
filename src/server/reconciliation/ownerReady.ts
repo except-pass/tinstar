@@ -1,7 +1,7 @@
 import { homeName } from '../../cockpit/overviewQuery'
 import { firstMateRequestSchema, requestAnchor } from '../../shared/deskSource'
 import type { OwnerReadyRead, OwnerRequestSource, OwnerMergeAsk, OwnerDecisionAsk } from '../../shared/ownerReady'
-import type { PullsRead } from '../../shared/pulls'
+import type { ReconciliationPullsRead } from '../pulls/routes'
 import { releasePull } from '../../shared/pullIdentity'
 import { cardSourceUrl, isJiraCard } from '../../shared/workIdentity'
 import { decisionRecordRows, decisionRequests, withdrawnDecisionIds } from '../../shared/workflowRequests'
@@ -234,7 +234,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
   return { observedAt: snapshot.generatedAt, repositories: [...groups.values()].sort((a, b) => (a.repository ?? '\uffff').localeCompare(b.repository ?? '\uffff')), warnings: [...new Set(warnings)] }
 }
 
-export function verifyOwnerMerges(read: OwnerReadyRead, inventory: PullsRead | null, states: ReadonlyMap<string, PullReadiness>) {
+export function verifyOwnerMerges(read: OwnerReadyRead, inventory: ReconciliationPullsRead | null, states: ReadonlyMap<string, PullReadiness>) {
   const pulls = new Map(inventory?.pulls.filter(pull => pull.freshness === 'fresh').map(pull => [pull.id, pull]))
   const closed = new Set(inventory?.closedPulls)
   for (const group of read.repositories) group.merges = group.merges.filter(merge => {

@@ -16,7 +16,6 @@ export interface PullsRead {
   account?: string
   authenticatedActor?: string; credentialProfile?: string
   associations?: Array<PullIdentity & { links: ReleaseLink[] }>
-  closedPulls?: string[]
   pulls: PullSummary[]; repositories: PullRepository[]; warnings: string[]; associationsComplete: boolean
 }
 export interface PullDetail {
