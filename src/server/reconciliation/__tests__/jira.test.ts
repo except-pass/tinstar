@@ -14,7 +14,7 @@ import { WorkflowContent, receiptMarker, sectionText } from '../workflowContent'
 import { ImplementationContracts, implementationContract, digest } from '../implementationContract'
 import { ReconciliationMcp } from '../mcp'
 import { JiraAdapter, jiraPropertyKey, JIRA_SYNTHETIC_LABEL, JiraMappingError, jiraText } from '../jira'
-import { jiraCardPrefix, cardIdSchema } from '../../../shared/workIdentity'
+import { cardSourceUrl, jiraCardPrefix, cardIdSchema } from '../../../shared/workIdentity'
 import { workerLinkRecord } from '../workerLinks'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import type { CreateWorkInput, SubmitHandoffInput } from '../../../shared/workflow'
@@ -391,6 +391,11 @@ it('retains the durable duplicate guard after a potentially submitted Jira creat
   const workflow = new WorkflowOperations(f.reader, async () => [], f.root)
   expect(await workflow.create(create, 'Fixture')).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed' })
   expect(f.requests.filter(request => request.path === 'issue' && request.method === 'POST')).toHaveLength(1)
+})
+
+it('preserves the shared URL fallback for Jira IDs outside the pilot', () => {
+  const nativeId = 'jira:sample.atlassian.net:10001:60001'
+  expect(cardSourceUrl(nativeId)).toBe(`https://www.notion.so/${nativeId}`)
 })
 
 it('renders provider-aware parent references while preserving Notion contract bytes', () => {

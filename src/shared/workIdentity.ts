@@ -7,10 +7,9 @@ export const cardIdSchema = z.string().regex(/^(?:[a-f0-9]{32}|jira:fortresspowe
 export const isJiraCard = (id: string) => id.startsWith(jiraCardPrefix) && cardIdSchema.safeParse(id).success
 
 /** Exact source navigation without guessing a mutable Jira display key. */
-export const cardSourceUrl = (id: string) => {
-  const jira = jiraWorkIdentity(id)
-  return jira ? `https://${jira.site}/secure/IssueNavigator.jspa?jql=${encodeURIComponent(`id = ${jira.issueId}`)}` : `https://www.notion.so/${id}`
-}
+export const cardSourceUrl = (id: string) => isJiraCard(id)
+  ? `https://fortresspower-jira.atlassian.net/secure/IssueNavigator.jspa?jql=${encodeURIComponent(`id = ${id.slice(jiraCardPrefix.length)}`)}`
+  : `https://www.notion.so/${id}`
 
 const jiraIdentity = /^jira:([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net):([1-9]\d*):([1-9]\d*)$/
 export const jiraWorkIdentity = (id: string) => {
