@@ -79,6 +79,7 @@ async function fixture(projectId = config.projectId) {
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   const attachments = new Map<string, unknown>()
+  let dropCompletionAfterRead = false
   const history = new Map<string, Array<{ id: string; created: string; author: { accountId: string }; items: unknown[] }>>()
   const appendHistory = (id: string, items: unknown[], accountId = 'fixture-service') => {
     const entries = history.get(id) ?? []
@@ -138,7 +139,15 @@ async function fixture(projectId = config.projectId) {
       if (controls.loseCreate) { controls.loseCreate = false; throw new Error('Dropped response containing fixture-scoped-service-token') }
       return response({ id, key: issue.key }, 201)
     }
-    if (path.startsWith('attachment/content/')) return response(attachments.get(path.split('/')[2]!))
+    if (path.startsWith('attachment/content/')) {
+      const id = path.split('/')[2]!
+      const body = attachments.get(id) as { sections: Array<{ text: string }> }
+      if (dropCompletionAfterRead && body.sections.some(section => section.text.startsWith('Tin Star contract complete: '))) {
+        dropCompletionAfterRead = false
+        for (const issue of issues.values()) issue.fields.attachment = issue.fields.attachment.filter((file: { id: string }) => file.id !== id)
+      }
+      return response(body)
+    }
     if (path === 'issueLinkType') return response({ issueLinkTypes: types })
     if (path === 'issueLink' && method === 'POST') {
       const type = types.find(type => type.id === body.type.id)!
@@ -271,7 +280,8 @@ async function fixture(projectId = config.projectId) {
     return { client, call }
   }
   const jira = () => new JiraWork(parsed.jiraWork!, root, fetcher)
-  return { root, connect, requests, controls, issues, links, historicalKeys, appendHistory, assignees, jira }
+  return { root, connect, requests, controls, issues, links, historicalKeys, appendHistory, assignees, jira,
+    dropCompletionOnRead: () => { dropCompletionAfterRead = true } }
 }
 
 it('publishes update_work schemas that accept Notion IDs for shared updates', async () => {
@@ -856,6 +866,26 @@ it.each([false, true])('records and queues a verified Jira handoff after create 
   const queue = f.requests.findIndex(({ method, path }) => method === 'POST' && path.endsWith('/transitions'))
   expect(completion).toBeGreaterThan(0)
   expect(queue).toBeGreaterThan(completion)
+})
+
+it('keeps the handoff in Backlog when the completion marker disappears before verification', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const input = {
+    submission_id: 'approval', target: { external_ref: 'fixture:approval' }, title: 'Verify handoff', area: 'Engineering', owner: 'Avery',
+    objective: 'Verify native handoff', spec_markdown: 'Approved spec',
+    acceptance_criteria: ['Read back the contract'], decisions: [], forbidden_approaches: [], references: [],
+  }
+  f.dropCompletionOnRead()
+  expect(await call('submit_handoff', input)).toMatchObject({
+    outcome: 'partially-saved', recovery: { code: 'contract-incomplete' },
+    record: { full_spec_readback: 'incomplete' }, assignment: { status: 'Backlog' },
+  })
+  expect(f.requests.filter(({ method, path }) => method === 'POST' && path.endsWith('/transitions'))).toHaveLength(0)
+  expect(await call('submit_handoff', input)).toMatchObject({
+    outcome: 'saved', record: { full_spec_readback: 'verified' }, assignment: { status: 'Queued' },
+  })
+  expect(f.requests.filter(({ method, path }) => method === 'POST' && path === 'issue')).toHaveLength(1)
 })
 
 it('uses the existing MCP tools for native ticket edits, decision history, blockers, links and disposition', async () => {

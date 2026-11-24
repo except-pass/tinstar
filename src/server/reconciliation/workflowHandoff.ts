@@ -150,6 +150,7 @@ export class HandoffOperations {
             }
             attempted = true
             spec = await this.deps.contracts.write(card.id, contract, state, save)
+            if (spec.outcome !== 'available') return response('contract-incomplete', spec.reason)
             state.contract_done = true; await save()
             if (!state.properties_done) {
               const edited = await update('properties', { kind: 'edit', card_id: card.id, operation_id: operation('properties'), expected: state.original,
