@@ -1,3 +1,4 @@
+import { selectJiraMergeRequests } from '../ownerReady'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { IncomingMessage } from 'node:http'
 import { Socket } from 'node:net'
@@ -14,7 +15,7 @@ import { ReconciliationMcp } from '../mcp'
 import { buildQueue } from '../queue'
 import { jiraTransitions, jiraVerbs } from '../jiraWorkRules'
 import { JiraWork } from '../jiraWork'
-import { adfText } from '../jira'
+import { adfText, jiraText } from '../jira'
 import { runTswStatusSync } from '../../../coordinator/tswStatusSync'
 import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
 
@@ -149,14 +150,19 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       if (controls.rejectSearch || offset >= search.failFrom) return response({}, search.failureStatus)
       expect(body.jql).toContain(`project = ${projectId}`)
       const query = /^project = (\d+)(?: AND issuetype IN \(([\d, ]+)\))?(?: AND cf\[(\d+)\] = ("(?:[^"\\]|\\.)*") AND status IN \((.+)\))? ORDER BY id( DESC)?$/.exec(body.jql)
-      if (!query) return response({}, 400)
-      const [, project, types, ownerField, owner, statuses, descending] = query
+      const ownerQuery = /^project = (\d+) AND status NOT IN \(Done, Canceled\) AND \(cf\[(\d+)\] IS NOT EMPTY OR status = "Ready for Review"\) ORDER BY id$/.exec(body.jql)
+      if (!query && !ownerQuery) return response({}, 400)
+      const [, workProject, types, ownerField, owner, statuses, descending] = query ?? []
+      const project = workProject ?? ownerQuery?.[1]
+      const decisionsField = ownerQuery ? `customfield_${ownerQuery[2]}` : undefined
       const selectedOwner: string | undefined = owner === undefined ? undefined : JSON.parse(owner)
       const selectedStatuses: string[] | undefined = statuses === undefined ? undefined : JSON.parse(`[${statuses}]`)
       const visible = controls.staleSearch ? [] : [...issues.values()].map(issue => ({ ...issue, fields: search.indexed.get(issue.id) ?? issue.fields })).filter(issue => issue.fields.project.id === project &&
         (!types || types.split(', ').includes(issue.fields.issuetype?.id)) &&
         (!ownerField || issue.fields[`customfield_${ownerField}`]?.value === selectedOwner) &&
-        (!selectedStatuses || selectedStatuses.includes(issue.fields.status.name)))
+        (!selectedStatuses || selectedStatuses.includes(issue.fields.status.name)) &&
+        (!decisionsField || (!['Done', 'Canceled'].includes(issue.fields.status.name) &&
+          (issue.fields[decisionsField] != null && issue.fields[decisionsField] !== '' || issue.fields.status.name === 'Ready for Review'))))
         .sort((a, b) => descending ? Number(b.id) - Number(a.id) : Number(a.id) - Number(b.id))
       return response({ issues: visible.slice(offset, end), isLast: end >= visible.length, ...(end < visible.length ? { nextPageToken: String(end) } : {}) })
     }
@@ -674,7 +680,7 @@ async function tswFixture() {
   const home = '/fixture/fm-unrelated-basename'
   const file = join(f.root, 'snapshot.json')
   const sources = new ReconciliationSources({ warnings: [], fleet: [
-    { home, label: 'fleet', snapshotFile: file }, { home: '/fixture/fm-offline', snapshotFile: join(f.root, 'missing.json') },
+    { home, label: 'fleet', snapshotFile: file }, { home: '/fixture/fm-offline', label: 'backup', snapshotFile: join(f.root, 'missing.json') },
   ] })
   const { call } = await f.connect()
   const create = (type: string) => call('create_work', {
@@ -684,18 +690,28 @@ async function tswFixture() {
     await writeFile(file, JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: home, generated: new Date().toISOString(),
       main_inventory: { valid: true }, tasks, backlog: { present: true, records } }))
   }
-  const run = async (apply: boolean, maxCards = 5) => runTswStatusSync(await sources.fleetSnapshot(true), {
-    jira: f.jira(), stateFile: join(f.root, 'status-checkpoints.json'), apply, maxCards, audit: async () => {},
+  const publishBackup = async (tasks: unknown[]) => {
+    await writeFile(join(f.root, 'missing.json'), JSON.stringify({ schema: 'fm-fleet-snapshot.v1',
+      fm_home: '/fixture/fm-offline', generated: new Date().toISOString(),
+      main_inventory: { valid: true }, tasks, backlog: { present: true, records: [] } }))
+  }
+  const run = async (apply: boolean, maxCards = 5, interruptSubmit = false) => runTswStatusSync(await sources.fleetSnapshot(true), {
+    jira: f.jira(), stateFile: join(f.root, 'status-checkpoints.json'), apply, maxCards, audit: async entry => {
+      if (interruptSubmit && entry.result === 'write-planned' && entry.operationId?.endsWith('-ready-for-review')) throw new Error('Interrupted before submit')
+    },
   })
-  return { ...f, call, create, publish, run }
+  return { ...f, call, create, publish, publishBackup, run }
 }
 
 const fixturePull = 'https://github.com/fixture/project/pull/123'
+const fixtureHead = 'a'.repeat(40)
 const tswTask = (key: string, detail = '', yolo = 'off', overrides: Record<string, unknown> = {}) => ({
   id: 'task-' + key, kind: 'crewmate', spawn_gen: 'attempt-1', yolo, endpoint: { exists: true },
   current_state: { state: detail ? 'done' : 'working', detail, freshness: 'fresh' },
   backlog: { id: 'task-' + key, body_lines: [`card: ${key}`] },
-  pr: { url: detail ? fixturePull : null }, ...overrides,
+  pr: { url: detail ? fixturePull : null, head: fixtureHead },
+  hints: { last_event_text: detail && yolo === 'off' ? `done: PR ${fixturePull} checks green at head ${fixtureHead}` : '' },
+  ...overrides,
 })
 
 it('blocks both card keys in conflicting dispatch copies even with separate live candidates', async () => {
@@ -719,6 +735,20 @@ it('blocks both card keys in conflicting dispatch copies even with separate live
   expect(f.issues.get('60002')!.fields.status.name).toBe('In Progress')
 })
 
+it('does not request review for an open PR without checks-green evidence', async () => {
+  const f = await tswFixture()
+  await f.create('open PR')
+  await f.publish([tswTask('TSW-1', 'run passed: PR open', 'off', {
+    hints: { last_event_text: 'done [at=1]: PR open' },
+  })])
+  const result = await f.run(true)
+  expect(result.plans).toEqual([])
+  expect(result.audits).toContainEqual(expect.objectContaining({ result: 'review-head-unverified' }))
+  const issue = f.issues.get('60001')!
+  expect(issue.fields.status.name).toBe('Backlog')
+  expect(issue.comments).toEqual([])
+})
+
 it('walks TSW from Backlog through review and merge, preserves idempotence and skips another project', async () => {
   const f = await tswFixture()
   await f.create('delivery')
@@ -740,7 +770,11 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   await f.publish([tswTask('TSW-1', green, 'on')])
   expect(await f.run(true)).toMatchObject({ plans: [] })
   expect(issue.fields.assignee).toBeNull()
-  await f.publish([tswTask('TSW-1', green)])
+  const head = 'a'.repeat(40)
+  await f.publish([tswTask('TSW-1', green, 'off', {
+    pr: { url: fixturePull, head },
+    hints: { last_event_text: 'done [at=1]: checks green' },
+  })])
   // Lose an edit response after Jira has committed it. A new adapter instance
   // reconciles the saved operation and submits once, without adding a duplicate note.
   f.controls.loseEdit = true
@@ -750,7 +784,7 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   expect(issue.fields.assignee.displayName).toBe('William Gathright')
   const mergeNotes = issue.comments.map(comment => adfText(comment.body)).filter(note => note.startsWith('Will: merge'))
   expect(mergeNotes).toHaveLength(1)
-  expect(mergeNotes[0]).toContain(`Will: merge ${fixturePull}`)
+  expect(mergeNotes[0]?.split('\n')[0]).toBe(`Will: merge ${fixturePull} head ${head}`)
   expect(mergeNotes[0]).toContain('Recorded via Tin Star (Firstmate fleet)')
 
   f.appendHistory(issue.id, [{ fieldId: 'status', from: '9', to: '10', fromString: 'Ready for Review', toString: 'Ready for Review' }], 'workflow-admin')
@@ -760,6 +794,85 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   expect(issue.comments.map(comment => adfText(comment.body))).toContainEqual(expect.stringContaining(`Accept Final via Tin Star (Firstmate fleet)\nEvidence: First Mate reported delivery for task-TSW-1. ${fixturePull}`))
   expect(await f.run(true)).toMatchObject({ plans: [] })
   expect(f.requests.some(request => request.path.includes('OTHER-1') || request.path.includes('70001'))).toBe(false)
+})
+
+it.each(['late publisher', 'new head', 'new head after submit', 'publisher after submit', 'deleted note'] as const)('reconciles append-only review notes for %s', async scenario => {
+  const f = await tswFixture()
+  await f.create('delivery')
+  await f.publish([tswTask('TSW-1')])
+  await f.run(true)
+  const original = 'a'.repeat(40), next = 'b'.repeat(40)
+  const ready = (head: string) => tswTask('TSW-1', 'checks green: PR ready for review', 'off', {
+    pr: { url: fixturePull, head }, hints: { last_event_text: `done: PR ${fixturePull} checks green at head ${head}` },
+  })
+  await f.publish([ready(original)])
+  const submitted = scenario.endsWith('after submit')
+  const replacement = scenario.startsWith('new head')
+  expect(await f.run(true, 5, !submitted)).toMatchObject({ stopped: !submitted })
+  const issue = f.issues.get('60001')!
+  const mergeNotes = () => issue.comments.filter(comment => adfText(comment.body).startsWith('Will: merge'))
+  expect(issue.fields.status.name).toBe(submitted ? 'Ready for Review' : 'In Progress')
+  expect(mergeNotes()).toHaveLength(1)
+  const id = mergeNotes()[0].id
+  if (scenario === 'deleted note') {
+    issue.comments.splice(issue.comments.indexOf(mergeNotes()[0]), 1)
+    const result = await f.run(true)
+    expect(result.audits).toContainEqual(expect.objectContaining({ result: 'review-note-needs-attention' }))
+    expect(issue.fields.status.name).toBe('In Progress')
+    expect(mergeNotes()).toHaveLength(0)
+    return
+  }
+  if (replacement) await f.publish([ready(next)])
+  else {
+    await f.publishBackup([ready(original)])
+    if (submitted) await f.publish([])
+  }
+  const result = await f.run(true)
+  expect(result).toMatchObject({ stopped: false })
+  if (submitted && replacement) {
+    expect(result.plans[0]?.steps).toEqual([expect.objectContaining({ kind: 'jira_edit' })])
+    expect(result.plans[0]?.steps?.[0]).not.toHaveProperty('assignee')
+  }
+  expect(issue.fields.status.name).toBe('Ready for Review')
+  expect(mergeNotes()).toHaveLength(replacement ? 2 : 1)
+  expect(mergeNotes()[0].id).toBe(id)
+  expect(adfText(mergeNotes()[0].body)).toContain('Recorded via Tin Star (Firstmate fleet)')
+  if (replacement) {
+    expect(adfText(mergeNotes()[1].body).split('\n')[0]).toBe(`Will: merge ${fixturePull} head ${next}`)
+    issue.comments.push({ id: '99', body: jiraText(`Will: merge ${fixturePull} head ${original}`), created: new Date().toISOString(),
+      author: { accountId: 'fixture-mate' } })
+    const read = await f.jira().ownerRequests.get(true)
+    expect(selectJiraMergeRequests(read).get('fixture/project#123')?.merge).toMatchObject({ head: next, coordinator: true })
+    const distinct = 'c'.repeat(40)
+    issue.comments.push({ id: '100', body: jiraText(`Will: merge ${fixturePull} head ${distinct}`), created: new Date().toISOString(),
+      author: { accountId: 'fixture-reviewer' } })
+    const withDistinct = await f.jira().ownerRequests.get(true)
+    expect(selectJiraMergeRequests(withDistinct).get('fixture/project#123')?.merge).toMatchObject({ head: distinct, coordinator: false })
+  }
+  expect(issue.comments.filter(comment => adfText(comment.body).startsWith('Submit for Review via Tin Star'))).toHaveLength(1)
+})
+
+it('appends a verified head to an in-review ticket with a legacy coordinator note', async () => {
+  const f = await tswFixture()
+  await f.create('legacy review')
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'Ready for Review' }
+  issue.fields.assignee = { displayName: 'William Gathright', accountId: 'will-account' }
+  const legacyNote = jiraText(`Will: merge ${fixturePull}\nOperation: tsw-${'0'.repeat(64)}-edit-review\n\nRecorded via Tin Star (Firstmate fleet)`)
+  issue.comments.push({ id: '1', body: legacyNote, created: jiraNow(), author: { accountId: 'fixture-service' } })
+  await f.publish([tswTask('TSW-1', 'checks green: PR ready for review')])
+  const result = await f.run(true)
+  expect(result).toMatchObject({ stopped: false })
+  expect(result.plans[0]?.steps).toEqual([expect.objectContaining({ kind: 'jira_edit' })])
+  expect(result.plans[0]?.steps?.[0]).not.toHaveProperty('assignee')
+  expect(issue.comments).toHaveLength(2)
+  expect(issue.comments[0].body).toEqual(legacyNote)
+  expect(adfText(issue.comments[1].body)).toContain(`Will: merge ${fixturePull} head ${fixtureHead}`)
+  expect(adfText(issue.comments[1].body)).toContain('Recorded via Tin Star (Firstmate fleet)')
+  expect(issue.fields.status.name).toBe('Ready for Review')
+  expect(issue.fields.assignee.accountId).toBe('will-account')
+  expect(await f.run(true)).toMatchObject({ plans: [] })
+  expect(issue.comments).toHaveLength(2)
 })
 
 it('blocks review without overwriting an owner assignee', async () => {
@@ -792,7 +905,10 @@ it('preserves the owner’s Reject Review until First Mate supplies a new event'
     expect(await f.run(apply)).toMatchObject({ plans: [], stopped: false })
     expect(issue.fields.status.name).toBe('Queued')
   }
-  await f.publish([tswTask('TSW-1', detail, 'off', { pr: { url: 'https://github.com/fixture/project/pull/124' } })])
+  const nextHead = 'b'.repeat(40)
+  await f.publish([tswTask('TSW-1', detail, 'off', {
+    pr: { url: fixturePull, head: nextHead }, hints: { last_event_text: `done: PR ${fixturePull} checks green at head ${nextHead}` },
+  })])
   expect(await f.run(true)).toMatchObject({ stopped: false })
   expect(issue.fields.status.name).toBe('Ready for Review')
 })

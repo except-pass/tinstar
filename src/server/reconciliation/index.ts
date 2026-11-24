@@ -25,11 +25,11 @@ import { loadReconciliationConfig, type ReconciliationConfig, type FleetSource }
 import { fleetObservation } from './fleet'
 import type { WorkScope } from './notion'
 import type { SceneCard } from './scene'
-import { ageObservation } from './observation'
-import { CardContextReader } from './cardContext'
+import { ageObservation, retainMissing } from './observation'
+import { CardContextReader, hasUnverifiedRetractions, type CardContextRead } from './cardContext'
 import { SceneReconciler } from './scene'
 import { buildQueue } from './queue'
-import { QueuePullReader } from './queuePulls'
+import { QueuePullReader, queuePullReadBudget } from './queuePulls'
 import { buildWorkerLinkReport } from './workerLinkReport'
 import { SearchDocumentCollector } from './searchIndex'
 import { NotionApi } from './notionApi'
@@ -45,9 +45,13 @@ import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
 import { reconcileDecision, type DecisionResolution } from './decisionResolution'
-import { inventoryPullState, type PullsRead } from '../../shared/pulls'
+import { inventoryPullState } from '../../shared/pulls'
+import type { ReconciliationPullsRead } from '../pulls/routes'
 import type { PullReadiness } from './queuePulls'
 import { notionReleaseTransport } from '../releases/writer'
+import { ownerCards, ownerReadyRequests, selectJiraMergeRequests, verifyOwnerMerges } from './ownerReady'
+import type { OwnerReadyRead } from '../../shared/ownerReady'
+import { releasePull } from '../../shared/pullIdentity'
 
 export type SourceSnapshot = Omit<Awaited<ReturnType<ReconciliationSources['snapshot']>>, 'diagnostics'>
 export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['intentions'] }
@@ -64,8 +68,9 @@ export class ReconciliationSources {
   readonly reviewAudit: ReviewDeploymentAudit
   releaseDesk?: () => Promise<import('./queue').QueueItem[]>
   authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
-  readPulls?: (req?: IncomingMessage) => Promise<PullsRead | null>
-  readPullReadiness?: (urls: string[]) => Promise<Map<string, PullReadiness>>
+  readPulls?: (req?: IncomingMessage) => Promise<ReconciliationPullsRead | null>
+  readPullReadiness?: (...args: Parameters<QueuePullReader['get']>) => Promise<Map<string, PullReadiness>>
+  readOwnerInventory?: (repositories: ReadonlySet<string>, force: boolean, scene: FloorScene) => Promise<ReconciliationPullsRead>
   onWorkRefresh?: (cards: WorkCard[]) => Promise<void>
   checkInIndicators?: () => Promise<Map<string, NonNullable<SceneCard['checkInRequest']>>>
   private associations: AssociationStore
@@ -80,6 +85,10 @@ export class ReconciliationSources {
   private sourceWriteRecoveryPass?: Promise<void>
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
+  private ownerRecheck?: Promise<OwnerReadyRead>
+  private ownerHistoryCursor?: string
+  private supplementalOwnerHistoryCursor?: string
+  private ownerHistories = new Map<string, CardContextRead>()
   private search = new SearchDocumentCollector((id, revision) => this.context.get(id, revision))
   // Owner-authorized PR evidence must never enter an anonymous display response.
   private queueDisplays = new Map<boolean, { value?: ReturnType<typeof buildQueue>; pending?: Promise<void>; until: number; again: boolean; failed?: boolean }>()
@@ -238,7 +247,7 @@ export class ReconciliationSources {
     if (force) { entry.until = 0; if (entry.pending) entry.again = true }
     if (!entry.pending && Date.now() >= entry.until) {
       entry.failed = false
-      entry.pending = this.queue(req, undefined, force, 'reconcile', authorized).then(value => { if (!entry.again) entry.value = value }, () => { entry.failed = true }).finally(() => {
+      entry.pending = this.queue(req, undefined, force, 'reconcile', authorized ? 'full' : undefined, authorized).then(value => { if (!entry.again) entry.value = value }, () => { entry.failed = true }).finally(() => {
         entry.pending = undefined
         entry.until = entry.again ? 0 : Date.now() + 20_000
         entry.again = false
@@ -277,6 +286,15 @@ export class ReconciliationSources {
     queue.warnings.push(warning)
     if (!authorized) queue.warnings.push('PR details require owner authorization')
     queue.operationalExceptions = executionWarnings(scene)
+    const ownerReady = entry.value?.ownerReady
+    if (ownerReady) queue.ownerReady = {
+      ...ownerReady, warnings: [...ownerReady.warnings, warning],
+      repositories: ownerReady.repositories.map(group => ({
+        ...group, decisions: group.decisions.map(decision => ({ ...decision, fresh: false })),
+        merges: group.merges.map(merge => ({ ...merge, fresh: false,
+          ...(merge.live?.state === 'ready' ? { live: { ...merge.live, state: 'unverified' as const } } : {}) })),
+      })),
+    }
     return workReadback({ ...queue, refreshing: !!entry.pending })
   }
 
@@ -479,7 +497,7 @@ export class ReconciliationSources {
    * Reuse the display's shared refresh for recovery and review prose; exact
    * workflow writes still perform their own fresh source/lease checks. */
   async workViews() {
-    const queue = await this.queue(undefined, undefined, true, 'read')
+    const queue = await this.queue(undefined, undefined, true, 'read', 'summary')
     // A fresh tool census can observe source closure outside this process.
     // Do not serve a pre-answer display or publish an older in-flight refresh.
     this.invalidateQueueDisplays()
@@ -487,13 +505,108 @@ export class ReconciliationSources {
     return queue
   }
 
-  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile', displayGrant?: boolean) {
+  /** Callers establish the existing UI owner or MCP PR-read authority before
+   * invoking this read-only path. Concurrent return requests share one pass. */
+  ownerReadyWithPulls(recheck = false): Promise<OwnerReadyRead> {
+    if (!recheck) return this.readOwnerReady(false)
+    this.ownerRecheck ??= this.readOwnerReady(true).finally(() => { this.ownerRecheck = undefined })
+    return this.ownerRecheck
+  }
+
+  private orderOwnerHistories(ids: string[], cursor?: string) {
+    const start = ids.indexOf(cursor ?? '') + 1
+    return [...ids.slice(start), ...ids.slice(0, start)]
+  }
+
+  private projectOwnerReady(snapshot: SourceSnapshot, observed: ReadonlyMap<string, CardContextRead>, jira?: Awaited<ReturnType<JiraWork['ownerRequests']['get']>>) {
+    const histories = new Map<string, CardContextRead>()
+    for (const card of ownerCards(snapshot)) {
+      const current = observed.get(card.id)
+      const known = this.ownerHistories.get(card.id)
+      const complete = current?.outcome === 'available' && !hasUnverifiedRetractions(current)
+      const history = complete ? current : current || known ? {
+        ...current, outcome: 'partial' as const,
+        blocks: retainMissing(known?.blocks ?? [], current?.blocks ?? [], block => JSON.stringify([block.type, block.id])),
+      } : undefined
+      if (history) {
+        histories.set(card.id, history)
+        this.ownerHistories.set(card.id, history)
+      }
+    }
+    return ownerReadyRequests(snapshot, histories, jira)
+  }
+
+  private async readOwnerReady(recheck: boolean) {
+    const accessRevision = this.jiraWork?.accessRevision
+    const [snapshot, jira] = await Promise.all([this.snapshot(recheck), this.jiraWork?.ownerRequests.get(recheck, false, recheck)])
+    const histories = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
+    const ids = this.orderOwnerHistories(ownerCards(snapshot).map(card => card.id), this.ownerHistoryCursor), deadline = Date.now() + 10_000
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const collect = async () => {
+      for (let offset = 0; offset < ids.length && Date.now() < deadline; offset += 4) {
+        const batch = ids.slice(offset, offset + 4)
+        this.ownerHistoryCursor = batch.at(-1)
+        await Promise.all(batch.map(async id => {
+          const context = await this.context.commentDetails(id, recheck)
+          histories.set(id, await this.context.verifyRetractions(context).catch(() => context))
+        }))
+      }
+    }
+    try { await Promise.race([collect(), new Promise<void>(resolve => { timer = setTimeout(resolve, 10_000) })]) }
+    finally { clearTimeout(timer) }
+    const read = this.projectOwnerReady(snapshot, histories, jira)
+    await this.enrichOwnerReady(read, recheck, this.reconciler.project(snapshot), jira)
+    if (accessRevision !== this.jiraWork?.accessRevision) throw new Error('Jira access changed while reading owner requests')
+    return workReadback(read)
+  }
+
+  private readOwnerMergeStates(merges: OwnerReadyRead['repositories'][number]['merges'], jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined, inventory: ReconciliationPullsRead | null, force: boolean, readBudget: number) {
+    const selected = selectJiraMergeRequests(jira)
+    const expectedHeads = new Map<string, string | null>()
+    for (const pull of inventory?.pulls ?? []) {
+      const id = releasePull(pull.url)?.id
+      const selection = id ? selected.get(id) : undefined
+      if (pull.freshness === 'fresh' && selection && !selection.unverifiedRequest && selection.merge.head === pull.head) {
+        expectedHeads.set(selection.merge.url, pull.head)
+      }
+    }
+    if (force && inventory) {
+      const listed = new Set(inventory.pulls.map(pull => pull.id))
+      const closed = new Set(inventory.closedPulls)
+      const scopes = new Map(inventory.repositories.map(repo => [repo.repository, repo.scope]))
+      const associated = new Set(inventory.associations?.filter(pull => pull.links.some(link => link.active)).map(pull => pull.id))
+      for (const merge of merges) {
+        const pull = merge.url && releasePull(merge.url)
+        if (pull && !listed.has(pull.id) && !closed.has(pull.id) &&
+            (scopes.get(pull.repository) === 'all-open' || scopes.get(pull.repository) === 'authored-or-associated' && associated.has(pull.id))) expectedHeads.set(pull.url, null)
+      }
+    }
+    const urls = [...expectedHeads.keys()]
+    const options = { force, expectedHeads, readBudget }
+    return urls.length
+      ? (this.readPullReadiness?.(urls, options) ?? this.queuePulls.get(urls, options)).catch(() => new Map<string, PullReadiness>())
+      : Promise.resolve(new Map<string, PullReadiness>())
+  }
+
+  private async enrichOwnerReady(read: OwnerReadyRead, recheck: boolean, scene: FloorScene, jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined, knownInventory?: ReconciliationPullsRead | null, readBudget = queuePullReadBudget) {
+    const merges = read.repositories.flatMap(group => group.merges)
+    const repositories = new Set(merges.flatMap(ask => ask.url ? [releasePull(ask.url)!.repository] : []))
+    const inventory = knownInventory ?? (repositories.size ? await this.readOwnerInventory?.(repositories, recheck, scene).catch(() => null) : null) ?? null
+    const states = await this.readOwnerMergeStates(merges, jira, inventory, recheck, readBudget)
+    verifyOwnerMerges(read, inventory, states)
+    if (repositories.size && !inventory) read.warnings.push('GitHub inventory is unavailable. Current PR heads could not be verified.')
+    if (recheck) read.recheckedAt = new Date().toISOString()
+    return read
+  }
+
+  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile', ownerReady?: 'summary' | 'full', displayGrant?: boolean) {
     let reviewWarning: string | null = null
     const reviewRecoveries = mode === 'reconcile' ? await this.workflow.reconcileReviews().catch(() => null) : null
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
     if (mode === 'reconcile') try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = displayGrant ?? !!await this.authorizePulls?.(req)
     const accessRevision = this.jiraWork?.accessRevision
+    const jiraOwnerRead = ownerReady ? this.jiraWork?.ownerRequests.get(force) : undefined
     // The native project is private. Desk reads use the existing owner grant.
     const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile', {}, false, authorized), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
@@ -522,12 +635,13 @@ export class ReconciliationSources {
     const nativeIds = new Set(snapshot.intentions.data?.cards.filter(card => card.source?.synthetic === false).map(card => card.id))
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
       .filter(id => !nativeIds.has(id))
+    const ordinaryHistoryIds = ids.slice(0, 20)
     const collectedContexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
     let contexts = collectedContexts
     const historyDeadline = mode === 'read' ? Date.now() + 10_000 : Infinity
     const readContexts = async () => {
-      for (let offset = 0; offset < Math.min(ids.length, 20) && Date.now() < historyDeadline; offset += 4) {
-        await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
+      for (let offset = 0; offset < ordinaryHistoryIds.length && Date.now() < historyDeadline; offset += 4) {
+        await Promise.all(ordinaryHistoryIds.slice(offset, offset + 4).map(async id => {
           const context = await this.context.commentDetails(id, force)
           collectedContexts.set(id, await this.context.verifyRetractions(context).catch(() => context))
         }))
@@ -580,7 +694,8 @@ export class ReconciliationSources {
     }
     if (requestKey) queue.items = queue.items.filter(item => item.id === requestKey)
     if (mode === 'reconcile') await readContexts()
-    if (contexts.size < ids.length) queue.warnings.push(`Request history inspected for ${contexts.size} of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.${mode === 'read' && contexts.size < Math.min(ids.length, 20) ? ' Foreground history wait reached its ten-second budget; unfinished reads continue warming the cache in the background.' : ''}`)
+    const covered = ids.filter(id => contexts.has(id)).length
+    if (covered < ids.length) queue.warnings.push(`Request history inspected for ${covered} of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.${mode === 'read' && covered < ordinaryHistoryIds.length ? ' Foreground history wait reached its ten-second budget; unfinished reads continue warming the cache in the background.' : ''}`)
     if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')
     const scene = this.reconciler.project(snapshot)
     const reviewNotes = new Map<string, Array<{ text: string }>>()
@@ -597,6 +712,26 @@ export class ReconciliationSources {
     const histories = new Map(ids.map(id => [id, contexts.get(id)?.blocks ?? []]))
     const publications = (await Promise.all(queue.items.map(item => this.proposalSource.forRequest(item.id, item.cardIds.filter(id => !nativeIds.has(id)), histories)))).flat()
     queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized, publications)
+    if (ownerReady) {
+      const jira = await jiraOwnerRead
+      const ownerContexts = new Map(contexts)
+      const supplementalIds = ownerReady === 'full'
+        ? this.orderOwnerHistories(ownerCards(snapshot).map(card => card.id)
+          .filter(id => !ordinaryHistoryIds.includes(id)), this.supplementalOwnerHistoryCursor).slice(0, 5)
+        : []
+      if (supplementalIds.length) {
+        this.supplementalOwnerHistoryCursor = supplementalIds.at(-1)
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const collect = Promise.all(supplementalIds.map(async id => {
+          const context = await this.context.commentDetails(id, force)
+          ownerContexts.set(id, await this.context.verifyRetractions(context).catch(() => context))
+        }))
+        try { await Promise.race([collect, new Promise<void>(resolve => { timer = setTimeout(resolve, 10_000) })]) }
+        finally { clearTimeout(timer) }
+      }
+      queue.ownerReady = this.projectOwnerReady(snapshot, ownerContexts, jira)
+      if (authorized) await this.enrichOwnerReady(queue.ownerReady, false, scene, jira, pullRead, Math.max(0, queuePullReadBudget - new Set(readableUrls).size))
+    }
     const projected = new Map(queue.needsWill.map(item => [item.id, item]))
     queue.items = queue.items.map(item => projected.get(item.id) ?? item)
     queue.counts = Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional'].map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length]))
@@ -604,14 +739,14 @@ export class ReconciliationSources {
     if (pullRead) queue.pullCoverage = { repositories: pullRead.repositories, warnings: pullRead.warnings, associationsComplete: pullRead.associationsComplete }
     else if (!authorized) queue.warnings.push('PR details require owner authorization')
     else queue.warnings.push('PR state unverified: inventory unavailable; explicit asks are retained without a verified waiting-on-merge conclusion.')
-    if (nativeIds.size && accessRevision !== this.jiraWork?.accessRevision) throw new Error('Jira access changed while reading the Desk')
+    if ((nativeIds.size || jiraOwnerRead) && accessRevision !== this.jiraWork?.accessRevision) throw new Error('Jira access changed while reading the Desk')
     return workReadback(queue)
   }
 }
 
 export async function handleReconciliationRequest(sources: ReconciliationSources, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const path = (req.url ?? '').split('?')[0] ?? ''
-  if (!['/api/reconciliation/sources', '/api/reconciliation/scene', '/api/reconciliation/queue', '/api/reconciliation/card-context'].includes(path)) return false
+  if (!['/api/reconciliation/sources', '/api/reconciliation/scene', '/api/reconciliation/queue', '/api/reconciliation/card-context', '/api/reconciliation/owner-ready'].includes(path)) return false
   const allowlist = currentOriginAllowlist()
   const headers = { ...resolveCorsHeaders({ origin: req.headers.origin, allowlist }), 'Cache-Control': 'no-store', 'Access-Control-Allow-Headers': 'Content-Type, X-Tinstar-UI' }
   if (req.headers.origin && !allowlist.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
@@ -628,6 +763,10 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     return ok(res, await sources.card(id), { headers })
   }
   const query = new URL(req.url!, 'http://localhost').searchParams
+  if (path === '/api/reconciliation/owner-ready') {
+    if (!await sources.authorizePulls?.(req)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required for the owner-ready bundle.', { headers })
+    return ok(res, await sources.ownerReadyWithPulls(true), { headers })
+  }
   const refresh = query.get('refresh') === '1'
   if (path === '/api/reconciliation/scene') {
     const requestedReferences = query.get('wait_references')

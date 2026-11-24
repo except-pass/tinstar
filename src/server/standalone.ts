@@ -108,13 +108,15 @@ export function startServer(opts: ServerOptions) {
   prepTimer.unref()
   void reconciliation.preparation.replenish()
   reconciliation.authorizePulls = req => pulls.authorized(req)
-  reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.read() : null
-  reconciliation.readPullReadiness = urls => pulls.readiness(urls)
+  reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.readForReconciliation() : null
+  reconciliation.readPullReadiness = (...args) => pulls.readiness(...args)
+  reconciliation.readOwnerInventory = (repositories, force, scene) => pulls.readForReconciliation(force, repositories, scene)
   const reviewHandoffs = new ReviewDeploymentReconciler(reconciliation.reviewAudit, { scene: () => reconciliation.scene(true), associations: releases.store,
     update: (input, actor) => reconciliation.updateWork(input, actor), deliver: (home, id, text) => fleet.deliverReviewException(home, id, text) })
   reconciliation.reconcileReviewHandoffs = force => reviewHandoffs.run(force)
   const actions = new ActionsApi()
-  const reconciliationMcp = new ReconciliationMcp(reconciliation, configDir, new DomainReadTools(pulls, releases, req => authorizePrReadGrant(req, configDir)))
+  const reconciliationMcp = new ReconciliationMcp(reconciliation, configDir, new DomainReadTools(pulls, releases,
+    req => authorizePrReadGrant(req, configDir), recheck => reconciliation.ownerReadyWithPulls(recheck)))
   const asks = new AskApi(reconciliation, undefined, undefined, { sendMerge: (input, actor) => pulls.sendMerge(input, actor), actionReceipt: id => actions.receipt(id), pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() }, checkIns, workUpdates)
   asks.mainWaits = mainWaits
   reconciliation.workflow.decisionDelivery = fleet

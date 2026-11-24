@@ -25,6 +25,38 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 describe('Decisions', () => {
+  it('shows one owner bundle with exact source links and refreshes the requested head on demand', async () => {
+    const queue = fixtureQueue()
+    const requested = 'a'.repeat(40), current = 'b'.repeat(40)
+    const url = 'https://github.com/owner/repo/pull/1', ticket = 'https://example.atlassian.net/browse/TSW-10'
+    const source = { kind: 'jira' as const, id: 'jira-d1', label: 'TSW-10 D1', url: ticket }
+    queue.ownerReady = { observedAt: '2026-11-24T01:00:00Z', warnings: [], repositories: [{ repository: 'owner/repo',
+      decisions: [{ id: 'jira-d1', question: 'Choose launch wording', fresh: true, sources: [source] }],
+      merges: [{ url, requestedHeads: [requested], unverifiedRequest: false, fresh: true, sources: [{
+        ...source, id: 'jira-merge', label: 'TSW-10 merge note', url: ticket + '?focusedCommentId=21', requestedHead: requested,
+      }],
+        live: { head: requested, state: 'ready', observedAt: '2026-11-24T01:00:00Z' } }] }] }
+    const updated = structuredClone(queue.ownerReady)
+    updated.recheckedAt = updated.observedAt = '2026-11-24T01:01:00Z'
+    updated.repositories[0]!.merges[0]!.live = { head: current, state: 'stale', observedAt: updated.observedAt }
+    const fetcher = vi.fn(async () => Response.json({ ok: true, data: updated }))
+    vi.stubGlobal('fetch', fetcher)
+    workspace.value.queue = queue
+    render(<Decisions />)
+    fireEvent.click(screen.getByText('Owner-ready by repository'))
+    expect(screen.getAllByRole('heading', { name: 'owner/repo' })).toHaveLength(1)
+    expect(screen.getByRole('link', { name: url })).toHaveAttribute('href', url)
+    expect(screen.getByRole('link', { name: 'TSW-10 D1' })).toHaveAttribute('href', ticket)
+    expect(screen.getByText('Ready at requested head')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Recheck current requests' }))
+    expect(await screen.findByText('Requested head changed')).toBeVisible()
+    const witness = screen.getByRole('link', { name: 'TSW-10 merge note' })
+    expect(witness).toHaveAttribute('href', ticket + '?focusedCommentId=21')
+    expect(witness.closest('li')).toHaveTextContent(requested)
+    expect(screen.getByText(current)).toBeVisible()
+    expect(fetcher).toHaveBeenCalledWith(expect.stringMatching(/\/api\/reconciliation\/owner-ready$/), expect.anything())
+  })
+
   it('retains the exact shared-card request across reload while the queue loads', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [] }))))
     const queue = fixtureQueue(), first = { ...queue.items[0]!, id: 'request-a' }, second = { ...queue.items[0]!, id: 'request-b' }

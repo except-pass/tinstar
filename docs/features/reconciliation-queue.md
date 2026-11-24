@@ -1,6 +1,6 @@
 # Reconciliation desk queue (S4)
 
-`GET /api/reconciliation/queue` returns `{ok:true,data:{generatedAt,scope,readOnly,coverage,warnings,items,counts,needsWill,claimCards,operationalExceptions,pullCoverage,reviews,reviewRecoveries,reviewExceptions,refreshing}}` through the [reconciliation source configuration](reconciliation-floor.md#run-and-configure). The [review contract](workflow.md#deployed-feature-review) and [deployment handoff contract](floor-deploy.md#tin-star-review-handoff) own the review fields and their reconciliation rules. It shares the existing source caches, local/tailnet origin policy, GET/OPTIONS restriction and `Cache-Control: no-store`. There are no new approval, dismissal, merge, reorder or presentation-defer endpoints. A read or moving to another item cannot choose a source answer. Bounded refresh can reconcile an already-recorded explicit answer through the [shared workflow](workflow.md#first-mate-decision-reconciliation); operational queue reads therefore report `readOnly: false`. The pure source projection remains read-only.
+`GET /api/reconciliation/queue` returns `{ok:true,data:{generatedAt,scope,readOnly,coverage,warnings,items,counts,needsWill,claimCards,operationalExceptions,pullCoverage,ownerReady,reviews,reviewRecoveries,reviewExceptions,refreshing}}` through the [reconciliation source configuration](reconciliation-floor.md#run-and-configure). The [review contract](workflow.md#deployed-feature-review) and [deployment handoff contract](floor-deploy.md#tin-star-review-handoff) own the review fields and their reconciliation rules. It shares the existing source caches, local/tailnet origin policy, GET/OPTIONS restriction and `Cache-Control: no-store`. There are no new approval, dismissal, merge, reorder or presentation-defer endpoints. `ownerReady` is included after the authorized owner display refresh collects it. A read or moving to another item cannot choose a source answer. Bounded refresh can reconcile an already-recorded explicit answer through the [shared workflow](workflow.md#first-mate-decision-reconciliation); operational queue reads therefore report `readOnly: false`. The pure source projection remains read-only.
 
 Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. Every request source retains its own `request` tuple (`home`, `taskId`, `id`, `kind`). First Mate kinds are `hold` and `decision`. Notion and Jira use `notion-card` and `jira-card` respectively, with the exact card ID and null home/task. Each request source has its own `readiness`, `action`, and `reasons`. A First Mate source may carry a `responseAnchor` for that exact tuple; aggregate ID arrays and the queue item ID are never response targets. GitHub observations and the Notion feed observation used to verify request context are supporting evidence rather than request identities. Their expiry still suspends actionable presentation. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
@@ -169,3 +169,49 @@ unless the user interacts. Assistant reveal includes both its primary target
 and additional targets, including during foreground replay. Editing the local
 query dismisses the transient reveal. Steady selection and a brief flash use
 distinct styles; failed source reads report unavailable coverage.
+
+### Owner-ready by repository
+
+The owner can expand **Owner-ready by repository** in Decisions Workbench
+while Main is unavailable. The same source grouping is available in
+`get_work_views.ownerReady` using the ordinary 20-card history budget.
+Decisions reserves up to five additional history reads for the bundle.
+With the existing MCP PR-read grant,
+`list_prs({ view: "owner-ready" })` adds live forge evidence. Select
+**Recheck current requests** in Decisions or call
+`list_prs({ view: "owner-ready", recheck: true })` when Main returns.
+The browser uses `GET /api/reconciliation/owner-ready` under the existing UI
+owner authorization. This endpoint always rechecks and returns the bundle in
+`data`. Concurrent browser and MCP rechecks share one pass.
+
+The bundle reads requests already published through Jira questions and merge
+notes, card-native requests, and worker publications. Source records remain
+in their original systems. Existing delivery rules continue to apply.
+The explicit recheck only reads current state.
+
+Jira questions use the native issue identity and D-question ID. See
+[Jira owner review merge notes](jira-work.md#owner-review-merge-notes) for the
+exact-head request format. A current Jira request without a bound head is
+shown as **Requested head unverified**. Decisions without an exact repository
+stay under **Repository unspecified**.
+
+Merge entries share the canonical repository and PR identity while the source
+records remain separately linked. The newest eligible Jira merge note by
+creation time determines the requested head, with the higher comment ID
+breaking ties. A non-coordinator note that repeats a coordinator note’s exact
+PR and head on the same ticket stays linked without taking precedence. Only a
+current, unconditional Jira request can qualify for readiness checks on a
+matching head. Decisions shows **Ready at requested head** when fresh evidence
+confirms that the matching PR is open, out of draft, mergeable and passing its
+checks. The regular Decisions queue uses its existing readiness rules.
+Other Jira requests remain linked with their heads and are marked **Superseded**.
+Notion requests and worker notices retain their own links and heads and are
+marked **Not used for readiness**. Uncertainty about earlier Jira requests and
+non-Jira records appears in source coverage.
+Jira questions on the same ticket remain independent. Rechecks compare
+available PR heads with their requested heads and use the existing bounded
+checks reader for matches. When a current, unconditional request names a
+different head, Decisions shows **Requested head changed**. Closure evidence
+in the current read removes the active merge entry from that result. Source
+omissions, out-of-scope PRs and checks beyond the read budget remain visible as
+unverified.

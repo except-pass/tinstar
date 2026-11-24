@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto'
 import { codexTurn } from '../shared/codexActivity'
 import { retainedExecutionLiveness } from '../shared/executionLiveness'
+import { releasePull } from '../shared/pullIdentity'
 import { parsePullUrl } from '../server/fleet/attention'
 import type { SourceSnapshot } from '../server/reconciliation'
 import { dispatchForTask } from '../server/reconciliation/dispatchProvenance'
+import { workerReviewPublication } from '../server/reconciliation/ownerRequestEvidence'
 import { ageObservation } from '../server/reconciliation/observation'
 import { tswEvidence } from '../server/reconciliation/tswSnapshot'
 import { isPublishedReviewDetail } from '../server/reconciliation/workerLinkReport'
@@ -14,7 +16,7 @@ type Task = Fleet['tasks'][number]
 type Backlog = NonNullable<Fleet['backlog']>[number]
 type EventDetails =
   | { target: 'In Progress' }
-  | { target: 'Ready for Review'; pull: string }
+  | { target: 'Ready for Review'; pull: string; head: string | null }
   | { target: 'Done' }
 
 export type StatusEvent = EventDetails & {
@@ -67,7 +69,11 @@ function classify(id: string, task: Task | undefined, row: Backlog | undefined, 
 
   if (isPublishedReviewDetail(detail) && attempt?.yolo !== 'on') {
     if (!pull) return 'review-without-pull-evidence'
-    if (attempt?.yolo === 'off') return event({ target: 'Ready for Review', pull }, pull, `First Mate reported checks green. ${pull}`)
+    if (attempt?.yolo === 'off') {
+      const publication = task && workerReviewPublication(task)
+      const head = publication && publication.id === releasePull(pull)?.id ? publication.head : null
+      return event({ target: 'Ready for Review', pull, head }, pull, `First Mate reported checks green. ${pull}`)
+    }
     return 'merge-authority-unavailable'
   }
   if (task?.identity.spawn_gen && task.endpoint.exists !== false && task.endpoint.agent_alive !== 'dead' &&
@@ -134,8 +140,21 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
   }
   const events: StatusEvent[] = []
   for (const [key, candidates] of byKey) {
-    if (candidates.length === 1 && !findings.some(finding => finding.key === key && finding.reason === 'conflicting-card-declarations')) {
-      events.push(candidates[0]!)
+    const [first, ...others] = candidates
+    const head = first?.target === 'Ready for Review' ? first.head : null
+    const pull = first?.target === 'Ready for Review' && head ? releasePull(first.pull) : null
+    const equivalent = pull && others.every(candidate =>
+      candidate.target === 'Ready for Review' && candidate.head === head && releasePull(candidate.pull)?.id === pull.id)
+      ? pull : null
+    const conflicting = findings.some(finding => finding.key === key && finding.reason === 'conflicting-card-declarations')
+    if (first?.target === 'Ready for Review' && equivalent && !conflicting) {
+      const ordered = [...candidates].sort((a, b) => a.id.localeCompare(b.id))
+      const actors = [...new Set(ordered.map(candidate => candidate.actor))].sort()
+      const expiresAt = ordered.flatMap(candidate => candidate.expiresAt ?? []).sort()[0] ?? null
+      events.push({ ...first, owner: ordered[0]!.owner, pull: equivalent.url,
+        actor: actors.join(', '), expiresAt, id: eventId([key, equivalent.url, head]) })
+    } else if (first && !others.length && !conflicting) {
+      events.push(first)
     } else {
       for (const candidate of candidates) findings.push({ key, home: candidate.home, task: candidate.task, reason: 'competing-task-events' })
     }

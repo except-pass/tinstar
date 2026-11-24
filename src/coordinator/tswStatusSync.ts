@@ -7,14 +7,15 @@ import { jiraTransitionDestination, JiraWorkInputError, type JiraEdit, type Jira
 import { acquireLock } from '../server/infra/lock'
 import { collectTswEvents, type StatusEvent } from './tswStatusEvents'
 
+type ReviewNote = Awaited<ReturnType<JiraWork['tswReviewNote']>>
 type Step = JiraTransition | JiraEdit
 type CardState = Pick<JiraWorkCard, 'status' | 'assignee_id' | 'owner'>
 type Pending = { eventId: string; target?: StatusEvent['target']; input: Step; actor: string; before: CardState; unconfirmed?: number; retry?: boolean; rejectedAttempts?: number }
 type NoteRepair = { input: JiraTransition; actor: string; attempts: number; queuedAt?: number }
-type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean; rejectedSteps?: Record<string, number>; handledEvents?: string[]; appliedEvents?: string[] }
+type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean; rejectedSteps?: Record<string, number>; handledEvents?: string[]; appliedEvents?: string[]; reviewNotes?: string[] }
 type StatusAudit = { provider: 'jira'; time: string; cardId: string | null; result: string; home?: string; task?: string; eventId?: string; operationId?: string; detail?: string }
 type Options = {
-  jira?: Pick<JiraWork, 'readTswCard' | 'statusHistory' | 'edit' | 'transition' | 'findAssignableAccount' | 'repairTransitionAudit'>
+  jira?: Pick<JiraWork, 'readTswCard' | 'statusHistory' | 'tswReviewNote' | 'edit' | 'transition' | 'findAssignableAccount' | 'repairTransitionAudit'>
   apply: boolean; maxCards?: number; cards?: string[]; stateFile: string
   audit: (entry: StatusAudit) => Promise<void>
   now?: () => number
@@ -31,14 +32,20 @@ function attemptId({ input, retry, rejectedAttempts = 0 }: Pending) {
 }
 const cardState = ({ status, assignee_id, owner }: JiraWorkCard): CardState => ({ status, assignee_id, owner })
 
-function plan(event: StatusEvent, card: JiraWorkCard): Step[] | string {
+function plan(event: StatusEvent, card: JiraWorkCard, existing: ReviewNote | undefined, recorded: boolean): Step[] | string {
   if (['Done', 'Canceled'].includes(card.status)) return 'terminal-card'
-  if (card.status === event.target) return 'already-at-target'
+  const review = card.status === 'Ready for Review'
+  const replacement = review && event.target === 'Ready for Review' && !!event.head &&
+    existing?.current !== undefined && existing.current !== event.head
+  if (card.status === event.target && !replacement) return 'already-at-target'
+  if (event.target === 'Ready for Review') {
+    if (!event.head) return 'review-head-unverified'
+    if (existing?.current !== event.head && (recorded || existing?.heads.has(event.head))) return 'review-note-needs-attention'
+  }
   const queuedFrom = { Backlog: 'Fast-track', 'To Do': 'Queue' } as const
   const queue = queuedFrom[card.status as keyof typeof queuedFrom]
   const active = card.status === 'In Progress'
-  const review = card.status === 'Ready for Review'
-  if (!queue && card.status !== 'Queued' && !active && !(review && event.target === 'Done')) return 'preserve-current-status'
+  if (!queue && card.status !== 'Queued' && !active && !(review && event.target === 'Done') && !replacement) return 'preserve-current-status'
   if ((queue || card.status === 'Queued') && !card.description.trim()) {
     return 'missing-queue-or-start-instructions'
   }
@@ -56,13 +63,15 @@ function plan(event: StatusEvent, card: JiraWorkCard): Step[] | string {
     steps.push({ ...transition, operation_id: destination.toLowerCase().replaceAll(' ', '-') })
   }
 
-  if (!card.owner) edit('owner', { owner: event.owner })
+  if (!card.owner && !replacement) edit('owner', { owner: event.owner })
   if (queue) move(queue)
   // A review or completion PR also supplies evidence for an intermediate Start.
   if (!active && !review) move('Start')
   if (event.target === 'Ready for Review') {
-    edit('review', { assignee: reviewer, note: `Will: merge ${event.pull}` })
-    move('Submit for Review')
+    if (existing?.current !== event.head) {
+      edit('review', { ...(replacement ? {} : { assignee: reviewer }), note: `Will: merge ${event.pull} head ${event.head}` })
+    }
+    if (!replacement) move('Submit for Review')
   }
   if (event.target === 'Done') move(review ? 'Accept Final' : 'Complete Directly')
   return steps
@@ -220,7 +229,8 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           const reviewerId = submitting && !alreadyChanged && event?.id === pending.eventId
             ? await jira.findAssignableAccount(card.id, reviewer) : null
           let reviewerBlocked = false
-          const guard = (current: JiraWorkCard) => {
+          let noteMissing = false
+          const guard = async (current: JiraWorkCard) => {
             if (alreadyChanged || !event || pending.eventId !== event.id || ['Done', 'Canceled'].includes(current.status) || event.expiresAt && Date.parse(event.expiresAt) <= now() ||
               !isDeepStrictEqual(expected, { ...cardState(current), updated_at: current.updated_at, id: current.id, key: current.key })) {
               throw new JiraWorkInputError('TSW source or Jira ticket changed before the planned write')
@@ -229,12 +239,22 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
               reviewerBlocked = true
               throw new JiraWorkInputError('TSW review requires the exact reviewer assignment')
             }
+            if (submitting && (event.target !== 'Ready for Review' || !event.head ||
+                (await jira.tswReviewNote(current.id, event.pull)).current !== event.head)) {
+              noteMissing = true
+              throw new JiraWorkInputError('The current exact-head coordinator note needs attention')
+            }
           }
           await log('write-planned', input.operation_id, 'evidence' in input ? input.evidence : undefined)
           const result = isEdit(input) ? await jira.edit(input, actor, guard) : await jira.transition(input, actor, guard, true)
           card = await jira.readTswCard(key)
           history = await jira.statusHistory(card.id, checkpoint.cursor)
           const outcome = result as { outcome: string; code?: string; message?: string; card_id?: string }
+          if (noteMissing) {
+            await log('review-note-needs-attention', input.operation_id)
+            stopped = true
+            return false
+          }
           const attempts = (pending.rejectedAttempts ?? 0) + 1 + Number(!!pending.retry)
           if (outcome.outcome === 'not-saved' && outcome.code === 'jira-unavailable' && outcome.card_id === undefined) {
             const { pending: _pending, ...prior } = checkpoint
@@ -254,6 +274,8 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
             if (card.status === target) appliedEvents.add(pending.eventId)
             if (missingNote) lastQueuedAt = Math.max(now(), lastQueuedAt + 1)
             checkpoint = { ...prior, cursor: history.cursor, eventId: pending.eventId,
+              reviewNotes: isEdit(original) && /-edit-review$/.test(original.operation_id)
+                ? [...new Set([...prior.reviewNotes ?? [], pending.eventId])] : prior.reviewNotes,
               appliedEvents: [...appliedEvents].slice(-50),
               statusVersion: statusVersion(history.changes, prior.statusVersion),
               noteRepairs: missingNote ? [...(prior.noteRepairs ?? []), { input, actor, attempts: 0, queuedAt: lastQueuedAt }] : prior.noteRepairs,
@@ -299,16 +321,26 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           if (!await execute(checkpoint.pending)) continue
         }
         if (!event) continue
-        if (checkpoint.handledEvents?.includes(eventId) || checkpoint.appliedEvents?.includes(eventId)) {
+        if (checkpoint.handledEvents?.includes(eventId) ||
+            checkpoint.appliedEvents?.includes(eventId)) {
           await log('event-already-applied')
           continue
         }
-        const proposed = plan(event, card)
+        const existing = event.target === 'Ready for Review' && event.head
+          ? await jira.tswReviewNote(card.id, event.pull) : undefined
+        if (apply && event.target === 'Ready for Review' && event.head && existing?.heads.has(event.head) &&
+            !checkpoint.reviewNotes?.includes(eventId)) {
+          checkpoint = { ...checkpoint, reviewNotes: [...checkpoint.reviewNotes ?? [], eventId] }
+          await save(key, checkpoint)
+        }
+        const recorded = checkpoint.reviewNotes?.includes(eventId) ||
+          checkpoint.eventId === eventId && checkpoint.completed.some(operation => operation.endsWith('-edit-review'))
+        const proposed = plan(event, card, existing, !!recorded)
         if (typeof proposed === 'string') { await log(proposed); continue }
         const steps = proposed.filter(step => checkpoint.eventId !== eventId ||
           !checkpoint.completed.includes(identify(step, event, card.status, checkpoint.statusVersion).operation_id))
         if (!steps.length) { await log('event-already-applied'); continue }
-        if (event.target === 'Ready for Review') {
+        if (event.target === 'Ready for Review' && card.status !== event.target) {
           const reviewerId = await jira.findAssignableAccount(card.id, reviewer)
           if (!reviewerId || checkpoint.preserveAssignee && card.assignee_id !== reviewerId) {
             await log('reviewer-blocked')
