@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest'
-import { createServer, Server } from 'node:http'
+import { createServer, IncomingMessage, Server } from 'node:http'
+import { Socket } from 'node:net'
 import { createRequire } from 'node:module'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -15,6 +16,7 @@ import { DomainReadTools } from '../domainReads'
 import { ReconciliationMcp } from '../mcp'
 import { authorizePrReadGrant } from '../prReadGrant'
 import { mergePublication, readyHeadPublication } from '../ownerRequestEvidence'
+import { SceneReconciler } from '../scene'
 import { QueuePullReader } from '../queuePulls'
 import { PullReader } from '../../pulls/reader'
 import { PullsApi } from '../../pulls/routes'
@@ -76,7 +78,8 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
   const repoBoard = fixtureSources()
   const [native, production] = repoBoard.intentions.data!.cards
   native!.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Merge', 'Decision'], hasMore: false }
-  native!.properties.Repository = { id: 'repo', type: 'rich_text', value: 'owner/repo', hasMore: false }
+  native!.properties.Link = { id: 'pull', type: 'url', value: moving, hasMore: false }
+  native!.properties['Next action'] = { id: 'next', type: 'rich_text', value: `Merge ${moving} head ${original}`, hasMore: false }
   production!.properties.Status!.value = 'Waiting for Prod Release'
   production!.properties.Link = { id: 'pull', type: 'url', value: releaseWait, hasMore: false }
   repoBoard.intentions.data!.cards = [native!, production!]
@@ -86,6 +89,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
   ]
   let boardHistoryUnavailable = false
   let shiftCommentBoundary = false
+  let olderJiraHistoryUnavailable = false
   const sourceWrites: string[] = []
   const readSource = vi.fn<typeof fetch>(async (input, init) => {
     const path = new URL(String(input)).pathname
@@ -109,6 +113,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
       return Response.json({ startAt, total: page.length, comments: page.slice(startAt, startAt + 50) })
     }
     if (resource === 'changelog') {
+      if (id === '16' && olderJiraHistoryUnavailable) return new Response(null, { status: 503 })
       const values = id === '10' ? [{ created: '2026-11-23T09:00:00Z', items: [{ field: 'status', fromString: 'Ready for Review', toString: 'In Progress' }] }] : []
       return Response.json({ startAt: 0, total: values.length, values })
     }
@@ -152,6 +157,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     const pulls = new PullsApi(sources, new AssociationStore(root), root, new PullReader(inventory, Date.now, new QueuePullReader(readScalars)))
     sources.authorizePulls = req => pulls.authorized(req)
     sources.readOwnerInventory = (repositories, force, scene) => pulls.read(force, repositories, scene)
+    sources.readPulls = async () => pulls.read(false, undefined, new SceneReconciler().project(await sources.snapshot()))
     sources.readPullReadiness = (...args) => pulls.readiness(...args)
     return { sources, pulls }
   }
@@ -281,13 +287,32 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
       ]),
     })
 
+    tickets.push(issue('16'))
+    comments.set('16', [entry(moving, original, '30', '2026-11-23T11:00:00Z')])
+    await browse()
+    olderJiraHistoryUnavailable = true
+    const olderUnavailable = (await (await browse()).json()).data as OwnerReadyRead
+    expect(olderUnavailable.warnings).toEqual(expect.arrayContaining([expect.stringContaining('TSW-16')]))
+    expect(merge(olderUnavailable, moving)).toMatchObject({ requestedHeads: [changed], live: { state: 'ready' },
+      sources: expect.arrayContaining([expect.objectContaining({ url: expect.stringContaining('focusedCommentId=30'), superseded: true })]) })
+
     const conditional = { ...entry(moving, '', '29', '2026-11-23T13:30:00Z'), body: `Will: merge ${moving} after rollout` }
     comments.get('10')!.unshift(conditional)
     readScalars.mockClear()
     const waiting = (await (await browse()).json()).data as OwnerReadyRead
     expect(merge(waiting, moving)).toMatchObject({ requestedHeads: [], unverifiedRequest: true, live: { state: 'unverified' },
-      sources: expect.arrayContaining([expect.objectContaining({ kind: 'notion', requestedHead: original, superseded: true })]) })
+      sources: expect.arrayContaining([expect.objectContaining({ kind: 'notion', requestedHead: original, readinessEvidenceOnly: true })]) })
     expect(readScalars.mock.calls.some(([path]) => path === '/repos/owner/repo/pulls/1')).toBe(false)
+    const req = new IncomingMessage(new Socket())
+    Object.defineProperty(req.socket, 'remoteAddress', { value: '127.0.0.1' })
+    req.headers['tailscale-user-login'] = author
+    const schedule = vi.spyOn(sources, 'readPullReadiness')
+    const queue = await sources.queue(req, undefined, true, 'read', true)
+    expect(queue.items).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'merge',
+      evidence: expect.arrayContaining([expect.objectContaining({ kind: 'pull-request', url: moving })]) })]))
+    expect(merge(queue.ownerReady!, moving)?.unverifiedRequest).toBe(true)
+    expect(schedule.mock.calls.length).toBeGreaterThan(0)
+    expect(schedule.mock.calls.flatMap(([urls]) => urls)).not.toContain(moving)
     comments.get('10')!.shift()
     notionNotes.push('Tin Star answer: "notion-merge"')
 
@@ -358,4 +383,5 @@ it('accepts worker checks-green notices and rejects Jira-style worker prose', ()
   expect(readyHeadPublication(`done: Will: merge ${moving} head ${original}`)).toBeNull()
   expect(readyHeadPublication(`pr-ready: PR ${moving} checks green at head ${original}`)).toBeNull()
   expect(readyHeadPublication(`PR ${moving} checks green at head ${original}`)).toBeNull()
+  expect(readyHeadPublication(`done: PR ${moving} checks green ${original}`)).toBeNull()
 })

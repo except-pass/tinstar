@@ -47,7 +47,7 @@ import { reconcileDecision, type DecisionResolution } from './decisionResolution
 import { inventoryPullState, type PullsRead } from '../../shared/pulls'
 import type { PullReadiness } from './queuePulls'
 import { notionReleaseTransport } from '../releases/writer'
-import { ownerCards, ownerReadyRequests, verifyOwnerMerges } from './ownerReady'
+import { ownerCards, ownerReadyRequests, selectJiraMergeRequests, verifyOwnerMerges } from './ownerReady'
 import type { OwnerReadyRead } from '../../shared/ownerReady'
 import { releasePull } from '../../shared/pullIdentity'
 
@@ -545,24 +545,32 @@ export class ReconciliationSources {
     try { await Promise.race([collect(), new Promise<void>(resolve => { timer = setTimeout(resolve, 10_000) })]) }
     finally { clearTimeout(timer) }
     const read = this.projectOwnerReady(snapshot, histories, jira)
-    await this.enrichOwnerReady(read, recheck, this.reconciler.project(snapshot))
+    await this.enrichOwnerReady(read, recheck, this.reconciler.project(snapshot), jira)
     return workReadback(read)
   }
 
-  private async enrichOwnerReady(read: OwnerReadyRead, recheck: boolean, scene: FloorScene, knownInventory?: PullsRead | null, readBudget = queuePullReadBudget) {
+  private readOwnerMergeStates(jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined, inventory: PullsRead | null, force = false) {
+    const selected = selectJiraMergeRequests(jira)
+    const expectedHeads = new Map<string, string>()
+    for (const pull of inventory?.pulls ?? []) {
+      const id = releasePull(pull.url)?.id
+      const selection = id ? selected.get(id) : undefined
+      if (pull.freshness === 'fresh' && selection && !selection.unverifiedRequest && selection.merge.head === pull.head) {
+        expectedHeads.set(selection.merge.url, pull.head)
+      }
+    }
+    const urls = [...expectedHeads.keys()]
+    const options = { force, expectedHeads, readBudget: queuePullReadBudget }
+    return urls.length
+      ? (this.readPullReadiness?.(urls, options) ?? this.queuePulls.get(urls, options)).catch(() => new Map<string, PullReadiness>())
+      : Promise.resolve(new Map<string, PullReadiness>())
+  }
+
+  private async enrichOwnerReady(read: OwnerReadyRead, recheck: boolean, scene: FloorScene, jira: Awaited<ReturnType<JiraWork['ownerRequests']['get']>> | undefined) {
     const merges = read.repositories.flatMap(group => group.merges)
     const repositories = new Set(merges.flatMap(ask => ask.url ? [releasePull(ask.url)!.repository] : []))
-    const inventory = knownInventory ?? (repositories.size ? await this.readOwnerInventory?.(repositories, recheck, scene).catch(() => null) : null) ?? null
-    const heads = new Map(inventory?.pulls.filter(pull => pull.freshness === 'fresh').map(pull => [releasePull(pull.url)?.id, pull.head]))
-    const expectedHeads = new Map(merges.flatMap(ask => {
-      const head = ask.url ? heads.get(releasePull(ask.url)!.id) : undefined
-      return ask.url && head && !ask.unverifiedRequest && ask.requestedHeads.every(requested => requested === head) ? [[ask.url, head] as const] : []
-    }))
-    const urls = [...expectedHeads.keys()]
-    const options = { force: recheck, expectedHeads, readBudget }
-    const states = urls.length
-      ? await (this.readPullReadiness?.(urls, options) ?? this.queuePulls.get(urls, options)).catch(() => new Map<string, PullReadiness>())
-      : new Map<string, PullReadiness>()
+    const inventory = (repositories.size ? await this.readOwnerInventory?.(repositories, recheck, scene).catch(() => null) : null) ?? null
+    const states = await this.readOwnerMergeStates(jira, inventory, recheck)
     verifyOwnerMerges(read, inventory, states)
     if (repositories.size && !inventory) read.warnings.push('GitHub inventory is unavailable. Current PR heads could not be verified.')
     if (recheck) read.recheckedAt = new Date().toISOString()
@@ -576,13 +584,17 @@ export class ReconciliationSources {
     if (mode === 'reconcile') try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = !!await this.authorizePulls?.(req)
     const jiraOwnerRead = withOwnerReady ? this.jiraWork?.ownerRequests.get(force) : undefined
-    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile'), authorized ? this.readPulls?.(req).catch(() => null) : null])
+    const [snapshot, pullRead, jira] = await Promise.all([
+      this.snapshot(force || mode !== 'reconcile'), authorized ? this.readPulls?.(req).catch(() => null) : null, jiraOwnerRead,
+    ])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => (!requestKey || item.id === requestKey) && item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
     const readableUrls = urls.filter(url => !pullRead || inventoryPullState(url, pullRead) === 'open')
-    const states = authorized ? await (this.readPullReadiness?.(readableUrls) ?? this.queuePulls.get(readableUrls)) : new Map<string, PullReadiness>()
-    if (authorized && pullRead) for (const url of urls) if (inventoryPullState(url, pullRead) === 'unverified') {
+    const states = !authorized ? new Map<string, PullReadiness>()
+      : withOwnerReady ? await this.readOwnerMergeStates(jira, pullRead ?? null)
+      : await (this.readPullReadiness?.(readableUrls) ?? this.queuePulls.get(readableUrls))
+    if (authorized && pullRead && !withOwnerReady) for (const url of urls) if (inventoryPullState(url, pullRead) === 'unverified') {
       states.set(url, { status: 'unknown', state: 'unknown', observedAt: null, expiresAt: null, head: null, draft: false, checks: 'unknown', mergeability: 'unknown' })
     }
     const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
@@ -680,8 +692,13 @@ export class ReconciliationSources {
     const publications = (await Promise.all(queue.items.map(item => this.proposalSource.forRequest(item.id, item.cardIds, histories)))).flat()
     queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized, publications)
     if (withOwnerReady) {
-      queue.ownerReady = this.projectOwnerReady(snapshot, contexts, await jiraOwnerRead)
-      if (authorized) await this.enrichOwnerReady(queue.ownerReady, false, scene, pullRead, Math.max(0, queuePullReadBudget - new Set(readableUrls).size))
+      queue.ownerReady = this.projectOwnerReady(snapshot, contexts, jira)
+      if (authorized) {
+        verifyOwnerMerges(queue.ownerReady, pullRead ?? null, states)
+        if (!pullRead && queue.ownerReady.repositories.some(group => group.merges.some(merge => merge.url))) {
+          queue.ownerReady.warnings.push('GitHub inventory is unavailable. Current PR heads could not be verified.')
+        }
+      }
     }
     const projected = new Map(queue.needsWill.map(item => [item.id, item]))
     queue.items = queue.items.map(item => projected.get(item.id) ?? item)
