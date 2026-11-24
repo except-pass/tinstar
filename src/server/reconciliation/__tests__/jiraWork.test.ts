@@ -150,14 +150,19 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       if (controls.rejectSearch || offset >= search.failFrom) return response({}, search.failureStatus)
       expect(body.jql).toContain(`project = ${projectId}`)
       const query = /^project = (\d+)(?: AND issuetype IN \(([\d, ]+)\))?(?: AND cf\[(\d+)\] = ("(?:[^"\\]|\\.)*") AND status IN \((.+)\))? ORDER BY id( DESC)?$/.exec(body.jql)
-      if (!query) return response({}, 400)
-      const [, project, types, ownerField, owner, statuses, descending] = query
+      const ownerQuery = /^project = (\d+) AND status NOT IN \(Done, Canceled\) AND \(cf\[(\d+)\] IS NOT EMPTY OR status = "Ready for Review"\) ORDER BY id$/.exec(body.jql)
+      if (!query && !ownerQuery) return response({}, 400)
+      const [, workProject, types, ownerField, owner, statuses, descending] = query ?? []
+      const project = workProject ?? ownerQuery?.[1]
+      const decisionsField = ownerQuery ? `customfield_${ownerQuery[2]}` : undefined
       const selectedOwner: string | undefined = owner === undefined ? undefined : JSON.parse(owner)
       const selectedStatuses: string[] | undefined = statuses === undefined ? undefined : JSON.parse(`[${statuses}]`)
       const visible = controls.staleSearch ? [] : [...issues.values()].map(issue => ({ ...issue, fields: search.indexed.get(issue.id) ?? issue.fields })).filter(issue => issue.fields.project.id === project &&
         (!types || types.split(', ').includes(issue.fields.issuetype?.id)) &&
         (!ownerField || issue.fields[`customfield_${ownerField}`]?.value === selectedOwner) &&
-        (!selectedStatuses || selectedStatuses.includes(issue.fields.status.name)))
+        (!selectedStatuses || selectedStatuses.includes(issue.fields.status.name)) &&
+        (!decisionsField || (!['Done', 'Canceled'].includes(issue.fields.status.name) &&
+          (issue.fields[decisionsField] != null && issue.fields[decisionsField] !== '' || issue.fields.status.name === 'Ready for Review'))))
         .sort((a, b) => descending ? Number(b.id) - Number(a.id) : Number(a.id) - Number(b.id))
       return response({ issues: visible.slice(offset, end), isLast: end >= visible.length, ...(end < visible.length ? { nextPageToken: String(end) } : {}) })
     }

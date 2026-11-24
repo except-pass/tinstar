@@ -14,7 +14,6 @@ import {
 } from './jiraWorkRules'
 import { CreationReceipts } from './workflowReceipts'
 import { tswKey, tswProjectId } from './tswSnapshot'
-import { CachedObservation, retainMissing } from './observation'
 import { scopeMatches, type WorkCard, type WorkData } from './workReader'
 import type { WorkScope } from './notion'
 

@@ -210,7 +210,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
       id: 'fixture:10', issue_id: '10', key: 'TSW-10', url: `${jiraSite}/browse/TSW-10`,
       project_id: project, issue_type: 'Task', name: 'Fixture delivery', status: coordinatorStatus,
       updated_at: generated, owner: 'Firstmate mate-a', assignee: coordinatorAssignee && 'William Gathright', assignee_id: coordinatorAssignee,
-      description: '', links: [], decision_questions: [], decision_text: questions, blocker: null,
+      description: '', due_date: null, links: [], decision_questions: [], decision_text: questions, blocker: null,
     })
     const edit = vi.fn(async (input: { note?: string }, actor: string) => {
       if (!input.note) throw new Error('Expected a coordinator merge note')
