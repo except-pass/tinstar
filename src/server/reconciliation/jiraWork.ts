@@ -240,10 +240,10 @@ export class JiraWork extends JiraClient {
     }
   }
 
-  private async read(id: string, allowOtherTypes = false): Promise<Issue> {
-    await this.checkProject(id)
+  private async read(id: string, allowOtherTypes = false, signal?: AbortSignal): Promise<Issue> {
+    await this.checkProject(id, signal)
     const fields = [...this.boardFields(), 'assignee', 'description', 'issuelinks', this.config.fields.decisions]
-    const raw = await this.request(`issue/${id}?fields=${fields.join(',')}`)
+    const raw = await this.request(`issue/${id}?fields=${fields.join(',')}`, 'GET', undefined, signal)
     const f = raw.fields
     if (raw.id !== id || f?.project?.id !== this.config.projectId) {
       throw new JiraWorkInputError('Jira readback did not confirm the configured issue identity and project')
@@ -446,12 +446,39 @@ export class JiraWork extends JiraClient {
   }
 
   async readTswCard(key: string) {
+    return this.view(await this.readTswIssue(key))
+  }
+
+  readTswTargets(keys: readonly string[]) {
+    return new CachedObservation<WorkData>(async () => {
+      const signal = AbortSignal.timeout(20_000)
+      const cards: WorkCard[] = []
+      let complete = true
+      for (let offset = 0; offset < keys.length; offset += 4) {
+        signal.throwIfAborted()
+        const batch = await Promise.all(keys.slice(offset, offset + 4).map(async key => {
+          try { return this.projectCard(await this.readTswIssue(key, signal)) }
+          catch (error) {
+            if (accessDenied(error)) throw error
+            if (!(error instanceof JiraWriteError && error.status === 404)) complete = false
+            return null
+          }
+        }))
+        cards.push(...batch.filter(card => card !== null))
+      }
+      return { observedAt: new Date().toISOString(), coverage: complete ? 'complete' : 'partial',
+        data: { dataSourceId: `jira:${this.site}:${this.config.projectId}`, schema: {}, cards, hasMore: !complete,
+          truncatedRelations: [], missingSchemaProperties: [], scope: 'Declared TSW targets' } }
+    }, 60_000, 120_000, 'Jira dispatch target read failed').get()
+  }
+
+  private async readTswIssue(key: string, signal?: AbortSignal) {
     if (this.config.projectId !== tswProjectId || !tswKey(key)) throw new JiraWorkInputError('Status sync requires an exact TSW issue key')
-    const target = await this.resolveLinkTarget(key)
+    const target = await this.resolveLinkTarget(key, signal)
     if (target.key !== key || target.projectId !== tswProjectId) throw new JiraWorkInputError('Jira key no longer identifies this TSW issue')
-    const issue = await this.read(target.id)
+    const issue = await this.read(target.id, false, signal)
     if (issue.key !== key) throw new JiraWorkInputError('Jira key changed while reading the TSW issue')
-    return this.view(issue)
+    return issue
   }
 
   async statusHistory(cardId: string, after: JiraHistoryCursor = { total: 0, last: null }) {
@@ -1019,8 +1046,8 @@ export class JiraWork extends JiraClient {
     }, !!handoffPreflight, handoffPreflight)
   }
 
-  private async resolveLinkTarget(key: string) {
-    const target = await this.request(`issue/${key}?fields=project`)
+  private async resolveLinkTarget(key: string, signal?: AbortSignal) {
+    const target = await this.request(`issue/${key}?fields=project`, 'GET', undefined, signal)
     if (!nativeId(target.id) || typeof target.key !== 'string' || !nativeId(target.fields?.project?.id)) {
       throw new JiraWorkInputError('Jira did not resolve the link target identity')
     }

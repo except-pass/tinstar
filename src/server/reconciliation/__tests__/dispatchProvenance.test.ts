@@ -2,13 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseDispatchProvenance, dispatchForTask } from '../dispatchProvenance'
+import { parseDispatchProvenance, collectedDispatch, dispatchForTask } from '../dispatchProvenance'
 import { fleetObservation } from '../fleet'
 import { buildWorkerLinkReport } from '../workerLinkReport'
 import { fixtureId, fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import { WORKER_LINK_SCHEMA } from '../workerLinks'
+import { reconcileScene } from '../scene'
+import { tswProjectId, tswSnapshot, tswEvidence } from '../tswSnapshot'
+import { runWorkerLinkAdapter } from '../../../coordinator/workerLinkAdapter'
 
 const now = Date.parse('2026-11-05T12:00:00Z'), a = fixtureId(1), b = fixtureId(2)
+const jiraKey = 'TSW-987654321'
+const jiraId = `jira:example.atlassian.net:${tswProjectId}:987654321`
 export function dispatchSource() {
   const input = fixtureSources({ now })
   input.fleet = [input.fleet[1]!]
@@ -25,6 +30,13 @@ const tier = (input: ReturnType<typeof dispatchSource>) => buildWorkerLinkReport
 describe('coordinator backlog dispatch line', () => {
   it.each([
     [[`card: ${a}`], 'card'],
+    [[`card: ${jiraKey}`], 'card'],
+    [[`card: ${jiraKey}`, `card: ${jiraKey}`], 'conflict'],
+    [[`card: ${jiraKey}`, `card: ${a}`], 'conflict'],
+    [[`card: ${jiraId}`], 'conflict'],
+    [['card: 987654321'], 'conflict'],
+    [['card: TSW-01'], 'conflict'],
+    [['card: tsw-987654321'], 'conflict'],
     [['card: 40f50ce6-d422-81b0-8375-d793820e2e40'], 'card'],
     [['card: none'], 'independent'],
     [[`card: ${a}`, `card: ${a}`], 'conflict'],
@@ -47,6 +59,11 @@ describe('coordinator backlog dispatch line', () => {
     expect(dispatchForTask(task, task).status).toBe('card')
     expect(dispatchForTask(task, { dispatchProvenance: parseDispatchProvenance([`card: ${b}`]) }).status).toBe('conflict')
   })
+  it('keeps status coordinator declarations scoped to TSW', () => {
+    expect(tswSnapshot({ body_lines: [`card: ${jiraKey}`] }, 'fixture')[tswEvidence]?.dispatchProvenance)
+      .toMatchObject({ status: 'card', cardId: jiraKey })
+    expect(tswSnapshot({ body_lines: [`card: ${a}`] }, 'fixture')[tswEvidence]?.dispatchProvenance.status).toBe('conflict')
+  })
   it('collects identifiers from snapshot backlog lines, never the note prose', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'tinstar-dispatch-'))
     try {
@@ -65,6 +82,46 @@ describe('coordinator backlog dispatch line', () => {
 })
 
 describe('shared eligible auto-write classification', () => {
+  it('links an observed Jira card through the exact dispatch declaration without proposing a Notion write', async () => {
+    const input = dispatchSource(), task = input.fleet[0]!.observation.data!.tasks[0]!
+    const source = 'task.backlog.body_lines'
+    Object.assign(task, collectedDispatch({ body_lines: [`card: ${jiraKey}`] }, source))
+    task.cardReferences = []
+    const card = structuredClone(input.intentions.data!.cards[0]!)
+    card.id = jiraId
+    card.source = { provider: 'jira', instanceId: 'https://example.atlassian.net', collectionId: tswProjectId,
+      itemId: '987654321', displayKey: jiraKey, synthetic: false }
+    delete card.properties['First Mate tasks']
+    card.properties.Status!.value = 'In Progress'
+    input.intentions.data!.cards.push(card)
+    const { data: _data, ...coverage } = input.intentions
+    const jira = { ...coverage, source: 'jira' }
+    input.intentions.sources = [{ ...coverage, source: 'notion' }, jira]
+
+    expect(task.dispatchProvenance).toEqual({ status: 'card', cardId: jiraKey, sources: [source] })
+    const scene = reconcileScene(input, now)
+    expect(scene.claims).toContainEqual(expect.objectContaining({ cardId: jiraId, identity: task.identity,
+      verification: 'confirmed', state: 'current', sources: [source] }))
+    expect(scene.cardRollups.find(row => row.cardId === jiraId)?.counts.running).toBe(1)
+    const result = await runWorkerLinkAdapter(input, { now: () => now, audit: async () => {} })
+    expect(result.report.findings).toContainEqual(expect.objectContaining({ detector: 'confirmed-link', cardIds: [jiraId] }))
+    expect(result.report.findings.some(f => f.detector === 'invalid-dispatch-card')).toBe(false)
+    expect(result.report.homes[0]!.tiers['already confirmed']).toMatchObject([{ cardIds: [jiraId], sources: [source] }])
+    expect(result.report.merges).toEqual([])
+    expect(result.plannedWrites).toEqual([])
+
+    jira.status = 'stale'
+    expect(tier(input).unavailable).toMatchObject([{ cardIds: [jiraId] }])
+    expect(buildWorkerLinkReport(input).findings).not.toContainEqual(expect.objectContaining({ detector: 'invalid-dispatch-card' }))
+
+    Object.assign(task, collectedDispatch({ body_lines: [`card: ${a}`] }, source))
+    expect(tier(input)['eligible auto-write']).toMatchObject([{ cardIds: [a] }])
+
+    input.intentions.data!.cards.pop()
+    Object.assign(task, collectedDispatch({ body_lines: [`card: ${jiraKey}`] }, source))
+    expect(tier(input).unavailable).toMatchObject([{ cardIds: [jiraKey] }])
+    expect(buildWorkerLinkReport(input).findings).not.toContainEqual(expect.objectContaining({ detector: 'invalid-dispatch-card' }))
+  })
   it('emits exact dispatch proposals in the existing report without confirming a scene edge', () => {
     const input = dispatchSource(), report = buildWorkerLinkReport(input)
     expect(report.dispatchProvenance.status).toBe('collected')

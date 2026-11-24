@@ -33,8 +33,8 @@ contradict an anchor require First Mate review, with no silent anchor replacemen
 The shared fleet collector extracts identifiers and source field paths without
 publishing backlog prose. The existing worker-link report owns the new eligible
 tier and all prior candidate/conflict tiers. The adapter consumes its eligible
-proposals; it has no second matcher. The scene still confirms edges only from
-valid Notion declarations after ordinary source refresh.
+proposals; it has no second matcher. See the [worker-link classifications](notion-worker-links.md#classification)
+for when the scene confirms a relationship.
 
 Eligibility requires a fresh complete relevant home, an operational worker with
 exact home/task/generation, a current complete configured Notion board, a present

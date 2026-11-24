@@ -2,6 +2,9 @@ import { isJiraCard } from '../../shared/workIdentity'
 import type { SourceSnapshot } from './index'
 import { dispatchForTask } from './dispatchProvenance'
 import { declaredLinks, reconcileScene, type Execution } from './scene'
+import { ageObservation } from './observation'
+import { legacyWorkObservation } from './workReader'
+import { tswCardKey, tswKey } from './tswIdentity'
 import { BLANK_PROPERTY_REASON, FIRST_MATE_TASKS, workerLinkRecord, parseWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from './workerLinks'
 
 // Match the forge disposition that crew state publishes in current_state.detail.
@@ -52,15 +55,19 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
     const active = scene.executions.filter(e => e.home === source.home && operationalWorker(e))
     for (const execution of active) {
       const claims = scene.claims.filter(c => c.executionId === execution.id && operationalCard(c.cardId))
-      const declared = claims.filter(c => c.sources.includes(`${isJiraCard(c.cardId) ? 'jira' : 'notion'}.${FIRST_MATE_TASKS}`))
       const cardIds = sorted(claims.map(c => c.cardId))
       const backlog = scene.backlog.find(b => b.home === source.home && b.source.id === (execution.source.backlog.id ?? execution.identity.task_id))
       const provenance = dispatchForTask(execution.source, backlog?.source)
+      const jiraKey = provenance.status === 'card' ? tswKey(provenance.cardId) : null
+      const jiraCard = jiraKey ? scene.cards.find(card => tswCardKey(card.source) === jiraKey) : undefined
+      const target = jiraCard?.id ?? (provenance.status === 'card' ? provenance.cardId : null)
+      const declared = claims.filter(c => c.sources.includes(`${isJiraCard(c.cardId) ? 'jira' : 'notion'}.${FIRST_MATE_TASKS}`) ||
+        c.cardId === jiraCard?.id && c.basis === 'explicit')
       const sources = sorted([...claims.flatMap(c => c.sources), ...provenance.sources])
-      if (provenance.status === 'card' && !cardIds.includes(provenance.cardId)) cardIds.push(provenance.cardId)
+      if (target && !cardIds.includes(target)) cardIds.push(target)
       cardIds.sort(compare)
       const competing = scene.claims.some(c => c.identity.fm_home === source.home && c.identity.task_id === execution.identity.task_id &&
-        (c.verification === 'conflicting' || provenance.status === 'card' && c.cardId !== provenance.cardId))
+        (c.verification === 'conflicting' || target && c.cardId !== target))
       const dispatchConflict = provenance.status === 'conflict' || provenance.status === 'independent' && claims.length > 0 ||
         provenance.status === 'card' && competing
       const contradiction = scene.findings.some(f => f.executionIds.includes(execution.id) &&
@@ -69,6 +76,11 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
       const confirmed = declared.some(c => c.verification === 'confirmed' && c.state === 'current')
       let tier: BackfillTier, reason: string
       if (contradiction || invalid || dispatchConflict) { tier = 'conflicts'; reason = 'Source classification requires First Mate investigation; no write' }
+      else if (jiraKey) {
+        tier = confirmed ? 'already confirmed' : 'unavailable'
+        reason = confirmed ? 'Coordinator dispatch line matches the observed Jira card and worker identity'
+          : 'Jira dispatch target or current worker identity is unavailable'
+      }
       else if (!homeAvailable || !notionCurrent || cardIds.some(id => !records.get(id)?.mergeable)) {
         tier = 'unavailable'; reason = 'Home, Notion coverage or referenced declaration is unknown, stale, partial or unreadable'
       } else if (confirmed && !(provenance.status === 'card' && repairCards.has(provenance.cardId))) {
@@ -119,11 +131,13 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
  * No process history or wall clock participates, so saved inputs are replayable.
  */
 export function buildWorkerLinkReport(input: SourceSnapshot, repairCards: ReadonlySet<string> = new Set()) {
-  const scene = reconcileScene(input, Date.parse(input.generatedAt))
+  const now = Date.parse(input.generatedAt)
+  const scene = reconcileScene(input, now)
   const intentions = scene.coverage.intentions
-  const notionCurrent = ['fresh', 'partial'].includes(intentions.status) && !!input.intentions.data && !input.intentions.data.hasMore
+  const notion = ageObservation(legacyWorkObservation(input.intentions), now)
+  const notionCurrent = ['fresh', 'partial'].includes(notion.status) && !!notion.data && !notion.data.hasMore
   const complete = (o: { status: string; coverage: string }) => o.status === 'fresh' && o.coverage === 'complete'
-  const cards = scene.cards.map(card => {
+  const cards = scene.cards.filter(card => card.source.source?.synthetic !== false).map(card => {
     const declaration = declaredLinks(card.source)
     const property = card.source.properties[FIRST_MATE_TASKS]
     // Mergeable blank is the wire reader's blank classification on a fully read
@@ -159,7 +173,7 @@ export function buildWorkerLinkReport(input: SourceSnapshot, repairCards: Readon
     proposals.push({ cardId: claim.cardId, fm_home, task_id, spawn_gen,
       strength: claim.basis === 'explicit' ? 'legacy-metadata' : 'textual-reference', sources: sorted(claim.sources) })
   }
-  const autoCoverage = complete(scene.coverage.intentions) && notionCurrent &&
+  const autoCoverage = complete(notion) && notionCurrent &&
     cards.every(({ mergeable }) => mergeable)
   const homes = groupBackfill(scene, proposals, notionCurrent, new Map(cards.map(({ card, declaration, mergeable }) =>
     [card.id, { mergeable, invalid: declaration.status === 'invalid' }])), autoCoverage, repairCards)
@@ -205,7 +219,7 @@ export function buildWorkerLinkReport(input: SourceSnapshot, repairCards: Readon
     warnings: sorted(input.warnings),
     coverage: {
       wholeFarm: scene.coverage.wholeFarm, absenceConclusions: scene.coverage.absenceConclusions,
-      intentions: { ...intentions, cardPaginationComplete: !!input.intentions.data && !input.intentions.data.hasMore },
+      intentions: { ...intentions, cardPaginationComplete: !!notion.data && !notion.data.hasMore },
       unconfiguredHomes,
       homes: ordered(scene.coverage.homes.map(({ source, observation }) => ({ fm_home: source.home, ...observation }))),
       cards: ordered(cards.map(({ card, declaration, mergeable }) => ({ cardId: card.id, declaration: declaration.status,

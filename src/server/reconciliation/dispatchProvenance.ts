@@ -1,11 +1,12 @@
 import { notionPageId } from './notion'
+import { tswKey } from './tswIdentity'
 
 export type DispatchProvenance = { status: 'card'; cardId: string; sources: string[] } |
   { status: 'independent' | 'conflict' | 'absent'; sources: string[] }
 
 /** Only the coordinator-authored backlog line is authority. Never retain prose. */
 export function parseDispatchProvenance(lines: unknown, source = 'backlog.body_lines',
-  identify: (value: string) => string | null = notionPageId): DispatchProvenance {
+  identify: (value: string) => string | null = value => notionPageId(value) ?? tswKey(value)): DispatchProvenance {
   if (lines === undefined) return { status: 'absent', sources: [] }
   if (!Array.isArray(lines) || !lines.every(line => typeof line === 'string')) return { status: 'conflict', sources: [source] }
   const declarations = lines.flatMap(line => line.split('\n')).map(line => line.replace(/\r$/, ''))

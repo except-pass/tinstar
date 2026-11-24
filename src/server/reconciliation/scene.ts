@@ -9,9 +9,11 @@ import type { SourceSnapshot } from './index'
 import { ageObservation, type Observation } from './observation'
 import type { CardReference } from './references'
 import { record, text } from './values'
-import { FIRST_MATE_TASKS, isBlankWorkerLinks, parseWorkerLinks } from './workerLinks'
+import { FIRST_MATE_TASKS, isBlankWorkerLinks, parseWorkerLinks, type WorkerLink } from './workerLinks'
 import { checkInTime, type CheckInIndicator } from '../../shared/checkIn'
 import { workerLifecycleFindings } from './workerLifecycle'
+import { dispatchForTask } from './dispatchProvenance'
+import { tswCardKey } from './tswIdentity'
 
 type SourceCard = NonNullable<SourceSnapshot['intentions']['data']>['cards'][number]
 type SourceTask = NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>['tasks'][number]
@@ -112,13 +114,15 @@ function expectation(card: SourceCard, now: number): Pick<SceneCard, 'expectatio
     !Number.isFinite(checkpointTime) ? 'unknown' : checkpointTime < now ? 'overdue' : 'upcoming' }
   const common = { nextAction: wait ?? word(card, 'Delegated To'), checkpoint }
   // Owner is a select in the observed board, not an inferred name in a title.
-  if (owner && owner.toLowerCase() !== 'firstmate') return { ...common, expectation: 'outside', expectationReason: `Owner ${owner} is outside the integrated First Mate execution scope` }
+  const inScope = owner?.toLowerCase() === 'firstmate' ||
+    (!!tswCardKey(card) && !!owner && /^(?:hulk|firstmate\s+\S.*)$/i.test(owner))
+  if (owner && !inScope) return { ...common, expectation: 'outside', expectationReason: `Owner ${owner} is outside the integrated First Mate execution scope` }
   if (!owner || !status) return { ...common, expectation: 'unknown', expectationReason: 'Owner or status is missing' }
   if (wait || ['backlog', 'todo', 'queued', 'planned', 'waiting for', 'ready for review', 'done', 'archived', 'spare tokens'].includes(status) ||
     (start && Number.isFinite(Date.parse(start)) && Date.parse(start) > now)) {
     return { ...common, expectation: 'wait-planned', expectationReason: wait ? `Waiting For: ${wait}` : `Status ${word(card, 'Status')}${start ? `; Start Date ${start}` : ''}; no worker required now` }
   }
-  if (status === 'in progress') return { ...common, expectation: 'expected-now', expectationReason: `${isJiraCard(card.id) ? 'Jira' : 'Notion'} Owner Firstmate and Status In Progress, without a published wait or future start` }
+  if (status === 'in progress') return { ...common, expectation: 'expected-now', expectationReason: `${card.source?.provider === 'jira' || isJiraCard(card.id) ? 'Jira' : 'Notion'} Owner ${owner} and Status In Progress, without a published wait or future start` }
   return { ...common, expectation: 'unknown', expectationReason: `Status ${word(card, 'Status')} has no execution expectation rule` }
 }
 
@@ -136,6 +140,8 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       ...(workerLinkDetectors.length ? { workerLinkDetectors } : {}), ...(sourceHealth ? { sourceHealth: true as const } : {}) })
   }
   const legacy = ageObservation(legacyWorkObservation(intentions), now)
+  const jiraSource = intentions.sources?.find(source => source.source === 'jira')
+  const jira = jiraSource ? ageObservation({ ...jiraSource, data: intentions.data }, now) : intentions
   const sourceCards = new Map((intentions.data?.cards ?? []).map(card => [card.id, card]))
   const cards: SceneCard[] = [...sourceCards.values()].map(card => {
     const ancestry = new Set<string>()
@@ -159,12 +165,17 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       ...expectation(card, now), progressAssessment: null }
   })
   const byCard = new Map(cards.map(card => [card.id, card]))
+  const tswCards = new Map(cards.flatMap(card => {
+    const displayKey = tswCardKey(card.source)
+    return displayKey ? [[displayKey, card] as const] : []
+  }))
   const linkRecords = new Map(cards.map(card => [card.id, declaredLinks(card.source)]))
   // Blank is unknown for coverage, like a missing property. It is the normal
   // unset state, so it does not emit the per-card diagnostic a real read failure does.
   const declarationsReadable = cards.every(card => card.source.source?.synthetic === false || linkRecords.get(card.id)?.status === 'valid')
-  const declarations = cards.flatMap(card => {
+  const declarations: Array<{ card: SceneCard; link: WorkerLink; dispatchSources?: string[] }> = cards.flatMap(card => {
     const parsed = linkRecords.get(card.id)!
+    if (tswCardKey(card.source) && !card.source.properties[FIRST_MATE_TASKS]) return []
     if (isBlankWorkerLinks(parsed)) return []
     if (parsed.status !== 'valid') {
       add(parsed.status === 'invalid' ? 'unverified-conflicting' : 'unknown-stale-source', [card.id], [], `${FIRST_MATE_TASKS}: ${parsed.reason}`, [], parsed.status === 'invalid' ? ['invalid-record'] : [])
@@ -173,11 +184,12 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     return parsed.tasks.map(link => ({ card, link }))
   })
   const declarationsByWorker = new Map<string, typeof declarations>()
-  for (const declaration of declarations) {
+  const indexDeclaration = (declaration: typeof declarations[number]) => {
     const id = key(declaration.link.fm_home, declaration.link.task_id)
     const entries = declarationsByWorker.get(id) ?? []
     entries.push(declaration); declarationsByWorker.set(id, entries)
   }
+  declarations.forEach(indexDeclaration)
   const declaredFor = (home: string, task: string | null) => declarationsByWorker.get(key(home, task)) ?? []
   const executions: Execution[] = []
   const claims: Claim[] = []
@@ -201,7 +213,15 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         liveness, activity: liveness === 'running' ? 'executing' : liveness === 'waiting' ? 'waiting' : liveness === 'finished' || liveness === 'absent' ? 'inactive' : 'unknown', source: task, observation: metadata(observation) }
       executions.push(execution)
       const taskBacklog = observation.data?.backlog?.find(row => row.id === (task.backlog.id ?? task.identity.task_id))
-      for (const finding of workerLifecycleFindings(execution, taskBacklog, legacy, now)) {
+      const dispatch = dispatchForTask(task, taskBacklog)
+      const jiraCard = dispatch.status === 'card' ? tswCards.get(dispatch.cardId) : undefined
+      if (jiraCard && execution.kind !== 'secondmate' && task.identity.task_id && task.identity.spawn_gen) {
+        const declaration = { card: jiraCard, link: { fm_home: home.source.home, task_id: task.identity.task_id,
+          first_observed_spawn_gen: task.identity.spawn_gen }, dispatchSources: dispatch.sources }
+        declarations.push(declaration)
+        indexDeclaration(declaration)
+      }
+      for (const finding of workerLifecycleFindings(execution, taskBacklog, dispatch, legacy, fresh(jira) ? jiraCard?.source : undefined, now)) {
         add('unverified-conflicting', finding.cardIds, [id], finding.reason, [home.source.home], [finding.detector])
       }
       const refs: Array<CardReference | { pageId: string; basis: 'inferred'; source: string }> = [
@@ -252,41 +272,45 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       'Multiple observed generations for one task; First Mate must investigate continuity or ID reuse; never auto-switch',
       [attempts[0]!.home], ['spawn-evidence'])
   }
-  for (const { card, link } of declarations) {
+  for (const { card, link, dispatchSources } of declarations) {
     const home = fleet.find(home => home.source.home === link.fm_home)
     const matches = executions.filter(e => e.home === link.fm_home && e.identity.task_id === link.task_id)
-    const competing = declaredFor(link.fm_home, link.task_id)
+    const competing = declaredFor(link.fm_home, link.task_id).filter(d => fresh(d.dispatchSources ? jira : legacy))
     // Unrelated truncated Notion relations do not invalidate a fully read
     // declaration. Incomplete card pagination cannot establish uniqueness.
-    const notionAvailable = fresh(legacy) && !legacy.data?.hasMore
+    const source = dispatchSources ? jira : legacy
+    const sourceAvailable = dispatchSources ? sufficient(jira) : fresh(legacy) && !legacy.data?.hasMore
     const homeAvailable = !!home && sufficient(home.observation)
     const homeObserved = !!home && fresh(home.observation)
-    const available = homeAvailable && notionAvailable
-    const duplicatePrimary = fresh(legacy) && new Set(competing.map(d => d.card.id)).size > 1
-    const spawnEvidence = fresh(legacy) && homeObserved &&
+    const available = homeAvailable && sourceAvailable
+    const duplicatePrimary = fresh(source) && new Set(competing.map(d => d.card.id)).size > 1
+    const spawnEvidence = fresh(source) && homeObserved &&
       (matches.length > 1 || matches.some(e => e.identity.spawn_gen && e.identity.spawn_gen !== link.first_observed_spawn_gen))
     const conflict = duplicatePrimary || spawnEvidence
-    const historical = card.source.archived || card.source.in_trash || card.expectation === 'outside' ||
+    const historical = card.source.archived || card.source.in_trash || (!dispatchSources && card.expectation === 'outside') ||
       ['done', 'archived'].includes(word(card.source, 'Status')?.toLowerCase() ?? '')
     const identity = { fm_home: link.fm_home, task_id: link.task_id, spawn_gen: link.first_observed_spawn_gen }
     // A declaration with no observed worker remains visible in diagnostics; it
     // does not manufacture a worker, liveness, or a filesystem lookup.
-    const targets = matches.length ? matches : [null]
+    const targets = dispatchSources ? matches.filter(e => e.identity.spawn_gen === link.first_observed_spawn_gen)
+      : matches.length ? matches : [null]
     for (const execution of targets) {
       const id = execution?.id ?? key(identity.fm_home, identity.task_id, identity.spawn_gen)
       const verification = conflict ? 'conflicting' : available && execution ? 'confirmed' : 'unverified'
       const state = historical ? 'historical' : available && execution ? 'current' : 'last-known'
       const corroboration = execution?.source.cardReferences.filter(ref => ref.pageId === card.id).map(ref => ref.source) ?? []
+      const provider = dispatchSources || isJiraCard(card.id) ? 'Jira' : 'Notion'
       claims.push({ id: key(card.id, id, 'explicit'), cardId: card.id, executionId: id,
-        identity: execution?.identity ?? identity, basis: 'explicit', sources: [`${isJiraCard(card.id) ? 'jira' : 'notion'}.${FIRST_MATE_TASKS}`, ...corroboration],
-        observedAt: legacy.observedAt, firstObservedAt: legacy.observedAt, endedAt: null, state, verification,
+        identity: execution?.identity ?? identity, basis: 'explicit', sources: [...(dispatchSources ?? [`${provider.toLowerCase()}.${FIRST_MATE_TASKS}`]), ...corroboration],
+        observedAt: source.observedAt, firstObservedAt: source.observedAt, endedAt: null, state, verification,
         accountability: { home: link.fm_home, parentHome: home?.source.parentHome ?? null, owner: word(card.source, 'Owner') } })
       add(conflict ? 'unverified-conflicting' : !available ? 'unknown-stale-source' : execution ? 'confirmed-link' : historical ? 'outside-coverage' : 'unverified-conflicting',
         [card.id], execution ? [id] : [], conflict
           ? `${[duplicatePrimary && 'Same home/task declared on multiple primary cards', spawnEvidence && 'Observed spawn evidence differs from the declaration or contains multiple attempts'].filter(Boolean).join('; ')}; First Mate must investigate continuity or ID reuse; never auto-switch`
-          : !available ? `Declared relationship is last-known; ${isJiraCard(card.id) ? 'Jira' : 'Notion'} or worker home unavailable, stale or partial`
-            : execution ? `${isJiraCard(card.id) ? 'Jira' : 'Notion'} First Mate tasks matches exact home, task ID and spawn evidence; this does not establish progress or delivery`
-              : historical ? `Historical ${isJiraCard(card.id) ? 'Jira' : 'Notion'} relationship retained; worker is not currently observed`
+          : !available ? `Declared relationship is last-known; ${provider} or worker home unavailable, stale or partial`
+            : execution ? dispatchSources ? 'Coordinator dispatch line matches the observed Jira card and worker identity'
+              : `${provider} First Mate tasks matches exact home, task ID and spawn evidence; this does not establish progress or delivery`
+              : historical ? `Historical ${provider} relationship retained; worker is not currently observed`
                 : 'Declared worker not observed in a complete fresh home; First Mate must investigate', [link.fm_home], [
           ...(duplicatePrimary ? ['duplicate-primary' as const] : []),
           ...(spawnEvidence ? ['spawn-evidence' as const] : []),

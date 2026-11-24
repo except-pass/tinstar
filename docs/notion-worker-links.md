@@ -1,7 +1,7 @@
 # Notion-owned worker links
 
-Notion declares the primary task association. First Mate owns worker identity,
-execution state and location. Tin Star reads both sources, compares identities,
+For Notion work, the card declares the primary task association. First Mate owns
+worker identity, execution state and location. Tin Star reads both sources, compares identities,
 and displays the relationship and evidence; its server, UI and MCP never write
 assignments or execute a path/command from a Notion field. A separate coordinator
 adapter may write under First Mate authority as described below. No First Mate patch or spawn CLI
@@ -66,7 +66,9 @@ invalid entry invalidates the record; no subset becomes authoritative.
 
 ## Classification
 
-All configured source cards participate before any display filter. Only a fresh,
+The table below covers Notion declarations. For native Jira dispatch links, see
+[the worker-link report](#slice-b-backfill-and-deterministic-mismatch-report).
+All configured Notion cards participate before any display filter. Only a fresh,
 complete home snapshot establishes a currently observed match. Notion reads must
 be current with complete card pagination; an unrelated truncated Parent/Sub-item
 relation can suppress absence checks without invalidating a fully read positive
@@ -191,12 +193,24 @@ existing token; it does not create one. Keep tokens and report artifacts private
 An unavailable source is a successful report containing unknown coverage; a CLI
 transport/authentication/configuration argument failure exits nonzero.
 
+The report reads configured fleet snapshots and the Notion board in parallel.
+When native [TSW Jira work mode](features/jira-work.md#private-server-configuration)
+is configured, it waits for the fleet snapshots before looking up their declared
+TSW targets by exact key.
+The synthetic Jira pilot is excluded. A matching issue in the open-work scope
+with fresh, complete Jira and home observations and an exact operational worker
+identity can enter `already confirmed`. Resolved targets use the canonical Jira
+card ID in report rows. Owner is independent of whether a verified Jira
+dispatch link is current. Unresolved Jira targets enter `unavailable`
+unless conflicting evidence takes precedence. Jira dispatch links produce no
+Notion backfill proposals.
+
 The report schema is `tinstar.worker-link-report.v1`, with `mode: report-only`:
 
 | Field | Meaning |
 | --- | --- |
 | `evaluatedAt` | Input snapshot's `generatedAt`; expiry is evaluated at this timestamp. |
-| `coverage` | Notion and each configured home's observation metadata, pagination completeness, card declaration readability/mergeability, and Slice A absence coverage. No whole-farm certification. |
+| `coverage` | Combined work-source observation metadata (including Jira when queried), each configured home’s observation metadata, Notion card pagination and declaration readability/mergeability, and Slice A absence coverage. No whole-farm certification. |
 | `coverage.unconfiguredHomes` | Sorted explicit absolute homes from valid card declarations or published task `paths.home`, excluding configured homes. Remote worktree roots and prose are not home declarations. This inventories observed identities, not every host directory; it neither scans other homes nor changes configuration. |
 | `homes[].tiers` / `counts` | Exactly six tiers per home: `already confirmed`, `eligible auto-write`, `ambiguous`, `independent`, `conflicts`, `unavailable`. Counts are report rows, not an assertion of total worker coverage. |
 | `homes[].tiers.ambiguous[].proposals[]` | Manual verification candidates: exact `cardId`, `fm_home`, `task_id`, `spawn_gen`, supporting `sources`, and categorical `strength`. No raw brief/backlog text. |
@@ -287,11 +301,10 @@ with unique nonempty backlog record IDs. Explicit empty arrays are valid only
 when they are the actual complete inventory. Preserve incomplete data as partial;
 never invent generations or omit registered managers to claim completeness.
 
-For automatic links, the exact coordinator-authored `card: <page-id>` line must
-also appear in the corresponding `body_lines` under `tasks[].backlog` and/or
-`backlog.records[]` (copies must agree). Runtime state, endpoints and observation
-freshness remain independent evidence; a complete metadata inventory alone does
-not prove liveness or absence across the whole farm.
+Publish the [coordinator dispatch line](#coordinator-adapter) with the backlog
+note. Runtime state, endpoints and observation freshness remain independent
+evidence; a complete metadata inventory alone does not prove liveness or
+absence across the whole farm.
 
 Saved identical inputs produce byte-identical reports. All rows and nested
 identity/source lists are sorted with ordinary string comparison. No current
@@ -332,23 +345,29 @@ The coordinator-run CLI shares the report's configured fleet snapshot files/home
 and Notion reads. It is separate from the Tin Star server, UI and MCP. Dispatch
 provenance is collected from the task's backlog note `body_lines`, published in
 `tasks[].backlog` and/or `backlog.records[]`. First Mate writes exactly one line
-at dispatch, when it selects the canonical card:
+at dispatch, when it selects the canonical card. A Notion dispatch uses the page
+ID as shown below.
 
 ```text
 card: 40f50ce6d42281b08375d793820e2e40
 ```
 
+For Jira, use `card: TSW-<n>`, where `<n>` is a positive decimal issue number
+without leading zeros.
+
 The parser retains `card: none` as an independent marker, but it does not satisfy
-the [spawn card requirements](#spawn-card-and-backlog-closure-exceptions). The key is case-sensitive;
-standard dashed UUIDs are accepted and normalized. Multiple lines, malformed
-values, spacing changes or disagreeing task/backlog copies are conflicts.
+the [spawn card requirements](#spawn-card-and-backlog-closure-exceptions). Jira
+keys are case-sensitive. For Notion, standard dashed UUIDs are accepted and
+normalized. Multiple lines, malformed values, spacing changes or disagreeing
+task/backlog copies are conflicts.
 Other prose, URLs, legacy metadata and equal titles remain candidate-only.
 Only coordinator-controlled dispatch notes are authoritative; this is an
 operational trust boundary, not a signature on arbitrary worker-supplied text.
 The collector returns identifiers and source paths, never the raw note.
-The card line binds a page to the logical task (backlog item). The first write
-anchors the generation observed at that moment; later generation differences
-remain conflicts requiring coordinator continuity evidence.
+For Notion backfill, the card line binds a page to the logical task (backlog
+item). The first write anchors the generation observed at that moment. Later
+generation differences remain conflicts requiring coordinator continuity
+evidence.
 
 `dispatchProvenance.status` becomes `collected` for homes publishing markers.
 An eligible proposal requires a fresh complete home, operational exact worker
@@ -390,7 +409,7 @@ an environment variable. `--apply` requires an explicit integer `--max-cards`
 between 1 and 5. Repeated `--card` filters are supported. Apply adds at most ten
 worker references per invocation, preserves all existing siblings, and reports
 queued cards as `batch-limit`. The source configuration still supplies the read
-credential and board scope, exactly as for `worker-links:report`.
+credential and board scope. A Notion-only invocation skips Jira target reads.
 
 Each card is reread with its entire paginated property before merging. The
 adapter writes only `First Mate tasks`, then reads the full record back and
@@ -451,9 +470,12 @@ provenance in Delegated To; they never invent a First Mate home/task identity.
 Every freshly observed spawned worker needs a coordinator-authored backlog
 `card:` line. The scene and worker-link report emit one `invalid-dispatch-card`
 exception per worker when that line is missing, `card: none`, malformed or
-conflicting, names an unknown card in a complete board read, or names an
-archived/Done card. Legacy metadata and free text do not satisfy this check.
+conflicting, names an unknown Notion card in a complete board read, or names
+an observed archived/Done card. Legacy metadata and free text do not satisfy
+this check.
 A stale or incomplete board read cannot prove that a card does not exist.
+See the [worker-link report](#slice-b-backfill-and-deterministic-mismatch-report)
+for unresolved Jira targets.
 
 A separate `terminal-in-flight` exception appears when the latest status event
 is `done` or `failed` for more than 15 minutes and the backlog row remains
