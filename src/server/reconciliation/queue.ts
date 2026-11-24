@@ -229,7 +229,6 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const actions = prop(card, 'Will action')
     let tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
     const owner = normalize(word(card, 'Owner') ?? '')
-    const assignedToWill = jiraCardAssignedToWill(card)
     const waitingForWill = /\bWill\b/.test(word(card, 'Waiting For') ?? '')
     const linkedPulls = queuePulls({ cardIds: [card.id], evidence: [word(card, 'Link'), word(card, 'Evidence')].flatMap(url => url ? [{ kind: 'pull-request', url }] : []) }, inventory)
     const pr = linkedPulls.length === 1 ? pullStates.get(linkedPulls[0]!.url) : undefined
@@ -238,9 +237,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       (!pr.expiresAt || Date.parse(pr.expiresAt) > now) && (pr.state === 'merged' || pr.state === 'closed'))
     if (resolvedMerge) {
       tags = tags.filter(tag => normalize(tag) !== 'merge')
-      if (!tags.length && !waitingForWill && !assignedToWill) continue
+      if (!tags.length && !waitingForWill) continue
     }
-    if ((owner !== 'will' || isReviewStatus(word(card, 'Status'))) && !tags.length && !waitingForWill && !assignedToWill) continue
+    if ((owner !== 'will' || isReviewStatus(word(card, 'Status'))) && !tags.length && !waitingForWill && !jiraCardAssignedToWill(card)) continue
     const action = word(card, 'Next action') ?? word(card, 'Next Action')
     const merge = tags.some(tag => normalize(tag) === 'merge')
     const remainingAction = resolvedMerge && (!action || /^(?:please\s+)?merge\b/i.test(action))
