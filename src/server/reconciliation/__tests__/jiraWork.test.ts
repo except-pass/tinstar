@@ -1,11 +1,13 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { IncomingMessage } from 'node:http'
+import { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { loadReconciliationConfig, type JiraWorkConfig } from '../config'
 import { ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
@@ -13,6 +15,7 @@ import { jiraTransitions, jiraVerbs } from '../jiraWorkRules'
 import { JiraWork } from '../jiraWork'
 import { adfText } from '../jira'
 import { runTswStatusSync } from '../../../coordinator/tswStatusSync'
+import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
 
 const cloudId = '5bac40b8-c168-4931-90d1-2c8dfe15c6ea'
 const config = {
@@ -65,16 +68,24 @@ const response = (value: unknown, status = 200) => value === undefined
   ? new Response(null, { status })
   : new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 
-async function fixture(projectId = config.projectId) {
+async function fixture(projectId = config.projectId, withNotion = false) {
   const root = await mkdtemp(join(tmpdir(), 'jira-work-mcp-'))
   roots.push(root)
   const { token: _token, ...settings } = config
-  await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { jira: { ...settings, projectId, token: config.token } } }), { mode: 0o600 })
+  const notion = { token: 'fixture-notion-token', dataSourceId: 'a'.repeat(32) }
+  const notionCard = { id: 'b'.repeat(32), url: `https://www.notion.so/${'b'.repeat(32)}`, object: 'page', last_edited_time: '2026-01-01T12:00:00Z',
+    properties: {
+      Name: { type: 'title', title: [{ plain_text: 'Legacy fixture' }] }, Owner: { type: 'select', select: { name: 'Clawson' } },
+      Status: { type: 'status', status: { name: 'Queued' } }, 'Next check-in': { type: 'date', date: { start: '2026-01-03' } },
+      'Last touched by': { type: 'rich_text', rich_text: [{ plain_text: 'Fixture writer' }] },
+    } }
+  await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { jira: { ...settings, projectId, token: config.token }, ...(withNotion ? { notion } : {}) } }), { mode: 0o600 })
   const parsed = loadReconciliationConfig(root)
   expect(parsed.jiraWork).toMatchObject({ ...settings, projectId })
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
+  const search = { pageSize: 100, failFrom: Infinity }
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
@@ -94,13 +105,19 @@ async function fixture(projectId = config.projectId) {
   let nextIssue = 60001, nextLink = 8001
   const make = (id: string, key: string, project: string, fields: Record<string, any> = {}) => ({
     id, key, fields: { summary: 'Fixture', status: { name: 'Backlog' }, updated: '2026-01-01T12:00:00Z',
-      issuetype: { id: config.issueTypes.Task }, description: null, attachment: [], project: { id: project }, assignee: null,
+      issuetype: { id: config.issueTypes.Task }, description: null, attachment: [], duedate: null, project: { id: project }, assignee: null,
       ...Object.fromEntries(Object.values(config.fields).map(field => [field, null])), ...fields },
     properties: Object.create(null) as Record<string, unknown>, comments: [] as any[],
   })
   issues.set('70001', make('70001', 'OTHER-1', '10002'))
   const fetcher: typeof fetch = async (raw, init) => {
     const url = new URL(String(raw))
+    if (withNotion && url.origin === 'https://api.notion.com') {
+      const base = `/v1/data_sources/${notion.dataSourceId}`
+      if (url.pathname === base) return response({ object: 'data_source', properties: notionCard.properties })
+      if (url.pathname === `${base}/query`) return response({ has_more: false, results: [notionCard] })
+      throw new Error(`Unexpected Notion fixture request: ${url.pathname}`)
+    }
     expect(url.origin).toBe('https://api.atlassian.com')
     const headers = new Headers(init?.headers)
     expect(headers.get('authorization')).toBe(`Bearer ${config.token}`)
@@ -125,12 +142,14 @@ async function fixture(projectId = config.projectId) {
       return response(assignees.filter(user => user.displayName.toLowerCase().includes(name)))
     }
     if (path === 'search/jql') {
-      if (controls.rejectSearch) return response({}, 403)
+      const offset = Number(body.nextPageToken ?? 0), end = offset + search.pageSize
+      if (controls.rejectSearch || offset >= search.failFrom) return response({}, 403)
       expect(body.jql).toContain(`project = ${projectId}`)
-      return response({ isLast: true, issues: controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === projectId) })
+      const visible = controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === projectId)
+      return response({ issues: visible.slice(offset, end), isLast: end >= visible.length, ...(end < visible.length ? { nextPageToken: String(end) } : {}) })
     }
     if (path === 'issue' && method === 'POST') {
-      if (body.fields[config.fields.owner] && !['Avery', 'Taylor'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
+      if (body.fields[config.fields.owner] && !['Avery', 'Taylor', 'Clawson', 'Firstmate'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
       const id = String(nextIssue++)
       const issue = make(id, `${projectId === '10639' ? 'TSW' : 'WORK'}-${Number(id) - 60000}`, projectId, body.fields)
       if (controls.wrongCreate) issue.fields.summary = 'Unexpected Jira summary'
@@ -233,7 +252,7 @@ async function fixture(projectId = config.projectId) {
     }
     if ((!part && method === 'PUT') || (part === 'transitions' && method === 'POST')) {
       if (part && controls.refuseTransition) return response({}, 409)
-      if (!part && body.fields[config.fields.owner] && !['Avery', 'Taylor', 'Firstmate fleet'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
+      if (!part && body.fields[config.fields.owner] && !['Avery', 'Taylor', 'Clawson', 'Firstmate', 'Firstmate fleet'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
       if (part) {
         controls.lastTransitionId = body.transition.id
         const to = (controls.transitionList ?? transitions).find(transition => transition.id === body.transition.id)!.to
@@ -277,12 +296,141 @@ async function fixture(projectId = config.projectId) {
       const content = result.content as Array<{ type: string; text: string }>
       return JSON.parse(content[0]!.text)
     }
-    return { client, call }
+    return { client, call, sources }
   }
   const jira = () => new JiraWork(parsed.jiraWork!, root, fetcher)
-  return { root, connect, requests, controls, issues, links, historicalKeys, appendHistory, assignees, jira,
+  return { root, connect, make, requests, controls, issues, links, historicalKeys, search, notionCard, appendHistory, assignees, jira,
     dropCompletionOnRead: () => { dropCompletionAfterRead = true } }
 }
+
+it('includes matching Jira and legacy Notion cards with independent search coverage', async () => {
+  const f = await fixture(config.projectId, true)
+  const { call } = await f.connect('Clawson')
+  const active = f.make('60101', 'WORK-101', config.projectId, { summary: 'Native pickup fixture', status: { name: 'In Progress' }, duedate: '2026-01-04', [config.fields.owner]: { value: 'Clawson' } })
+  const other = f.make('60102', 'WORK-102', config.projectId, { status: { name: 'Queued' }, [config.fields.owner]: { value: 'Taylor' } })
+  const canceled = f.make('60103', 'WORK-103', config.projectId, { status: { name: 'Canceled' }, [config.fields.owner]: { value: 'Clawson' } })
+  for (const issue of [active, other, canceled]) f.issues.set(issue.id, issue)
+  f.search.pageSize = 1
+  const args = { owner: 'Clawson', statuses: ['Queued', 'In Progress'], limit: 100, refresh: true }
+  const work = await call('search_work', args)
+  expect(work.total).toBe(2)
+  expect(work.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete', sources: [
+    { source: 'notion', status: 'fresh', coverage: 'complete' }, { source: 'jira', status: 'fresh', coverage: 'complete' },
+  ] })
+  expect(work.records.map((record: any) => record.card.source)).toMatchObject([
+    { id: f.notionCard.id, url: f.notionCard.url, properties: { Owner: { value: 'Clawson' }, Status: { value: 'Queued' }, 'Last touched by': { value: 'Fixture writer' } } },
+    { id: `jira:${new URL(config.url).hostname}:${config.projectId}:${active.id}`, url: `${config.url}/browse/${active.key}`, last_edited_time: active.fields.updated,
+      archived: false, in_trash: false, properties: { Owner: { value: 'Clawson' }, Status: { value: 'In Progress' }, Name: { value: active.fields.summary },
+        'Next check-in': { value: { start: '2026-01-04', end: null, time_zone: null } }, 'Last touched by': { value: null } } },
+  ])
+  expect(f.requests.filter(request => request.path === 'search/jql')).toHaveLength(3)
+  const history = await call('search_work', { owner: 'Clawson', history: true })
+  expect(history.records.find((record: any) => record.card.source.properties.Status.value === 'Canceled')?.card.source).toMatchObject({ archived: true, in_trash: false })
+  f.search.failFrom = 1
+  const partial = await call('search_work', args)
+  expect(partial.total).toBe(2)
+  expect(partial.coverage.intentions).toMatchObject({ status: 'partial', coverage: 'partial', sources: [
+    { source: 'notion', coverage: 'complete' }, { source: 'jira', coverage: 'partial' },
+  ] })
+  f.search.failFrom = 0
+  const { call: callCold } = await f.connect('Clawson')
+  const unavailable = await callCold('search_work', args)
+  expect(unavailable.total).toBe(1)
+  expect(unavailable.coverage.intentions).toMatchObject({ status: 'partial', coverage: 'partial', sources: [
+    { source: 'notion', coverage: 'complete' }, { source: 'jira', status: 'unknown', coverage: 'unknown' },
+  ] })
+})
+
+it('projects the private Jira census and its coverage into the owner Desk queue', async () => {
+  const f = await fixture()
+  const { sources } = await f.connect()
+  const owner = new IncomingMessage(new Socket())
+  owner.headers['tailscale-user-login'] = 'owner@example.test'
+  sources.authorizePulls = async request => request === owner
+  const issue = f.make('60101', 'WORK-101', config.projectId, { status: { name: 'In Progress' }, duedate: '2026-01-04', [config.fields.owner]: { value: 'Will' } })
+  f.issues.set(issue.id, issue)
+  const authorized = await sources.queue(owner, undefined, false, 'read')
+  expect(authorized.items).toEqual([expect.objectContaining({ title: 'Fixture', checkpoint: '2026-01-04',
+    evidence: [{ kind: 'card', url: `${config.url}/browse/${issue.key}` }], sources: [expect.objectContaining({ kind: 'jira', coverage: 'complete' })] })])
+  expect(authorized.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete', sources: [{ source: 'jira', coverage: 'complete' }] })
+  f.controls.rejectSearch = true
+  const partial = await sources.queue(owner, undefined, false, 'read')
+  expect(partial.coverage.intentions).toMatchObject({ status: 'partial', coverage: 'partial' })
+  expect(partial.items[0]).toMatchObject({ readiness: 'needs-readiness-verification', sources: [expect.objectContaining({ status: 'stale' })] })
+  expect(await sources.queue(undefined, undefined, false, 'read')).toMatchObject({ items: [], coverage: { intentions: { status: 'unknown' } } })
+})
+
+const mergeSelection = { operation_id: '39f71a89-d20e-4846-bd37-590d69f25348', targets: Array.from({ length: 10 }, (_, i) => ({
+  url: `https://github.com/example/fixture-project-with-a-long-name-${i}/pull/${i + 1}`, head: 'a'.repeat(40),
+})) }
+const mergeActor = 'owner@example.test'
+function mergePlan() {
+  const head = mergeSelection.targets[0]!.head
+  const read = async (path: string) => {
+    if (/\/pulls\/\d+$/.test(path)) return { head: { sha: head }, base: { ref: 'main' }, state: 'open', merged: false, draft: false, mergeable: true }
+    if (path.includes('/rules/')) return []
+    if (path.includes('/branches/')) return { protection: { required_status_checks: { contexts: ['CI'] } } }
+    if (path.includes('/check-runs')) return { total_count: 1, check_runs: [{ name: 'CI', head_sha: head, status: 'completed', conclusion: 'success', app: { id: 1 } }] }
+    if (path.includes('/status?')) return { total_count: 0, sha: head, statuses: [] }
+    throw new Error('Unexpected fixture request')
+  }
+  return prepareClawsonMerge(mergeSelection, mergeActor, read, () => Date.parse('2026-01-05T02:00:00Z'))
+}
+
+it('queues one Jira admin-merge handoff and lets Clawson pick up, comment and return it by card ID', async () => {
+  const f = await fixture()
+  const { call, sources } = await f.connect('Clawson')
+  const prepare = vi.fn(mergePlan)
+  const submit = () => sources.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)
+  const [first, second] = await Promise.all([submit(), submit()])
+  expect(first).toMatchObject({ outcome: 'saved', operation_id: mergeSelection.operation_id, card: { owner: 'Clawson', status: 'Queued', name: 'Admin merge 10 PRs across 10 repositories', due_date: '2026-01-04' } })
+  expect(second).toEqual(first)
+  const card = first.card as { id: string; description: string }
+  const plan = await mergePlan()
+  expect(card.description).toContain(plan.brief)
+  expect(card.description).toContain(plan.script)
+  expect(card.description).toContain('Post one comment per PR')
+  const lookup = { owner: 'Clawson', statuses: ['Queued', 'In Progress'], limit: 100 }
+  const pickedUp = await call('search_work', lookup)
+  expect(pickedUp).toMatchObject({ total: 1, coverage: { intentions: { status: 'fresh', coverage: 'complete' } }, records: [{ card: { source: { id: card.id } } }] })
+  expect(await call('get_work', { card_id: card.id })).toMatchObject({ outcome: 'available', card: { description: card.description }, comments: [] })
+  const work = { card_id: card.id }
+  expect(await call('transition_work', { ...work, operation_id: 'begin-fixture', verb: 'Start', evidence: 'Pickup acknowledged.' })).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
+  expect(await call('update_work', { ...work, operation_id: 'report-fixture', kind: 'jira_edit', note: 'Fixture report for the requester.' })).toMatchObject({ outcome: 'saved' })
+  expect(await call('update_work', { ...work, operation_id: 'return-fixture', kind: 'jira_edit', owner: 'Firstmate' })).toMatchObject({ outcome: 'saved', card: { owner: 'Firstmate' } })
+  expect(await call('search_work', lookup)).toMatchObject({ total: 0 })
+  expect(await call('get_work', work)).toMatchObject({ outcome: 'available', card: { owner: 'Firstmate', status: 'In Progress' }, comments: expect.arrayContaining([
+    expect.objectContaining({ body: 'Fixture report for the requester.\n\nRecorded via Tin Star (Clawson)' }),
+  ]) })
+  expect(await call('update_work', { ...work, operation_id: 'requester-fixture', kind: 'jira_edit', owner: 'Taylor' })).toMatchObject({ outcome: 'saved', card: { owner: 'Taylor' } })
+  const { sources: restarted } = await f.connect()
+  expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: card.id } })
+  expect(prepare).toHaveBeenCalledTimes(1)
+  expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue')).toHaveLength(1)
+})
+
+it.each(['creation', 'transition'])('recovers an admin-merge handoff after losing the Jira %s response', async phase => {
+  const f = await fixture()
+  f.issues.set('60101', f.make('60101', 'WORK-101', config.projectId))
+  f.search.pageSize = 1
+  const { sources } = await f.connect()
+  const prepare = vi.fn(mergePlan)
+  prepare.mockRejectedValueOnce(new Error('Head changed'))
+  expect(await sources.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'not-saved', code: 'merge-refused' })
+  expect(f.requests).toEqual([])
+  if (phase === 'creation') f.controls.loseCreate = true
+  else f.controls.loseEdit = true
+  const uncertain = await sources.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)
+  expect(uncertain).toMatchObject({ outcome: 'partially-saved' })
+  expect(uncertain.card).toBeUndefined()
+  prepare.mockRejectedValue(new Error('Head no longer available'))
+  const { sources: restarted } = await f.connect()
+  expect(await restarted.workflow.createClawsonMerge({ ...mergeSelection, targets: [mergeSelection.targets[0]!] }, mergeActor, prepare)).toMatchObject({ code: 'operation-conflict' })
+  expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ outcome: 'saved', card: { status: 'Queued', owner: 'Clawson' } })
+  expect(prepare).toHaveBeenCalledTimes(2)
+  expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue')).toHaveLength(1)
+  expect(f.requests.filter(request => request.method === 'POST' && request.path.endsWith('/transitions'))).toHaveLength(1)
+})
 
 it('publishes update_work schemas that accept Notion IDs for shared updates', async () => {
   const { client } = await (await fixture()).connect()

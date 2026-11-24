@@ -1,11 +1,15 @@
-export interface Observation<T> {
+interface ObservationMetadata {
   status: 'fresh' | 'partial' | 'stale' | 'unknown'
   coverage: 'complete' | 'partial' | 'unknown'
   observedAt: string | null
   attemptedAt: string
   expiresAt: string | null
   error: string | null
+}
+
+export interface Observation<T> extends ObservationMetadata {
   data: T | null
+  sources?: Array<ObservationMetadata & { source: string }>
 }
 
 export interface ReadResult<T> { data: T; observedAt: string; coverage: 'complete' | 'partial' }

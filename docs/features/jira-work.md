@@ -40,12 +40,15 @@ Inject the scoped Jira service-account token as `TINSTAR_JIRA_TOKEN` through the
 
 Owner is one Jira single select with approved names and no default. Decision Questions and Waiting For Condition are multiline fields. Waiting For Type is a single select with Actor and Event. Waiting For ID is a single-line field. For a Jira blocker, use one inward Blocks link from the blocked ticket. Jira's own project permissions and workflow rules apply to native UI edits.
 
+Admin-merge handoffs set Due date on the Task work type. Enable that field and grant the service account permission to schedule work items. [Jira due-date configuration](https://support.atlassian.com/jira-software-cloud/docs/add-the-due-date-field-to-your-issues) · [Jira scheduling permission](https://support.atlassian.com/jira-software-cloud/docs/schedule-an-issue/)
+
 ## MCP calls
 
 Tin Star requests English status names from Jira Cloud for transition matching and readback, regardless of the service account's language preference.
 
 | Tool | Arguments and result |
 | --- | --- |
+| `search_work` | Filter the configured work sources by `owner` and `statuses`. Jira rows use the same `records[].card.source` fields as Notion. The Jira due date becomes the date-only Next check-in, and Last touched by is null on Jira rows. Check `coverage.intentions` for an overall verdict and per-source observations before using results for pickup. |
 | `create_work` | Creates a ticket in the configured work project. Supply `name` and `operation_id`. If supplied, `provider` must be `"jira"`. Task is the default. Optionally include `issue_type: "Epic"`, `description`, or `owner`. Jira must confirm Backlog on create readback. |
 | `get_work` | Pass the returned immutable `card.id` as `card_id` for get, edit, transition, and link calls. The ID has the form `jira:<site hostname>:<project ID>:<issue ID>`. The result includes the display key, native fields and links. The default detailed read includes up to 50 recent comments. Request `implementation_contract` to read verified chunks of an approved handoff. Set `details: false` to skip comments. |
 | `submit_handoff` | See [approved implementation handoffs](workflow.md#one-call-approved-implementation-handoffs). |
@@ -62,6 +65,8 @@ On a dispatched transition retry, if the destination matches but the recent comm
 A human can move a ticket between Tin Star’s pre-write project check and Jira applying the request. Restrict the service account’s write permissions to TSW to enforce the boundary at write time, while Tin Star reports an error if post-write readback finds the ticket in another project.
 
 The main path is Backlog → To Do → Queued → In Progress. Review and release paths use Ready for Review, Waiting for Prod Release and Verify in Prod before Done. Fast-track goes directly to Queued. Complete Directly goes from In Progress to Done for verified work without remaining review or release. Decision and Waiting For pause active work. Answer Decision and Resolve Wait choose an explicit destination. Recovery verbs return work to To Do or Queued. Cancel records the reason and disposition for live work, Park returns work to Backlog, and Reopen returns a terminal ticket to To Do or Queued.
+
+The owner-authorized Desk queue uses the same Jira observation. An unread result page or incomplete issue record leaves combined coverage partial. Desk Pulls and Ask admin-merge actions confirm a Queued Jira task before reporting that they sent it to Clawson. The task description preserves the approved PR heads and merge instructions. Clawson can use `jira_edit` to add a comment and return Owner to Firstmate or the requesting mate.
 
 Decision Questions uses headings such as `D1 [Open]: Which option should we adopt?`. Options and answers follow on indented lines, for example `  Answer: Use the first option.` Change the heading to `[Answered]` when answering in Jira. MCP edits reread the field before applying targeted changes, preserve untouched ADF content, and leave field history in Jira. Jira has no conditional field write, so a native edit between the reread and the write can still race with the MCP edit. Before entering Queued, provide an owner, instructions and a clear success condition, with the primary blocker removed. Start rechecks instructions and blockers, including blockers staged before Block. Return a Queued ticket to To Do before clearing its instructions. Tin Star checks the declared evidence and Jira readback. Jira remains the place to inspect the underlying work and its history.
 

@@ -12,7 +12,8 @@ import {
 } from './jiraWorkRules'
 import { CreationReceipts } from './workflowReceipts'
 import { tswKey, tswProjectId } from './tswSnapshot'
-import type { WorkCard } from './workReader'
+import { CachedObservation, retainMissing } from './observation'
+import type { WorkCard, WorkData } from './workReader'
 
 const createProperty = 'tinstar.work.create'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -29,7 +30,7 @@ const isWriteRejection = (error: unknown): error is JiraWriteError =>
 type Link = { id: string; type_id: string; type: string; label: string; direction: 'inward' | 'outward'; target_key: string; target_id: string }
 type Issue = {
   id: string; issue_id: string; key: string; url: string; project_id: string; issue_type: string; status: string; name: string;
-  description: string; instructionText: string; owner: string | null; decisions: string; decisionDocument: any; updated_at: string; links: Link[];
+  description: string; instructionText: string; owner: string | null; decisions: string; decisionDocument: any; updated_at: string; due_date: string | null; links: Link[];
   blockerConditionText: string;
   assignee: string | null; assignee_id: string | null;
   externalBlocker: { type: string | null; target: string; unblocks_when: string };
@@ -59,6 +60,66 @@ export class JiraWork extends JiraClient {
 
   private qualified(id: string) { return `jira:${this.site}:${this.config.projectId}:${id}` }
 
+  private boardFields() { return ['project', 'summary', 'status', 'updated', 'duedate', this.config.fields.owner] }
+
+  private boardCard(raw: Record<string, any>): WorkCard {
+    const fields = raw.fields, ownerField = this.config.fields.owner
+    if (!nativeId(raw.id) || typeof raw.key !== 'string' || fields?.project?.id !== this.config.projectId ||
+      typeof fields.summary !== 'string' || typeof fields.status?.name !== 'string' || !Number.isFinite(Date.parse(fields.updated)) ||
+      !Object.hasOwn(fields, ownerField) || !Object.hasOwn(fields, 'duedate') || (fields[ownerField] != null && typeof fields[ownerField]?.value !== 'string') ||
+      (fields.duedate != null && !/^\d{4}-\d{2}-\d{2}$/.test(fields.duedate))) throw new Error('Incomplete Jira work search result')
+    return this.projectCard({ issue_id: raw.id, key: raw.key, name: fields.summary, status: fields.status.name, updated_at: fields.updated,
+      owner: fields[ownerField]?.value ?? null, due_date: fields.duedate })
+  }
+
+  private projectCard(issue: Pick<Issue, 'issue_id' | 'key' | 'name' | 'status' | 'updated_at' | 'owner' | 'due_date'>): WorkCard {
+    const property = (id: string | null, type: string, value: unknown) => ({ id, type, value, hasMore: false })
+    return {
+      id: this.qualified(issue.issue_id), url: `${this.config.url}/browse/${encodeURIComponent(issue.key)}`,
+      last_edited_time: issue.updated_at, archived: issue.status === 'Canceled', in_trash: false,
+      source: { provider: 'jira', instanceId: this.config.url, collectionId: this.config.projectId, itemId: issue.issue_id, displayKey: issue.key, synthetic: false },
+      properties: {
+        Name: property('summary', 'title', issue.name), Status: property('status', 'status', issue.status),
+        Owner: property(this.config.fields.owner, 'select', issue.owner),
+        'Next check-in': property('duedate', 'date', issue.due_date ? { start: issue.due_date, end: null, time_zone: null } : null),
+        'Last touched by': property(null, 'rich_text', null), // Jira search has no last-editor field.
+      },
+    }
+  }
+
+  readonly observation = new CachedObservation<WorkData>(async () => {
+    const cards = new Map<string, WorkCard>(), seen = new Set<string>()
+    const signal = AbortSignal.timeout(20_000)
+    let cursor: string | undefined, complete = false, invalidRow = false
+    // Bound the project census and preserve pages already read if a later request fails.
+    for (let page = 0; page < 20; page++) {
+      try {
+        const result = await this.request('search/jql', 'POST', {
+          jql: `project = ${this.config.projectId} ORDER BY id`, fields: this.boardFields(),
+          maxResults: 100, ...(cursor ? { nextPageToken: cursor } : {}),
+        }, signal)
+        if (!Array.isArray(result.issues)) throw new Error('Incomplete Jira work search page')
+        for (const row of result.issues) {
+          try {
+            const card = this.boardCard(row)
+            cards.set(card.id, card)
+          } catch { invalidRow = true }
+        }
+        if (result.isLast === true) { complete = !invalidRow; break }
+        cursor = result.nextPageToken
+        if (typeof cursor !== 'string' || !cursor || seen.has(cursor)) throw new Error('Invalid Jira work search cursor')
+        seen.add(cursor)
+      } catch (error) {
+        if (!cards.size) throw error
+        break
+      }
+    }
+    return { observedAt: new Date().toISOString(), coverage: complete ? 'complete' : 'partial',
+      data: { dataSourceId: `jira:${this.site}:${this.config.projectId}`, schema: {}, cards: [...cards.values()], hasMore: !complete,
+        truncatedRelations: [], missingSchemaProperties: [], scope: 'Configured Jira work project' } }
+  }, 60_000, 120_000, 'Jira work project read failed; verify project access', Date.now,
+  (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
+
   private id(cardId: string) {
     const id = jiraWorkIdentity(cardId)
     if (id?.site !== this.site || id.projectId !== this.config.projectId) throw new JiraWorkInputError('Ticket is outside the configured Jira site and project')
@@ -74,7 +135,7 @@ export class JiraWork extends JiraClient {
 
   private async read(id: string, allowOtherTypes = false): Promise<Issue> {
     await this.checkProject(id)
-    const fields = ['summary', 'project', 'issuetype', 'status', 'description', 'assignee', 'updated', 'issuelinks', ...Object.values(this.config.fields)]
+    const fields = [...this.boardFields(), 'issuetype', 'description', 'assignee', 'issuelinks', ...Object.values(this.config.fields).filter(field => field !== this.config.fields.owner)]
     const raw = await this.request(`issue/${id}?fields=${fields.join(',')}`)
     const f = raw.fields
     if (!nativeId(raw.id) || raw.id !== id || f?.project?.id !== this.config.projectId || typeof raw.key !== 'string') {
@@ -95,7 +156,7 @@ export class JiraWork extends JiraClient {
     return {
       id: this.qualified(id), issue_id: id, key: raw.key, url: `${this.config.url}/browse/${encodeURIComponent(raw.key)}`,
       project_id: this.config.projectId, issue_type: issueType ?? f.issuetype.name ?? f.issuetype.id,
-      name: f.summary, status: f.status.name, updated_at: f.updated, owner: f[owner]?.value ?? null,
+      name: f.summary, status: f.status.name, updated_at: f.updated, due_date: f.duedate ?? null, owner: f[owner]?.value ?? null,
       assignee: f.assignee?.displayName ?? null, assignee_id: f.assignee?.accountId ?? null,
       description: text(f.description), instructionText: text(f.description, 'omit'), decisions: text(f[decisions]), decisionDocument: f[decisions], links,
       blockerConditionText: text(f[blockerCondition], 'omit'),
@@ -291,7 +352,11 @@ export class JiraWork extends JiraClient {
           pending = true
           sent = true
         },
-        confirm: card => this.saved(card, dispatched),
+        confirm: issue => {
+          const card = this.projectCard(issue)
+          this.observation.updateData(data => ({ ...data, cards: [...data.cards.filter(prior => prior.id !== card.id), card] }))
+          return this.saved(issue, dispatched)
+        },
       })
     } catch (error) {
       const rejected = sent && isWriteRejection(error)
@@ -399,8 +464,8 @@ export class JiraWork extends JiraClient {
     return matches[0]
   }
 
-  create(input: JiraCreate, actor: string) {
-    return this.mutate('create', input, actor, async attempt => {
+  create(input: JiraCreate, actor: string, mergeDueDate?: string) {
+    return this.mutate(mergeDueDate ? 'clawson-merge' : 'create', input, actor, async attempt => {
       const issueType = input.issue_type ?? 'Task'
       const typeId = this.config.issueTypes[issueType]
       if (!typeId) throw new JiraWorkInputError(`Jira ${issueType} is not configured`)
@@ -416,6 +481,7 @@ export class JiraWork extends JiraClient {
             project: { id: this.config.projectId }, issuetype: { id: typeId }, summary: input.name,
             ...(input.description ? { description: jiraText(input.description) } : {}),
             ...(input.owner ? { [this.config.fields.owner]: { value: input.owner } } : {}),
+            ...(mergeDueDate ? { duedate: mergeDueDate } : {}),
           },
           properties: [{ key: createProperty, value: stamp }],
         })
@@ -431,6 +497,10 @@ export class JiraWork extends JiraClient {
       if (source.value !== stamp) {
         const message = 'Jira did not confirm the creation receipt'
         throw attempt.dispatched ? new JiraWorkUnconfirmed(message) : new JiraCreateContradiction(message)
+      }
+      if (mergeDueDate && (issue.issue_type !== issueType || issue.name !== input.name || issue.owner !== input.owner ||
+        issue.description !== input.description || issue.due_date !== mergeDueDate)) {
+        throw new JiraWorkUnconfirmed('Jira did not confirm the merge handoff fields and due date')
       }
       return attempt.confirm(issue)
     })

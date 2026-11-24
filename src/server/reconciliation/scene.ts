@@ -303,7 +303,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         'Worker metadata indicates Notion-originated work without a matching Notion declaration; First Mate investigates')
     }
   }
-  if (!sufficient(intentions)) add('unknown-stale-source', [], [], `Notion: ${intentions.status}/${intentions.coverage}; absence conclusions suppressed`)
+  if (!sufficient(intentions)) add('unknown-stale-source', [], [], `${intentions.sources ? 'Work sources' : 'Notion'}: ${intentions.status}/${intentions.coverage}; absence conclusions suppressed`)
   if (!fleet.length) add('unknown-stale-source', [], [], 'No configured homes; fleet coverage is unknown')
   // Unknown runtime state anywhere in the configured pool can hide an unlinked
   // execution. Do not turn metadata completeness into a false execution gap.

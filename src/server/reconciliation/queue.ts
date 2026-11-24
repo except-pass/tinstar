@@ -138,7 +138,7 @@ function context(item: QueueItem, card: Card, observation: Pick<Observation<unkn
     }
   }
   if (word(card, 'Waiting For ID') && !cardWaitsForWill(card)) lower(item, 'future-or-conditional', 'Published structured dependency must clear before the decision is immediate')
-  if (!fresh(observation)) lower(item, 'needs-readiness-verification', 'Notion observation is stale or unavailable; last-known action only')
+  if (!fresh(observation)) lower(item, 'needs-readiness-verification', `${card.source?.provider === 'jira' ? 'Jira' : 'Notion'} observation is stale or unavailable; last-known action only`)
   if (card.properties['Will action']?.hasMore || !word(card, 'Owner') || !word(card, 'Status')) {
     lower(item, 'needs-readiness-verification', 'Owner, status or action context is incomplete')
   }
@@ -246,9 +246,12 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       ? [tags.join(', '), waitingForWill ? word(card, 'Waiting For') : null].filter(Boolean).join('; ') : action
     const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, remainingAction, merge ? 'merge' : 'decision')
     if (resolvedMerge) resolvedMerges.add(item)
-    context(item, card, intentions, now, ownerDecisions.has(card.id), cardWaitsForWill(card))
+    const provider = card.source?.synthetic === false ? 'jira' : card.source?.synthetic ? 'jira-pilot' : 'notion'
+    const observed = intentions.sources?.find(source => source.source === provider)
+    const cardObservation = observed ? { ...intentions, ...observed } : intentions
+    context(item, card, cardObservation, now, ownerDecisions.has(card.id), cardWaitsForWill(card))
     if (resolvedMerge && remainingAction !== action) lower(item, 'needs-readiness-verification', 'Merge request resolved; verify the concrete next action for the remaining asks')
-    item.sources.push({ ...source(card.id.startsWith('jira:') ? 'jira' : 'notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', intentions),
+    item.sources.push({ ...source(card.id.startsWith('jira:') ? 'jira' : 'notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', cardObservation),
       actions: tags, request: { home: null, taskId: null, id: card.id, kind: card.id.startsWith('jira:') ? 'jira-card' : 'notion-card' } })
     identities.set(item, [item.id, ...(ownerDecisions.has(card.id) ? [ownerDecisions.get(card.id)!.queueId] : [])])
     explicitPulls.set(item, pullIds([word(card, 'Link'), word(card, 'Evidence')]))

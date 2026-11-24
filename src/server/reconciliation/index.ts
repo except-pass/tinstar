@@ -87,7 +87,7 @@ export class ReconciliationSources {
     this.leases = new CardLeases(receiptRoot)
     this.notionApi = api ?? new NotionApi(fetcher)
     if (config.jiraWork) this.jiraWork = new JiraWork(config.jiraWork, receiptRoot, fetcher)
-    this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
+    this.workReader = new WorkReader(config.notion, this.notionApi, config.jira, this.jiraWork)
     this.workReader.leases = this.leases
     this.associations = new AssociationStore(receiptRoot)
     this.askStore = new AskStore(receiptRoot)
@@ -143,8 +143,8 @@ export class ReconciliationSources {
     return homes.map(row => ({ ...row, observation: ageObservation(row.observation) }))
   }
 
-  async snapshot(force = false, scope: WorkScope = {}, background = false) {
-    const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force, background)])
+  async snapshot(force = false, scope: WorkScope = {}, background = false, includeNative = false) {
+    const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force, background, includeNative)])
     // Scene refreshes read source properties only. Awaiting per-card comments
     // here makes a large board exceed the source deadline. Comment updates use
     // the existing rotating sweep and targeted search_work/get_work refreshes.
@@ -156,9 +156,9 @@ export class ReconciliationSources {
     }
   }
 
-  private knownSnapshot(): SourceSnapshot {
+  private knownSnapshot(includeNative: boolean): SourceSnapshot {
     return { generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings,
-      intentions: this.workReader.declarations(),
+      intentions: this.workReader.declarations(includeNative),
       fleet: this.fleet.map(({ source, observation }) => ({ source: { ...source, machineBasis: source.machine ? 'configured' : 'unknown' },
         observation: observation.peek() ?? { status: 'unknown', coverage: 'unknown', data: null, observedAt: null,
           attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet source refresh pending' } })) }
@@ -247,8 +247,8 @@ export class ReconciliationSources {
 
     // Start the normal cached property/fleet reads, but never make list delivery
     // wait for a slow source or for per-card history/reconciliation.
-    void this.snapshot(false, {}, true).catch(() => {})
-    const snapshot = this.knownSnapshot(), scene = this.reconciler.project(snapshot)
+    void this.snapshot(false, {}, true, authorized).catch(() => {})
+    const snapshot = this.knownSnapshot(authorized), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
     queue.readOnly = false // The shared refresh can finalize an already-recorded answer.
     const contexts = new Map(queue.items.flatMap(item => item.cardIds).flatMap(id => {
@@ -326,15 +326,16 @@ export class ReconciliationSources {
   }
 
 
-  async searchWork(input: unknown) {
+  async searchWork(input: unknown, includeNative = true) {
     const args = searchWorkSchema.parse(input)
     const scope = { owner: args.owner, statuses: args.statuses, initiative: args.initiative, epic: args.epic, checkpoint_before: args.checkpoint_before, history: args.history }
-    const [intentions, fleet] = await Promise.all([this.workReader.query(scope, args.refresh), this.fleetSnapshot(args.refresh)])
+    const [intentions, fleet] = await Promise.all([this.workReader.query(scope, args.refresh, false, includeNative), this.fleetSnapshot(args.refresh)])
     const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
     const keys = directNeighbors(scene, searchSeeds(scene, { query: args.query, patterns: args.patterns, facets: [] }, Date.now()))
     const cards = scene.cards.filter(card => keys.has(`card:${card.id}`)).sort((a, b) => a.id.localeCompare(b.id))
     const page = cards.slice(args.offset, args.offset + args.limit)
-    if (args.refresh && intentions.status === 'fresh') await this.onWorkRefresh?.(page.map(card => card.source))
+    const boardRead = intentions.sources ? intentions.sources.find(source => source.source !== 'jira') : intentions
+    if (args.refresh && boardRead?.status === 'fresh') await this.onWorkRefresh?.(page.map(card => card.source).filter(card => card.source?.synthetic !== false))
     const filteredCards = new Set(cards.map(card => card.id)), links = [...scene.claims, ...scene.claimHistory]
     const cardScoped = !!(args.owner || args.statuses || args.initiative || args.epic || args.checkpoint_before || args.patterns.length)
     const workers = scene.executions.filter(worker => keys.has(`execution:${worker.id}`) &&
@@ -486,7 +487,8 @@ export class ReconciliationSources {
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
     if (mode === 'reconcile') try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = !!await this.authorizePulls?.(req)
-    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile'), authorized ? this.readPulls?.(req).catch(() => null) : null])
+    // The native project is private. Desk reads use the existing owner grant.
+    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile', {}, false, authorized), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => (!requestKey || item.id === requestKey) && item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
@@ -496,7 +498,8 @@ export class ReconciliationSources {
       states.set(url, { status: 'unknown', state: 'unknown', observedAt: null, expiresAt: null, head: null, draft: false, checks: 'unknown', mergeability: 'unknown' })
     }
     const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
-    if (this.releaseDesk && snapshot.intentions.status === 'fresh' && snapshot.intentions.coverage === 'complete' && snapshot.intentions.data) {
+    const releaseSource = snapshot.intentions.sources ? snapshot.intentions.sources.find(source => source.source === 'notion') : snapshot.intentions
+    if (this.releaseDesk && releaseSource?.status === 'fresh' && releaseSource.coverage === 'complete' && snapshot.intentions.data) {
       try { queue.items.push(...await this.releaseDesk()) }
       catch { queue.warnings.push('Release verification receipts unavailable; inspect Releases before concluding that no production checks remain.') }
       for (const readiness of Object.keys(queue.counts)) queue.counts[readiness] = queue.items.filter(item => item.readiness === readiness).length
@@ -509,7 +512,9 @@ export class ReconciliationSources {
     // and are bounded independently of the property census. Unknown history is
     // disclosed; it never becomes a fabricated request age or answer.
     const deliveries = (await this.workflow.decisionDelivery?.messages().catch(() => []) ?? []).filter(message => !requestKey || (message.sourceAnchor ?? message.requestId) === requestKey || queue.items.some(item => item.cardIds.includes(message.decisionResolution?.cardId ?? '')))
+    const nativeIds = new Set(snapshot.intentions.data?.cards.filter(card => card.source?.synthetic === false).map(card => card.id))
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
+      .filter(id => !nativeIds.has(id))
     const collectedContexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
     let contexts = collectedContexts
     const historyDeadline = mode === 'read' ? Date.now() + 10_000 : Infinity
@@ -573,6 +578,7 @@ export class ReconciliationSources {
     const scene = this.reconciler.project(snapshot)
     const reviewNotes = new Map<string, Array<{ text: string }>>()
     for (const item of queue.reviews.items.slice(0, 20)) {
+      if (nativeIds.has(item.cardId)) continue
       const context = contexts.get(item.cardId) ?? (mode === 'reconcile' ? await this.context.commentDetails(item.cardId) : this.context.cachedComments(item.cardId))
       if (context?.outcome === 'available') reviewNotes.set(item.cardId, context.blocks)
     }
@@ -583,7 +589,7 @@ export class ReconciliationSources {
     if (reviewWarning) queue.warnings.push(reviewWarning)
     if (mode === 'read') queue.warnings.push('Operational review/decision reconciliation and uncached review submission history refresh in the background. Retained handoffs and deliveries remain unconfirmed; read the canonical card before acting on missing review evidence. Exact workflow writes still validate current sources and leases.')
     const histories = new Map(ids.map(id => [id, contexts.get(id)?.blocks ?? []]))
-    const publications = (await Promise.all(queue.items.map(item => this.proposalSource.forRequest(item.id, item.cardIds, histories)))).flat()
+    const publications = (await Promise.all(queue.items.map(item => this.proposalSource.forRequest(item.id, item.cardIds.filter(id => !nativeIds.has(id)), histories)))).flat()
     queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized, publications)
     const projected = new Map(queue.needsWill.map(item => [item.id, item]))
     queue.items = queue.items.map(item => projected.get(item.id) ?? item)

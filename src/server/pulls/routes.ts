@@ -122,8 +122,8 @@ export class PullsApi {
         if (req.method !== 'POST' || req.headers['x-tinstar-ui'] !== '1') return fail(res, 'BAD_REQUEST', 'Use the Send to Clawson button.', { headers })
         const input = clawsonMergeSchema.parse(await actionBody(req))
         const result = await this.sendMerge(input, req.headers['tailscale-user-login'] as string)
-        if (!result.card) return fail(res, 'CONFLICT', result.message, { headers, details: { code: result.code } })
-        return ok(res, { url: z.object({ url: z.string().url() }).parse(result.card).url, message: result.outcome === 'saved' ? 'Sent to Clawson for admin merge.' : result.message }, { headers })
+        if (result.outcome !== 'saved' || !result.card) return fail(res, 'CONFLICT', result.message, { headers, details: { code: result.code } })
+        return ok(res, { url: z.object({ url: z.string().url() }).parse(result.card).url, message: 'Sent to Clawson for admin merge.' }, { headers })
       }
       if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Use GET for PR reads.', { headers })
       if (url.pathname === '/api/pulls/origin') return ok(res, await this.origin(url.searchParams.get('url') ?? ''), { headers })
