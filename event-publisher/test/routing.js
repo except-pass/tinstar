@@ -42,6 +42,11 @@ test('controlled migration receipt is durable and retries preserve original prov
     match(error.stderr, /effective_start_at/)
     return true
   })
+  await rejects(record({ new: fixture.old }), error => {
+    equal(error.code, 2)
+    match(error.stderr, /old and new routing contexts must differ/)
+    return true
+  })
   const receipt = await record()
   const retries = await Promise.all([
     record({ recorded_by: 'retry', effective_start_at: '2026-11-23T14:34:00-05:00' }),
@@ -103,6 +108,14 @@ test('routing metrics keep observations within any visit to the exact route', as
     mate_id: gapMate, effective_start_at: '2026-11-23T12:00Z', old: missingLinkRoute,
   })
   const beforeGap = await record({ mate_id: gapMate, effective_start_at: '2026-11-23T10:00Z' })
+  const tiedMate = 'controlled-tied-worker'
+  await record({
+    mate_id: tiedMate, effective_start_at: '2026-11-23T09:00Z', old: missingLinkRoute, new: fixture.old,
+  })
+  await record({
+    mate_id: tiedMate, effective_start_at: '2026-11-23T10:00Z', old: fixture.new, new: missingLinkRoute,
+  })
+  await record({ mate_id: tiedMate, effective_start_at: '2026-11-23T05:00-05:00' })
   const gapRow = { ...betweenVisits, observation_id: 'gap-b', mate_id: gapMate }
   const gapRows = [
     gapRow,
@@ -114,6 +127,10 @@ test('routing metrics keep observations within any visit to the exact route', as
     betweenVisits,
     ...gapRows,
     { ...gapRow, observation_id: 'gap-end', occurred_at: '2026-11-23T12:00Z' },
+    { ...firstVisit, mate_id: tiedMate, observation_id: 'before-tied', route: fixture.old,
+      occurred_at: '2026-11-23T09:30Z' },
+    { ...firstVisit, mate_id: tiedMate, observation_id: 'at-tied', route: missingLinkRoute,
+      occurred_at: '2026-11-23T10:00Z' },
     firstVisit,
     { ...firstVisit, observation_id: 'at-return', occurred_at: '2026-11-23T12:00Z' },
     { ...observation, observation_id: 'at-cutover', occurred_at: '2026-11-23T14:34:00.0000040-05:00' },
@@ -164,5 +181,5 @@ test('routing metrics keep observations within any visit to the exact route', as
     { warning: 'routing.invalid_json', line: rows.length + 2, skipped_rows: 2 },
   ])
   equal(await readFile(input, 'utf8'), original)
-  equal((await run('replay', '--source', 'routing', '--after', '0', '--json')).stdout.trim().split('\n').length, 6)
+  equal((await run('replay', '--source', 'routing', '--after', '0', '--json')).stdout.trim().split('\n').length, 9)
 })

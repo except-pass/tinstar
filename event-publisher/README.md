@@ -240,11 +240,13 @@ events routing-metrics-input --db "$proof_dir/journal.sqlite" < routing-observat
 
 The first row yields a JSON warning on stderr with its identity, original
 time, and the cutoff and receipt ID. The second row passes through to stdout.
-The filter orders each mate's migration receipts by effective start. The
+The recorder requires a change in machine, runtime, or provider. The filter
+orders each mate's actual migrations by effective start. At a shared instant,
+it follows the chain from the previous destination when possible. The
 first old route is active before the first cutover, and each destination is
 active from its cutover until the next one when that receipt's old route
-matches the destination. A mismatch leaves the span from the earlier cutover
-up to the later cutover uncovered. The filter excludes every row for that mate
+matches the destination. A mismatch after ordering leaves the span from the
+earlier cutover up to the later cutover uncovered. The filter excludes every row for that mate
 whose original timestamp falls in the span, regardless of route, and names
 both receipts in the stderr warning. Outside uncovered spans, a timestamp in
 any visit to the exact route passes through. A timestamp outside every visit

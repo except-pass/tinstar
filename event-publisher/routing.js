@@ -37,6 +37,8 @@ function beforeInstant(a, b) {
   return ms === 0 ? a.slice(a.indexOf('.'), -1) < b.slice(b.indexOf('.'), -1) : ms < 0
 }
 
+const routeKey = ({ machine, runtime, provider }) => JSON.stringify([machine, runtime, provider])
+
 export class MigrationReceiptError extends Error {}
 
 export function migrationReceipt(input, observedAt) {
@@ -47,6 +49,9 @@ export function migrationReceipt(input, observedAt) {
   if (!isText(mate_id) || !before || !after || !occurred_at ||
       !isText(recorded_by) || !isText(source_reference) || typeof controlled !== 'boolean') {
     throw new MigrationReceiptError('receipt needs mate_id, old and new machine/runtime/provider, effective_start_at with timezone, recorded_by and source_reference; controlled is a boolean')
+  }
+  if (routeKey(before) === routeKey(after)) {
+    throw new MigrationReceiptError('old and new routing contexts must differ')
   }
   const identity = JSON.stringify([mate_id, before, after, occurred_at])
   const event_id = `event:${createHash('sha256').update(identity).digest('hex')}`
@@ -69,24 +74,37 @@ export function migrationReceipt(input, observedAt) {
   }
 }
 
-const routeKey = ({ machine, runtime, provider }) => JSON.stringify([machine, runtime, provider])
-
 export function routingReplayCheck(receipts) {
   const ordered = [...receipts].sort((a, b) => {
     if (a.effective_start_at === b.effective_start_at) return 0
     return beforeInstant(a.effective_start_at, b.effective_start_at) ? -1 : 1
   })
-  const timelines = new Map()
+  const groups = new Map()
   for (const receipt of ordered) {
-    const mate = receipt.subject.id
     const oldKey = routeKey(receipt.change.before)
-    if (!timelines.has(mate)) {
-      timelines.set(mate, [{ key: oldKey, start: null }])
-    }
+    const newKey = routeKey(receipt.change.after)
+    if (oldKey === newKey) continue
+    const key = JSON.stringify([receipt.subject.id, receipt.effective_start_at])
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push({ receipt, oldKey, newKey })
+  }
+  const timelines = new Map()
+  for (const group of groups.values()) {
+    const mate = group[0].receipt.subject.id
+    if (!timelines.has(mate)) timelines.set(mate, [])
     const timeline = timelines.get(mate)
-    const previous = timeline.at(-1)
-    if (previous.key !== oldKey) previous.uncoveredUntil = receipt
-    timeline.push({ key: routeKey(receipt.change.after), start: receipt })
+    while (group.length) {
+      const previous = timeline.at(-1)
+      const linked = group.findIndex(({ oldKey }) => oldKey === previous?.key)
+      const root = linked < 0 ? group.findIndex(({ oldKey }) =>
+        !group.some(({ newKey }) => newKey === oldKey)) : linked
+      const [{ receipt, oldKey, newKey }] = group.splice(Math.max(root, 0), 1)
+      if (!previous) timeline.push({ key: oldKey, start: null })
+      else if (previous.key !== oldKey && previous.start.effective_start_at !== receipt.effective_start_at) {
+        previous.uncoveredUntil = receipt
+      }
+      timeline.push({ key: newKey, start: receipt })
+    }
   }
   return row => {
     if (!isText(row?.mate_id)) return null
