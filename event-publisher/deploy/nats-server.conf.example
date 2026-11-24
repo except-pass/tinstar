@@ -1,0 +1,30 @@
+server_name: "tinstar-engineering"
+listen: "127.0.0.1:4222"
+
+jetstream {
+  store_dir: "/var/lib/tinstar-jetstream"
+  max_file_store: 1GB
+  max_memory_store: 64MB
+}
+
+accounts {
+  TINSTAR {
+    jetstream: enabled
+    users: [
+      {
+        nkey: "ADMIN_PUBLIC_NKEY"
+        permissions: {
+          publish: ["$JS.API.>"]
+          subscribe: ["_INBOX.tinstar_admin.>"]
+        }
+      }
+      {
+        nkey: "HULK_RELAY_PUBLIC_NKEY"
+        permissions: {
+          publish: ["tinstar.fact.jira.ticket.>"]
+          subscribe: ["_INBOX.tinstar_relay.hulk-jira.>"]
+        }
+      }
+    ]
+  }
+}

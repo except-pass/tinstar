@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { once } from 'node:events'
-import { mkdtemp, readFile, realpath, rmdir } from 'node:fs/promises'
+import { access, mkdtemp, readFile, realpath, rmdir } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -11,12 +11,14 @@ import { observeHome, sourcesFor } from './firstmate.js'
 import { githubInterval, githubObserver, githubReader, githubSource, repositoryPattern } from './github.js'
 import { Journal, JournalConfigurationError } from './journal.js'
 import { jiraConfig, JiraWebhookConfigurationError, startJiraWebhook } from './jira.js'
+import { readRelayConfig, RelayConfigurationError, runRelay } from './jetstream.js'
 import { releaseTagObserver, tagInterval, tagSource } from './releaseTags.js'
 import { migrationReceipt, MigrationReceiptError, routingReplayCheck } from './routing.js'
 
 const usage = `Usage
   events serve --config <file> [--interval <seconds>]
   events observe --config <file>
+  events relay --config <file>
   events watch [--after <sequence>] [filters] [--json]
   events replay [--last <count> | --after <sequence>] [filters] [--json]
   events inspect <event-id>
@@ -28,7 +30,8 @@ Filters
   --source firstmate|jira|github|deployment|routing
   --type task|worker|ticket|pr|tag|deployment|mate    --entity <entity-id>
 All commands accept --db <path>. The default is ~/srv/event-publisher/journal.sqlite.
-EVENTS_DB and EVENTS_CONFIG provide defaults for --db and --config.`
+EVENTS_DB provides the --db default. EVENTS_CONFIG and EVENTS_RELAY_CONFIG
+provide the collector and relay --config defaults.`
 
 const options = {
   db: { type: 'string' },
@@ -45,6 +48,7 @@ const options = {
 const commandOptions = {
   serve: ['config', 'interval'],
   observe: ['config'],
+  relay: ['config'],
   watch: ['after', 'source', 'type', 'entity', 'json'],
   replay: ['after', 'last', 'source', 'type', 'entity', 'json'],
   inspect: [],
@@ -440,9 +444,17 @@ async function main() {
   const configuredPath = resolve(process.env.EVENTS_DB ?? defaultPath)
   const path = resolve(values.db ?? configuredPath)
   const collector = command === 'serve' || command === 'observe'
+  const relay = command === 'relay'
   const interval = command === 'serve' ? integer(values.interval ?? '20', '--interval', 15) : null
   if (interval > 3600) throw new UsageError('--interval must be at most 3600 seconds')
   const config = collector ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
+  const relayConfig = relay ? await readRelayConfig(values.config ?? process.env.EVENTS_RELAY_CONFIG) : null
+  const seed = process.env.EVENTS_NATS_NKEY_SEED?.trim()
+  delete process.env.EVENTS_NATS_NKEY_SEED
+  if (relay) {
+    if (!seed) throw new RelayConfigurationError('set EVENTS_NATS_NKEY_SEED from the relay credential')
+    await access(path).catch(() => { throw new RelayConfigurationError('relay requires an existing journal at --db or EVENTS_DB') })
+  }
   const migration = command === 'record-migration' ? await readMigration(detail) : null
   if (migration?.source.mode === 'fixture' && (!values.db || path === configuredPath || path === defaultPath)) {
     throw new UsageError('controlled receipts require --db pointing to a separate journal')
@@ -456,11 +468,18 @@ async function main() {
     throw new UsageError('set EVENTS_JIRA_WEBHOOK_SECRET from the Jira admin webhook secret')
   }
   if (command === 'observe' && !config.homes.length && !config.deployment && !config.tags) throw new UsageError('use events serve to receive Jira webhooks')
-  const journal = new Journal(path, { readOnly: !collector && !migration })
+  const journal = new Journal(path, { readOnly: !collector && !migration && !relay })
   try {
     if (collector) {
       const healthy = await collect(journal, config, interval, secret, readToken)
       if (command === 'observe' && !healthy) process.exitCode = 1
+    } else if (relay) {
+      const controller = signalController()
+      try {
+        await runRelay(journal, relayConfig, seed, controller.signal)
+      } finally {
+        controller.close()
+      }
     } else if (migration) {
       console.log(JSON.stringify(journal.recordMigration(migration)))
     } else if (command === 'routing-metrics-input') {
@@ -477,6 +496,10 @@ async function main() {
           ? 'last recorded migration' : ['github', 'deployment'].includes(source.provider)
             ? 'last accepted observation' : 'last accepted inventory'
         console.log(`${healthText(source)} · last attempt ${age(source.last_attempt_at)} · ${last} ${age(source.last_success_at)}`)
+      }
+      for (const transport of journal.relayStatus()) {
+        const reason = transport.reason ? ` · ${transport.reason}` : ''
+        console.log(`jetstream:${transport.name} ${transport.health} · ${transport.stream} · processed through #${transport.sequence} · last broker ack ${age(transport.last_ack_at)} · last status update ${age(transport.updated_at)}${reason}`)
       }
     } else {
       const statuses = new Map(journal.sources().map(source => [source.source_id, source]))
@@ -500,7 +523,7 @@ process.stdout.on('error', error => {
 try {
   await main()
 } catch (error) {
-  const usageError = error instanceof UsageError || error instanceof MigrationReceiptError
+  const usageError = error instanceof UsageError || error instanceof MigrationReceiptError || error instanceof RelayConfigurationError
   const message = usageError || error instanceof JournalConfigurationError || error instanceof JiraWebhookConfigurationError ? error.message
     : error.code === 'ERR_SQLITE_ERROR' ? 'cannot access the journal; check its path, permissions and writer'
     : 'publisher failed; check the journal path and permissions'

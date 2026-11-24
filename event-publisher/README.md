@@ -87,6 +87,10 @@ fixture events, and controlled migration receipts. In JSON mode,
 `source.mode` identifies live and fixture data for polling sources and routing.
 Replay notices go to stderr so the JSON payloads stay identical.
 
+The optional [JetStream journal relay](jetstream.md) publishes selected
+facts to Tin Star's engineering broker and reports transport progress in
+`events sources`.
+
 ## Observe cmsandbox production tags
 
 On Hulk, set `"github": { "cmsandboxTags": true }` in the publisher configuration.
