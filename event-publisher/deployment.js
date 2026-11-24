@@ -4,8 +4,14 @@ const floorUrl = 'http://127.0.0.1:5281/api/deployment'
 const floorTarget = `tinstar-floor:${encodeURIComponent(hostname())}:5281`
 export const deploymentSource = {
   source_id: `deployment:${floorTarget}`, provider: 'deployment', type: 'deployment', mode: 'live', home_path: null,
-  coverage: 'Tin Star floor running revision; deployment attempts and lifecycle unavailable',
+  coverage: 'Tin Star floor running revision',
   command: 'loopback GET /api/deployment',
+}
+
+export const deploymentLifecycleSource = {
+  source_id: 'deployment:lifecycle', provider: 'deployment', type: 'deployment', health: 'unconnected',
+  coverage: 'deployment attempts, smoke, failure and rollback',
+  reason: 'the deploy audit lives on the deployment host and is not readable by the publisher without a new reader',
 }
 
 export function deploymentDiff(before, after) {

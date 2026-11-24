@@ -1,6 +1,6 @@
 import { deepEqual, equal, match, ok, rejects } from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -59,12 +59,11 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   let journal = new Journal(path)
   t.after(() => journal.close())
   journal.registerSources([githubSource])
-  taskLinks(journal, openHome, { one: [pullUrl], removed: ['https://github.com/example/old/pull/21'] })
-  taskLinks(journal, fixtureHome, { one: ['https://github.com/example/fixture/pull/25'] })
-  taskLinks(journal, openHome, { one: [pullUrl] }, 5)
+  taskLinks(journal, openHome, { one: [pullUrl], removed: [pullUrl.replace('/12', '/21')] })
+  taskLinks(journal, fixtureHome, { one: [pullUrl] })
+  taskLinks(journal, openHome, { one: [pullUrl, 'https://github.com/other-example/project/pull/99'] }, 5)
   const secondary = { ...openHome, id: 'example-secondary', path: '/example/secondary' }
   taskLinks(journal, secondary, { two: [pullUrl] })
-  taskLinks(journal, secondary, { two: [] }, 5, false)
   const before = journal.tail()
 
   let second = 10
@@ -77,8 +76,8 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
     if (conditional) return githubResponse(null, { status: 304 })
     return githubResponse(path.includes('/pulls/') ? pr : checks)
   }
-  const options = { get, now: () => new Date(at(second++)) }
-  let observe = githubObserver(options)
+  const options = { repositories: ['EXAMPLE/project'], get, now: () => new Date(at(second++)) }
+  const observe = githubObserver(options)
   equal(await observe(journal), true)
   deepEqual(calls.map(([endpoint]) => endpoint), [
     'repos/example/project/pulls/12',
@@ -89,7 +88,7 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   equal(observed[0].change.after.merge_sha, null)
   deepEqual(observed[0].related, [
     { relation: 'linked-task', subject: { type: 'task', id: entityId('task', openHome.id, 'one') } },
-    { relation: 'previously-linked-task', subject: { type: 'task', id: entityId('task', secondary.id, 'two') } },
+    { relation: 'linked-task', subject: { type: 'task', id: entityId('task', secondary.id, 'two') } },
   ])
   ok(observed.every(event => !JSON.stringify(event).includes(pr.body)))
   conditional = true
@@ -97,6 +96,7 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   deepEqual(calls.slice(2).map(([, etag]) => etag), ['"sample"', '"sample"'])
   deepEqual(journal.events({ after: before, provider: 'github' }), observed)
 
+  taskLinks(journal, secondary, { two: [] }, 5, false)
   conditional = false
   pr = pull({ state: 'closed', merged: true, updated_at: at(18) })
   checks = { total_count: 1, check_runs: [prCheck('success')] }
@@ -105,6 +105,7 @@ test('GitHub reads only verified live links, coalesces exact task relationships,
   deepEqual(changes.map(event => event.event_type), ['pr.merged', 'pr.updated', 'pr.updated', 'pr.checks.changed'])
   deepEqual(changes[0].change, { field: 'state', before: 'open', after: 'merged' })
   equal(changes[1].change.after, nextRevision)
+  deepEqual(changes[0].related, observed[0].related.slice(0, 1))
   equal(new Set(changes.map(event => event.observation.batch_id)).size, 1)
   ok(changes.every(event => event.occurred_at === null && event.observation.previous_snapshot))
 
@@ -143,6 +144,7 @@ test('GitHub rotates bounded pulls and stops at the shared reserve', async t => 
   let remaining = '4000'
   let requests = 0
   const observe = githubObserver({
+    repositories: ['example/*'],
     now: () => new Date(at(second++)),
     get: async path => {
       requests++
@@ -165,6 +167,23 @@ test('GitHub rotates bounded pulls and stops at the shared reserve', async t => 
   equal(requests, 17)
   equal(journal.tail(), before)
   match(journal.sources().find(source => source.type === 'pr').reason, /quota reserve/)
+})
+
+test('First Mate configuration leaves GitHub and deployment unconnected without opt-ins', async t => {
+  const path = await journalPath(t)
+  const journal = new Journal(path)
+  journal.registerSources([githubSource])
+  journal.close()
+
+  const config = join(path, '..', 'config.json')
+  const homes = [{ id: 'example-unavailable', path: join(path, '..', 'missing-home') }]
+  for (const options of [{}, { github: { repositories: [] } }]) {
+    await writeFile(config, JSON.stringify({ homes, ...options }))
+    await rejects(exec(cli, ['observe', '--db', path, '--config', config]), { code: 1 })
+    const { stdout } = await exec(cli, ['sources', '--db', path])
+    match(stdout, /github:linked-pulls unconnected/)
+    match(stdout, /deployment:tinstar-floor:.* unconnected · Tin Star floor running revision/)
+  }
 })
 
 test('deployment observes an exact running build through outages and restart without asserting ancestry or lifecycle transitions', async t => {
@@ -208,7 +227,8 @@ test('deployment observes an exact running build through outages and restart wit
   const detail = await exec(cli, ['inspect', '--db', path, change.event_id])
   deepEqual(JSON.parse(detail.stdout), change)
   const status = await exec(cli, ['sources', '--db', path])
-  match(status.stdout, /deployment:.*running revision; deployment attempts and lifecycle unavailable/)
+  match(status.stdout, /deployment:.* ok · Tin Star floor running revision/)
+  match(status.stdout, /deployment:lifecycle unconnected · deployment attempts, smoke, failure and rollback/)
   match(status.stdout, /github:linked-pulls unconnected/)
   match(status.stdout, /jira:ticket unconnected/)
 })
@@ -221,6 +241,7 @@ test('provider snapshots roll back together when an event append fails', async t
   taskLinks(journal, openHome, { one: [pullUrl] })
   let second = 10
   const observe = githubObserver({
+    repositories: ['example/*'],
     now: () => new Date(at(second++)),
     get: async path => githubResponse(path.includes('/pulls/') ? pull() : { total_count: 1, check_runs: [prCheck()] }),
   })

@@ -89,12 +89,14 @@ Replay notices go to stderr so the JSON payloads stay identical.
 
 ## Observe linked GitHub pull requests
 
-With a live First Mate home configured, the publisher uses the service
-account's existing authenticated `gh` CLI on PATH. Only PRs explicitly linked
-in the accepted active backlog are in scope. A missing fleet projection can
-retain the last verified links for tasks still present in tasks-axi. The
-journal identifies those relationships as `previously-linked-task` until
-another fleet read verifies them. Set `"github": false` to disable these reads.
+Add an explicit repository allowlist to the First Mate configuration, for example
+`"github": { "repositories": ["example/project", "sample-org/*"] }`.
+Entries match an exact repository or all repositories under one owner, ignoring
+case. The adapter appears as unconnected when the allowlist is absent or empty.
+The publisher uses the service account's authenticated `gh` CLI on PATH only
+for allowlisted PRs with verified links in the accepted live backlog. During a
+fleet outage, prior relationships remain in journal history and cannot authorize
+fresh reads.
 
 The collector rotates through at most four linked PRs per five-minute pass.
 Each PR uses at most two REST GETs, one for the PR and one for the check runs
@@ -120,26 +122,28 @@ check observation. The envelope records the observed head SHA and includes
 the merge SHA only for a merged PR. Titles, bodies and check output stay out of
 the journal. Polls can miss changes between samples.
 
-GitHub webhook ingress requires an approved registration on each eligible
-repository, an HTTPS route restricted to the GitHub webhook pathname, and a
-distinct delivery secret held by the publisher. A future receiver must validate
-`X-Hub-Signature-256` over the exact request bytes, check the repository and
-event type, and deduplicate `X-GitHub-Delivery` in the same transaction as its
-events. Select `pull_request`, `check_run`, and `release` when that receiver is
-available. Registration requires each repository's webhook administration
-permission. The poller needs only pull request and check read access.
+GitHub webhook ingestion is deferred. Registering a repository or organization
+webhook requires repository or organization admin permission, a new shared
+secret, and a new authenticated public route. None was granted for this phase.
+
+1. Provision a dedicated public HTTPS POST route for GitHub deliveries and
+   give the receiver a new shared secret through its runtime configuration.
+2. Have an admin register the route and secret on the approved repositories or
+   organization with JSON payloads for `pull_request`, `check_run`, and `release`.
+3. Verify `X-Hub-Signature-256` over the exact request bytes before parsing.
+   Enforce the approved repository allowlist and event types, including for
+   organization-wide deliveries.
+4. Deduplicate `X-GitHub-Delivery` in the same transaction as the normalized events.
+
 [GitHub delivery verification](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 
-## Observe the running floor deployment
+## Observe the running floor revision
 
-A live First Mate configuration also probes the existing loopback GET at
-`http://127.0.0.1:5281/api/deployment` on the First Mate polling cadence.
-Set `"deployment": true` to run it independently, or `"deployment": false`
-to disable it. The endpoint reports the exact running build SHA. The subject
-identifies the local floor target and the observation keeps environment,
-revision and lifecycle in separate fields. The first read emits
-`deployment.running.observed`. Later differences emit
-`deployment.revision.changed` with the previous and current SHA.
+Set `"deployment": true` to enable the existing loopback GET at
+`http://127.0.0.1:5281/api/deployment`. It can run independently or beside First
+Mate. The endpoint reports the exact running build SHA for the local floor
+target. The first read emits `deployment.running.observed`. Later differences
+emit `deployment.revision.changed` with the previous and current SHA.
 
 ```sh
 events sources
@@ -147,14 +151,44 @@ events watch --source deployment --type deployment
 events replay --type deployment --last 10 --json
 ```
 
-If the endpoint is unavailable or returns an unknown SHA, the journal retains
-the last verified revision and reports the failed read. An observer absent
-from configuration appears as unconnected. The endpoint supplies no native
-attempt ID, start/completion/failure/rollback receipt, image digest or PR
-ancestry. Those need read access to the floor's guarded deployment audit or
-an existing deployment receipt export with exact attempt, revision and
-outcome. This observer reports the running floor build only. It leaves PR
-membership unknown.
+A verified read gives the running-revision source `ok` health. An unavailable
+endpoint or unknown SHA leaves the last verified revision in the journal.
+Deployment lifecycle (attempts, smoke, failure and rollback) stays unconnected
+because the deploy audit lives on the deployment host and is not readable by
+the publisher without a new reader. PR membership remains unknown.
+
+### Synthetic deployment lifecycle fixture
+
+Run from the repository root to replay synthetic lifecycle events in a separate
+journal. Every event is labeled `fixture`.
+
+```sh
+fixture_dir=$(mktemp -d)
+node --input-type=module - "$fixture_dir/journal.sqlite" <<'EOF'
+import { Journal } from './event-publisher/journal.js'
+
+const journal = new Journal(process.argv[2])
+const source = {
+  source_id: 'deployment:lifecycle-fixture', provider: 'deployment',
+  type: 'deployment', mode: 'fixture', home_path: null,
+  coverage: 'synthetic deployment audit', command: 'fixture',
+}
+journal.registerSources([source])
+const id = 'deployment:fixture-floor:attempt-1'
+for (const [index, lifecycle] of ['started', 'smoke_failed', 'failed', 'rolled_back'].entries()) {
+  const at = new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString()
+  const fields = { lifecycle, environment: 'fixture-floor', revision: 'a'.repeat(40), native_deployment_id: 'attempt-1' }
+  journal.recordProviderPoll(source, {
+    startedAt: at, observedAt: at, health: 'ok', reason: null, counts: { observed: 1 },
+    entries: [{ id, startedAt: at, observedAt: at, fields, related: [],
+      evidence: { source_reference: { target: 'fixture-floor' } } }],
+  }, (before, after) => [{ event_type: `deployment.${after.lifecycle}`,
+    change: before ? { field: 'lifecycle', before: before.lifecycle, after: after.lifecycle } : { after } }])
+}
+journal.close()
+EOF
+event-publisher/events replay --db "$fixture_dir/journal.sqlite" --source deployment --last 10 --json
+```
 
 ## Receive Jira ticket changes
 

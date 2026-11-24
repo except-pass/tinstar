@@ -6,9 +6,9 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { parseArgs } from 'node:util'
-import { deploymentSource, observeFloor } from './deployment.js'
+import { deploymentLifecycleSource, deploymentSource, observeFloor } from './deployment.js'
 import { observeHome, sourcesFor } from './firstmate.js'
-import { githubInterval, githubObserver, githubSource } from './github.js'
+import { githubInterval, githubObserver, githubSource, repositoryPattern } from './github.js'
 import { Journal, JournalConfigurationError } from './journal.js'
 import { jiraConfig, JiraWebhookConfigurationError, startJiraWebhook } from './jira.js'
 import { migrationReceipt, MigrationReceiptError, routingReplayCheck } from './routing.js'
@@ -75,10 +75,15 @@ async function readConfig(path) {
   if (!Array.isArray(configuredHomes) || (!configuredHomes.length && !jira && config?.deployment !== true)) {
     throw new UsageError('configuration must contain at least one home, a Jira project or deployment: true')
   }
-  for (const provider of ['github', 'deployment']) {
-    if (config[provider] !== undefined && typeof config[provider] !== 'boolean') {
-      throw new UsageError(`${provider} must be true or false`)
-    }
+  if (config.deployment !== undefined && typeof config.deployment !== 'boolean') {
+    throw new UsageError('deployment must be true or false')
+  }
+  const repositories = config.github?.repositories
+  if (config.github !== undefined &&
+      (!config.github || typeof config.github !== 'object' || Array.isArray(config.github) ||
+       repositories !== undefined && (!Array.isArray(repositories) ||
+         repositories.some(value => typeof value !== 'string' || !repositoryPattern.test(value))))) {
+    throw new UsageError('github.repositories must list owner/repo or owner/* patterns')
   }
   const ids = new Set()
   const paths = new Set()
@@ -101,8 +106,7 @@ async function readConfig(path) {
     homes.push({ id: home.id, path, configuredPath, codeRoot: home.codeRoot && resolve(home.codeRoot), mode: home.mode ?? 'live',
       markdownFastPath: home.markdownFastPath ?? false })
   }
-  const live = homes.some(home => home.mode === 'live')
-  return { homes, jira, github: config.github ?? live, deployment: config.deployment ?? live }
+  return { homes, jira, repositories: repositories ?? [], deployment: config.deployment === true }
 }
 
 function signalController() {
@@ -136,7 +140,7 @@ async function pollProvider(observe, journal, interval, controller) {
   } while (!controller.signal.aborted)
 }
 
-async function collect(journal, { homes, jira, github, deployment }, interval, secret, readToken) {
+async function collect(journal, { homes, jira, repositories, deployment }, interval, secret, readToken) {
   const controller = signalController()
   const providers = []
   const jobs = []
@@ -146,9 +150,9 @@ async function collect(journal, { homes, jira, github, deployment }, interval, s
     if (homes.length) scratch = await mkdtemp(join(tmpdir(), 'event-publisher-'))
     const sources = homes.flatMap(sourcesFor)
     if (jira) sources.push(jira.source)
-    if (github) {
+    if (repositories.length) {
       sources.push(githubSource)
-      providers.push([githubObserver(), githubInterval])
+      providers.push([githubObserver({ repositories }), githubInterval])
     }
     if (deployment) {
       sources.push(deploymentSource)
@@ -228,7 +232,8 @@ function healthText(source) {
 }
 
 function publishedSources(journal) {
-  const sources = journal.sources()
+  const sources = journal.sources().filter(source =>
+    source.source_id !== githubSource.source_id || source.health !== 'deconfigured')
   const defaults = [
     { source_id: 'firstmate:task', type: 'task', coverage: 'configured active backlogs' },
     { source_id: 'firstmate:worker', type: 'worker', coverage: 'configured local worker incarnations' },
@@ -240,7 +245,7 @@ function publishedSources(journal) {
       sources.push({ ...source, mode: null, health: 'unconnected', reason: 'observer is not configured' })
     }
   }
-  return sources
+  return [...sources, deploymentLifecycleSource]
 }
 
 function valueText(value) {

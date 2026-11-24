@@ -291,11 +291,8 @@ export class Journal {
   }
 
   linkedPulls() {
-    // Only the accepted fleet link projection can fill pull_requests. Keep
-    // last verified links during a fleet outage while the task is still present.
     return this.db.prepare(`
-      SELECT DISTINCT e.entity_id AS task_id, link.value AS url,
-        COALESCE(json_extract(e.evidence, '$.pr_link_source') = ?, 0) AS current_link
+      SELECT DISTINCT e.entity_id AS task_id, link.value AS url
       FROM entities e JOIN sources s USING (source_id),
         json_each(e.fields, '$.pull_requests') AS link
       WHERE s.source_id GLOB 'firstmate:home:*'
@@ -303,6 +300,7 @@ export class Journal {
         AND json_extract(s.description, '$.mode') = 'live'
         AND COALESCE(json_extract(s.description, '$.configured'), 1) = 1
         AND s.health = 'ok' AND e.last_seen_snapshot = s.last_snapshot_id
+        AND json_extract(e.evidence, '$.pr_link_source') = ?
       ORDER BY url, task_id
     `).all(prLinkSource)
   }

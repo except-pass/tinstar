@@ -3,7 +3,7 @@ import { promisify } from 'node:util'
 
 export const githubSource = {
   source_id: 'github:linked-pulls', provider: 'github', type: 'pr', mode: 'live', home_path: null,
-  coverage: 'last verified PR links for active live First Mate tasks; current PR and head check runs',
+  coverage: 'allowlisted repositories with verified PR links from active live First Mate tasks; current PR and head check runs',
   command: 'GitHub REST conditional GET',
 }
 export const githubInterval = 300
@@ -12,6 +12,7 @@ const run = promisify(execFile)
 const pullsPerPass = 4
 const coreReserve = 1000
 const pullUrl = /^https:\/\/github\.com\/([a-z0-9_-][a-z0-9._-]*\/(?!\.{1,2}\/)[a-z0-9._-]+)\/pull\/([1-9]\d{0,14})$/
+export const repositoryPattern = /^[a-z0-9_-][a-z0-9._-]*\/(?:\*|(?!\.{1,2}$)[a-z0-9._-]+)$/i
 const sha = /^[a-f0-9]{40}$/
 const checkStates = new Set(['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending'])
 const conclusions = new Set(['action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'startup_failure', 'success', 'timed_out'])
@@ -97,7 +98,8 @@ async function githubGet(path, etag, signal) {
     body: stdout.slice(boundary.index + boundary[0].length) }
 }
 
-export function githubObserver({ get = githubGet, now = () => new Date() } = {}) {
+export function githubObserver({ repositories = [], get = githubGet, now = () => new Date() } = {}) {
+  const allowed = new Set(repositories.map(repository => repository.toLowerCase()))
   const caches = new Map()
   let notBefore = 0
   let deferReason = null
@@ -122,11 +124,12 @@ export function githubObserver({ get = githubGet, now = () => new Date() } = {})
   return async (journal, signal) => {
     const startedAt = now().toISOString()
     const targets = new Map()
-    for (const { url, task_id, current_link } of journal.linkedPulls()) {
-      if (!pullUrl.test(url)) continue
+    for (const { url, task_id } of journal.linkedPulls()) {
+      const repository = pullUrl.exec(url)?.[1]
+      if (!repository || !allowed.has(repository) && !allowed.has(`${repository.split('/')[0]}/*`)) continue
       if (!targets.has(url)) targets.set(url, [])
       targets.get(url).push({
-        relation: current_link ? 'linked-task' : 'previously-linked-task',
+        relation: 'linked-task',
         subject: { type: 'task', id: task_id },
       })
     }
@@ -135,8 +138,6 @@ export function githubObserver({ get = githubGet, now = () => new Date() } = {})
     const candidates = [...targets.keys()].sort((a, b) => (caches.get(a)?.attempt ?? 0) - (caches.get(b)?.attempt ?? 0))
     const entries = []
     const counts = { linked: targets.size, observed: 0, failed: 0, deferred: 0 }
-    const historical = [...targets.values()].filter(links => links.every(link => link.relation === 'previously-linked-task')).length
-    if (historical) counts.previously_linked = historical
     let reason = null
     for (const url of candidates.slice(0, pullsPerPass)) {
       if (signal?.aborted || now() < notBefore) break
@@ -174,7 +175,7 @@ export function githubObserver({ get = githubGet, now = () => new Date() } = {})
     }
     if (signal?.aborted) return
     counts.deferred = counts.linked - counts.observed - counts.failed
-    if (!counts.linked) reason = 'no verified PR links in the accepted live task backlog'
+    if (!counts.linked) reason = 'no allowlisted PR links in the accepted live task backlog'
     else if (now() < notBefore) reason = deferReason
     else if (counts.deferred) reason ??= 'poll budget rotates through linked PRs'
     const health = !counts.linked ? 'unconnected' : reason ? entries.length ? 'partial' : 'unavailable' : 'ok'
