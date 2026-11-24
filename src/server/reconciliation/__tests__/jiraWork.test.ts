@@ -1544,8 +1544,13 @@ it('checks the live project before fetching moved ticket content or comments', a
   expect(await call('transition_work', { card_id, operation_id: 'move', verb: 'Prioritize' })).toMatchObject({ outcome: 'not-saved' })
   expect(await call('link_work', { card_id, operation_id: 'link', action: 'remove', link_id: '8001' })).toMatchObject({ outcome: 'not-saved' })
   expect(await call('create_work', create)).toMatchObject({ code: 'unconfirmed' })
+  const projectLookup = { method: 'GET', path: 'issue/60001', fields: 'project' }
   expect(f.requests.slice(before)).toEqual([
-    ...Array.from({ length: 4 }, () => ({ method: 'GET', path: 'issue/60001', fields: 'project' })),
+    projectLookup, // get_work
+    projectLookup, // update_work
+    { method: 'GET', path: 'issue/60001/transitions', fields: null },
+    projectLookup, // transition_work checks the project before reading issue fields or dispatching
+    projectLookup, // link_work
     { method: 'POST', path: 'search/jql', fields: null },
   ])
 }, 30_000)
