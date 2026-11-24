@@ -215,12 +215,17 @@ credentials.
 
 ### Exclude replayed routing timestamps from metrics
 
-The routing report's activity ledger is maintained outside this repository.
-Pass its attributed observations as JSON Lines to `routing-metrics-input`
-before selecting first-ready observations, counting events, or calculating
-durations. Each row can carry the report's original fields. The filter uses
-`observation_id`, `mate_id`, `route` (machine, runtime, provider), and
-`occurred_at` (the original timestamp for the metric, with a timezone).
+The twice-weekly routing report uses the external ledger at
+`/srv/fleet-ledger/routing/routing.jsonl`. The report must pass its ledger rows
+as JSON Lines through `routing-metrics-input` and use stdout before selecting
+first-ready observations or calculating any metric. The filter needs
+`observation_id`, `mate_id`, `route.machine`, `route.runtime`, `route.provider`,
+and `occurred_at` (the original timestamp for the metric, with a timezone).
+Rows can carry additional report fields.
+
+```sh
+events routing-metrics-input < /srv/fleet-ledger/routing/routing.jsonl
+```
 
 ```json
 {"observation_id":"controlled-ready-replay","mate_id":"controlled-hulk-worker","route":{"machine":"Hulk","runtime":"Codex","provider":"OpenAI"},"occurred_at":"2026-11-23T19:33:59Z"}
@@ -233,12 +238,15 @@ events routing-metrics-input --db "$proof_dir/journal.sqlite" < routing-observat
 
 The first row yields a JSON warning on stderr with its identity, original
 time, and the cutoff and receipt ID. The second row passes through to stdout.
-The filter uses the latest effective start for the exact mate and destination
-route, even when receipts were recorded out of order. Rows with another route
-or insufficient attribution pass through for the report's existing handling.
-Blank lines are ignored. Invalid JSON produces a line-number warning and the
-filter continues. The filter opens the journal read-only and leaves the
-activity ledger intact.
+The filter orders each mate's migration receipts by effective start. The
+first old route is active before the first cutover, and each destination is
+active from its cutover until the next one. A timestamp in any visit to the
+exact route passes through. A timestamp outside every visit to a known route
+is warned about and excluded. Rows with unknown routes or insufficient
+attribution pass through for the report's existing handling.
+Blank lines are ignored. Invalid JSON produces a warning with its line number
+and the running count of skipped malformed rows, and the filter continues.
+The filter opens the journal read-only and leaves the activity ledger intact.
 
 ## Re-observe and troubleshoot
 

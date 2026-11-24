@@ -69,22 +69,40 @@ export function migrationReceipt(input, observedAt) {
   }
 }
 
-const routeKey = (mate, { machine, runtime, provider }) => JSON.stringify([mate, machine, runtime, provider])
+const routeKey = ({ machine, runtime, provider }) => JSON.stringify([machine, runtime, provider])
 
 export function routingReplayCheck(receipts) {
-  const cutoffs = new Map()
-  for (const receipt of receipts) {
-    const key = routeKey(receipt.subject.id, receipt.change.after)
-    const existing = cutoffs.get(key)
-    if (!existing || beforeInstant(existing.effective_start_at, receipt.effective_start_at)) cutoffs.set(key, receipt)
+  const ordered = [...receipts].sort((a, b) => {
+    if (a.effective_start_at === b.effective_start_at) return 0
+    return beforeInstant(a.effective_start_at, b.effective_start_at) ? -1 : 1
+  })
+  const timelines = new Map()
+  for (const receipt of ordered) {
+    const mate = receipt.subject.id
+    if (!timelines.has(mate)) {
+      timelines.set(mate, [{ key: routeKey(receipt.change.before), start: null }])
+    }
+    timelines.get(mate).push({ key: routeKey(receipt.change.after), start: receipt })
   }
   return row => {
     const context = route(row?.route)
     if (!context || !isText(row.mate_id) || !isText(row.observation_id)) return null
-    const receipt = cutoffs.get(routeKey(row.mate_id, context))
-    if (!receipt) return null
     const timestamp = instant(row.occurred_at)
-    if (!timestamp || !beforeInstant(timestamp, receipt.effective_start_at)) return null
+    const timeline = timelines.get(row.mate_id)
+    if (!timestamp || !timeline) return null
+    const key = routeKey(context)
+    let receipt
+    for (const [index, { key: intervalKey, start }] of timeline.entries()) {
+      if (intervalKey !== key) continue
+      const end = timeline[index + 1]?.start
+      if (start && beforeInstant(timestamp, start.effective_start_at)) {
+        receipt = start
+        break
+      }
+      if (!end || beforeInstant(timestamp, end.effective_start_at)) return null
+      receipt = end
+    }
+    if (!receipt) return null
     return {
       warning: 'routing.historical_timestamp_excluded',
       observation_id: row.observation_id,

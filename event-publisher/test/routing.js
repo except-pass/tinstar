@@ -72,11 +72,17 @@ test('controlled migration receipt is durable and retries preserve original prov
   match((await run('replay', '--source', 'routing', '--last', '1')).stdout, /controlled proof.*Cursor\/Grok → Hulk\/Codex\/OpenAI/)
 })
 
-test('routing metrics warn and exclude replay by latest effective start for the exact destination', async t => {
+test('routing metrics keep observations within any visit to the exact route', async t => {
   const { db, directory, record, run } = await setup(t)
   const preciseCutover = '2026-11-23T19:34:00.000004Z'
   const receipt = await record({ effective_start_at: preciseCutover })
-  await record({ effective_start_at: '2026-11-23T19:34:00.000003Z' })
+  const returningMate = 'controlled-returning-worker'
+  const returnReceipt = await record({ mate_id: returningMate, effective_start_at: '2026-11-23T12:00Z' })
+  await record({ mate_id: returningMate, effective_start_at: '2026-11-23T10:00Z' })
+  await record({
+    mate_id: returningMate, effective_start_at: '2026-11-23T11:00Z',
+    old: fixture.new, new: fixture.old,
+  })
   const observation = {
     observation_id: 'late-replay',
     mate_id: fixture.mate_id,
@@ -85,8 +91,17 @@ test('routing metrics warn and exclude replay by latest effective start for the 
     observed_at: '2026-11-24T01:00:00Z',
     ready_notice: 'example-identity',
   }
+  const firstVisit = {
+    ...observation, observation_id: 'first-visit', mate_id: returningMate, occurred_at: '2026-11-23T10:30Z',
+  }
+  const betweenVisits = {
+    ...firstVisit, observation_id: 'between-visits', occurred_at: '2026-11-23T11:30Z',
+  }
   const rows = [
     observation,
+    betweenVisits,
+    firstVisit,
+    { ...firstVisit, observation_id: 'at-return', occurred_at: '2026-11-23T12:00Z' },
     { ...observation, observation_id: 'at-cutover', occurred_at: '2026-11-23T14:34:00.0000040-05:00' },
     { ...observation, observation_id: 'after-cutover', occurred_at: '2026-11-23T19:35Z' },
     { ...observation, observation_id: 'old-route', route: fixture.old },
@@ -97,22 +112,35 @@ test('routing metrics warn and exclude replay by latest effective start for the 
     { ...observation, observation_id: 'unknown-time', occurred_at: null },
   ]
   const input = join(directory, 'observations.jsonl')
-  const original = rows.map(row => JSON.stringify(row)).join('\n') + '\n'
+  const original = '{\n' + rows.map(row => JSON.stringify(row)).join('\n') + '\n{\n'
   await writeFile(input, original, { mode: 0o400 })
   const { stdout, stderr } = await exec('sh', [
     '-c', 'exec "$1" --disable-warning=ExperimentalWarning "$2" --db "$3" routing-metrics-input < "$4"',
     'routing-test', process.execPath, cli, db, input,
   ])
-  deepEqual(stdout.trim().split('\n').map(JSON.parse), rows.slice(1))
-  deepEqual(stderr.trim().split('\n').map(JSON.parse), [{
-    warning: 'routing.historical_timestamp_excluded',
-    observation_id: observation.observation_id,
-    mate_id: fixture.mate_id,
-    route: fixture.new,
-    occurred_at: observation.occurred_at,
-    effective_start_at: preciseCutover,
-    migration_event_id: receipt.event_id,
-  }])
+  deepEqual(stdout.trim().split('\n').map(JSON.parse), rows.slice(2))
+  deepEqual(stderr.trim().split('\n').map(JSON.parse), [
+    { warning: 'routing.invalid_json', line: 1, skipped_rows: 1 },
+    {
+      warning: 'routing.historical_timestamp_excluded',
+      observation_id: observation.observation_id,
+      mate_id: fixture.mate_id,
+      route: fixture.new,
+      occurred_at: observation.occurred_at,
+      effective_start_at: preciseCutover,
+      migration_event_id: receipt.event_id,
+    },
+    {
+      warning: 'routing.historical_timestamp_excluded',
+      observation_id: betweenVisits.observation_id,
+      mate_id: returningMate,
+      route: fixture.new,
+      occurred_at: betweenVisits.occurred_at,
+      effective_start_at: returnReceipt.effective_start_at,
+      migration_event_id: returnReceipt.event_id,
+    },
+    { warning: 'routing.invalid_json', line: rows.length + 2, skipped_rows: 2 },
+  ])
   equal(await readFile(input, 'utf8'), original)
-  equal((await run('replay', '--source', 'routing', '--after', '0', '--json')).stdout.trim().split('\n').length, 2)
+  equal((await run('replay', '--source', 'routing', '--after', '0', '--json')).stdout.trim().split('\n').length, 4)
 })

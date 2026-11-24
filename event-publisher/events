@@ -285,6 +285,7 @@ async function routingMetricsInput(journal) {
   const replayWarning = routingReplayCheck(journal.migrationReceipts())
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
   let lineNumber = 0
+  let skippedRows = 0
   for await (const line of lines) {
     lineNumber++
     if (!line.trim()) continue
@@ -292,7 +293,7 @@ async function routingMetricsInput(journal) {
     try {
       row = JSON.parse(line)
     } catch {
-      console.error(JSON.stringify({ warning: 'routing.invalid_json', line: lineNumber }))
+      console.error(JSON.stringify({ warning: 'routing.invalid_json', line: lineNumber, skipped_rows: ++skippedRows }))
       continue
     }
     const warning = replayWarning(row)
