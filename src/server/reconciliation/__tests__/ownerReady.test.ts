@@ -1,11 +1,13 @@
 import { expect, it, vi } from 'vitest'
-import { createServer } from 'node:http'
+import { createServer, Server } from 'node:http'
+import { createRequire } from 'node:module'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { jiraConfig, startJiraWebhook } from '../../../../event-publisher/jira.js'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import type { OwnerReadyRead } from '../../../shared/ownerReady'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
@@ -17,6 +19,8 @@ import { QueuePullReader } from '../queuePulls'
 import { PullReader } from '../../pulls/reader'
 import { PullsApi } from '../../pulls/routes'
 import { AssociationStore } from '../../releases/associations'
+
+const { Journal } = createRequire(import.meta.url)('../../../../event-publisher/journal.js') as typeof import('../../../../event-publisher/journal.js')
 
 const original = 'a'.repeat(40), changed = 'b'.repeat(40), sibling = 'c'.repeat(40)
 const moving = 'https://github.com/owner/repo/pull/1'
@@ -30,6 +34,8 @@ const outsider = 'https://github.com/outside/repo/pull/8'
 const mergeComment = '12345678-1234-1234-1234-123456789abc'
 const author = 'owner@example.test'
 const project = '10639'
+const cloudId = '7d1bfc1a-cf35-4405-8f3e-71b6cefb7c91'
+const jiraSite = 'https://example.atlassian.net'
 const fields = { owner: 'customfield_101', decisions: 'customfield_102', blockerType: 'customfield_103',
   blockerTarget: 'customfield_104', blockerCondition: 'customfield_105' }
 const bundle = (read: OwnerReadyRead, repository: string | null) => read.repositories.find(bundle => bundle.repository === repository)
@@ -92,7 +98,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     if (init?.method && init.method !== 'GET') sourceWrites.push(`${init.method} ${path}`)
     if (path === '/v1/comments') {
       if (boardHistoryUnavailable) return new Response(null, { status: 503 })
-      return Response.json({ results: notionNotes.map((note, index) => ({ id: index === 0 ? mergeComment : `native-${index}`, rich_text: [{ plain_text: note }] })), has_more: false })
+      return Response.json({ results: notionNotes.map((note, index) => ({ id: index === 0 ? mergeComment : `native-${index}`, created_time: '2026-11-23T11:30:00Z', rich_text: [{ plain_text: note }] })), has_more: false })
     }
     const [, id, resource] = /\/issue\/(\d+)(?:\/(comment|changelog))?$/.exec(path) ?? []
     if (resource === 'comment') {
@@ -138,7 +144,7 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
   }))
   const makeSources = () => {
     const sources = new ReconciliationSources({ fleet: homes, warnings: [], notion: { dataSourceId: 'd'.repeat(32), token: 'fixture' },
-      jiraWork: { mode: 'work', url: 'https://example.atlassian.net', cloudId: '7d1bfc1a-cf35-4405-8f3e-71b6cefb7c91',
+      jiraWork: { mode: 'work', url: jiraSite, cloudId,
         projectId: project, fields, issueTypes: { Task: '1' }, blocksLinkTypeId: '42', token: 'fixture' } }, readSource, undefined, root)
     vi.spyOn(sources, 'snapshot').mockImplementation(async force => ({ ...repoBoard,
       generatedAt: new Date().toISOString(), fleet: await sources.fleetSnapshot(force), diagnostics: { notion: sources.notionApi.diagnostics } }))
@@ -177,6 +183,31 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
     await snapshotFile(main!, [])
     expect((await sources.fleetSnapshot(true))[0]!.observation.status).toBe('fresh')
     await rm(main!.snapshotFile)
+    const journal = new Journal(join(root, 'outage-events.sqlite'))
+    const publisherConfig = jiraConfig({ site: jiraSite, cloudId, projectId: project, fields })
+    const secret = randomBytes(32).toString('hex')
+    const deliveryId = 'fixture-merge-publication'
+    try {
+      journal.registerSources([publisherConfig.source])
+      const listen = Server.prototype.listen
+      const ephemeralListener = vi.spyOn(Server.prototype, 'listen').mockImplementationOnce(function (this: Server) {
+        return Reflect.apply(listen, this, [0, '127.0.0.1'])
+      })
+      const publisher = await startJiraWebhook(journal, publisherConfig, secret, secret).finally(() => ephemeralListener.mockRestore())
+      try {
+        const note = comments.get('10')![0]!
+        const body = JSON.stringify({ webhookEvent: 'comment_created', issue: review, comment: note, timestamp: Date.parse(note.created) })
+        const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`
+        const deliver = () => fetch(publisher.url, { method: 'POST', body, headers: {
+          'Content-Type': 'application/json', 'X-Atlassian-Webhook-Identifier': deliveryId, 'X-Hub-Signature': signature,
+        } })
+        expect((await deliver()).status).toBe(204)
+        expect((await deliver()).status).toBe(204)
+        const notices = journal.events()
+        expect(notices).toHaveLength(1)
+        expect(notices[0]).toMatchObject({ event_type: 'ticket.comment.created', source: { delivery_id: deliveryId }, change: { after: note.body } })
+      } finally { await publisher.close() }
+    } finally { journal.close() }
     const pending = (await call(mate, 'get_work_views')).ownerReady as OwnerReadyRead
     expect(pending.warnings).toContainEqual(expect.stringContaining('Fleet coverage for main is stale'))
     expect(pending.repositories.map(group => group.repository)).toEqual(['outside/repo', 'owner/other', 'owner/repo', null])
@@ -237,7 +268,6 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
 
     // A genuine replacement can refresh the ask; failed check coverage holds it.
     comments.get('10')!.unshift(entry(moving, changed, '26', '2026-11-23T13:00:00Z'))
-    notionNotes.push('Tin Star answer: "notion-merge"')
     for (const source of mates) await snapshotFile(source, [])
     outage = true
     const unverified = (await (await browse()).json()).data as OwnerReadyRead
@@ -250,6 +280,16 @@ it('keeps one current owner bundle per repo during Main downtime and reconciles 
         expect.objectContaining({ url: expect.stringContaining('focusedCommentId=26'), requestedHead: changed }),
       ]),
     })
+
+    const conditional = { ...entry(moving, '', '29', '2026-11-23T13:30:00Z'), body: `Will: merge ${moving} after rollout` }
+    comments.get('10')!.unshift(conditional)
+    readScalars.mockClear()
+    const waiting = (await (await browse()).json()).data as OwnerReadyRead
+    expect(merge(waiting, moving)).toMatchObject({ requestedHeads: [], unverifiedRequest: true, live: { state: 'unverified' },
+      sources: expect.arrayContaining([expect.objectContaining({ kind: 'notion', requestedHead: original, superseded: true })]) })
+    expect(readScalars.mock.calls.some(([path]) => path === '/repos/owner/repo/pulls/1')).toBe(false)
+    comments.get('10')!.shift()
+    notionNotes.push('Tin Star answer: "notion-merge"')
 
     comments.get('10')!.unshift(...Array.from({ length: 250 }, (_, index) =>
       ({ id: String(index + 1000), body: 'Review update', created: '2026-11-23T14:00:00Z' })))
@@ -316,4 +356,6 @@ it('holds unrecognized head spellings as conditional merge requests', () => {
 it('accepts worker checks-green notices and rejects Jira-style worker prose', () => {
   expect(readyHeadPublication(`done: PR ${moving} checks green at head ${original}`)).toMatchObject({ head: original })
   expect(readyHeadPublication(`done: Will: merge ${moving} head ${original}`)).toBeNull()
+  expect(readyHeadPublication(`pr-ready: PR ${moving} checks green at head ${original}`)).toBeNull()
+  expect(readyHeadPublication(`PR ${moving} checks green at head ${original}`)).toBeNull()
 })

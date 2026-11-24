@@ -7,7 +7,7 @@ import { acquireLock } from '../infra/lock'
 import type { JiraWorkConfig } from './config'
 import { adfText, JiraAttachmentPreflightError, JiraClient, JiraWriteError, jiraText, type JiraSection } from './jira'
 import { CachedObservation, retainMissing } from './observation'
-import { mergePublication, repositoryPublication } from './ownerRequestEvidence'
+import { mergePublication } from './ownerRequestEvidence'
 import {
   checkJiraTransition, editJiraDecisions, formatJiraDecisions, jiraTransitionDestination, jiraWorkIdentity, JiraWorkInputError, readJiraDecisions,
   type JiraCreate, type JiraEdit, type JiraExternalBlocker, type JiraLink, type JiraTransition,
@@ -21,7 +21,7 @@ const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 const nativeId = (id: unknown): id is string => typeof id === 'string' && /^[1-9]\d*$/.test(id)
 const reviewStatus = 'Ready for Review'
 type OwnerIssue = {
-  id: string; key: string; url: string; repository: string | null
+  id: string; key: string; url: string
   decisions: ReturnType<typeof readJiraDecisions>
   reviewAssigned: boolean
   merges: Array<NonNullable<ReturnType<typeof mergePublication>> & { comment: string; createdAt: number }>
@@ -202,7 +202,7 @@ export class JiraWork extends JiraClient {
     const issues = new Map<string, OwnerIssue>()
     const decisions = this.config.fields.decisions
     const jql = `project = ${this.config.projectId} AND status NOT IN (Done, Canceled) AND (cf[${decisions.slice('customfield_'.length)}] IS NOT EMPTY OR status = "${reviewStatus}") ORDER BY id`
-    const fields = ['project', 'status', 'assignee', 'description', decisions]
+    const fields = ['project', 'status', 'assignee', decisions]
     const cursors = new Set<string>()
     let nextPageToken: string | undefined, last = false
     for (let page = 0; page < 10 && !last; page++) {
@@ -217,7 +217,7 @@ export class JiraWork extends JiraClient {
           }
           if (['Done', 'Canceled'].includes(f.status.name)) continue
           const issue: OwnerIssue = { id: this.qualified(raw.id), key: raw.key, url: `${this.config.url}/browse/${raw.key}`,
-            repository: repositoryPublication(text(f.description)), decisions: [], merges: [],
+            decisions: [], merges: [],
             // Matches the native assignee used by the TSW status coordinator.
             reviewAssigned: f.status.name === reviewStatus && f.assignee?.displayName === 'William Gathright' && !!f.assignee?.accountId && f.assignee.active !== false }
           try { issue.decisions = readJiraDecisions(text(f[decisions])).filter(item => item.answer === undefined) }

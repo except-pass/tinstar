@@ -54,15 +54,15 @@ Jira questions use the native issue identity and D-question ID. Review merge
 asks require a Ready for Review ticket assigned to Will and a current,
 unrestricted `Will: merge <GitHub PR URL>` comment. A full SHA on that line
 binds the requested revision. Card-native Merge requests can bind the URL and
-full head in their question. An exact dispatch-bound mate publication can
-corroborate the revision when it independently records the same URL and full
-head. Older URL-only requests remain visible with **Requested head unverified**.
+full head in their question. A dispatch-bound checks-green notice remains linked as evidence. A current
+URL-only request is shown as **Requested head unverified**.
 Decisions without an exact repository stay under **Repository unspecified**.
 
 Merge entries share the canonical repository and PR identity while the source
-records remain separately linked. The newest Jira merge comment for a PR in
-the current review cycle supplies its active Jira head. Earlier comments
+records remain separately linked. The newest open merge request for a PR
+determines the requested head and whether checks run. Earlier requests
 remain linked with their requested heads and are marked **Superseded**.
+A request with no source timestamp cannot displace a dated request.
 Jira questions on the same ticket remain
 independent. Rechecks compare every covered PR with its requested head and use
 the existing bounded checks reader for matching heads. Moved heads remain
