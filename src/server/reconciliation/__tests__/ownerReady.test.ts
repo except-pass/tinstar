@@ -390,9 +390,11 @@ it('bounds same-head checks, rotates coverage, and holds a head that moves after
   expect([...next.keys()]).toEqual(expect.arrayContaining(urls.slice(4)))
 })
 
-it('holds unrecognized head spellings as conditional merge requests', () => {
-  for (const suffix of [`@ ${original}`, `head sha= ${original}`, `(head ${original})`, `head ${original} (ready for review)`, '(ready for review)']) {
-    expect(mergePublication(`Will: merge ${moving} ${suffix}`, true)).toMatchObject({ head: null, conditional: true })
+it.each([true, false])('holds unrecognized head spellings as conditional merge requests (Jira: %s)', jira => {
+  const request = `${jira ? 'Will: merge' : 'Merge'} ${moving}`
+  expect(mergePublication(`${request} head ${original}`, jira)).toMatchObject({ head: original, conditional: false })
+  for (const suffix of [`at head ${original}`, `@ ${original}`, `head sha= ${original}`, `(head ${original})`, `head ${original} (ready for review)`, '(ready for review)']) {
+    expect(mergePublication(`${request} ${suffix}`, jira)).toMatchObject({ head: null, conditional: true })
   }
 })
 
