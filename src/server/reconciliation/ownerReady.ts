@@ -142,7 +142,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
     const url = cardSourceUrl(card.id)
     const withdrawn = withdrawnDecisionIds(notes)
     const records = decisionRecordRows(notes, 'Tin Star request: ')
-    const publishedActions = new Set(records.flatMap(record => typeof record?.action === 'string' ? [record.action.toLowerCase().trim()] : []))
+    const openActions = new Set<string>()
     if (historyVerified) for (const record of records) {
       const source = firstMateRequestSchema.safeParse(record?.source_request)
       if (source.success && withdrawn.has(record.id)) {
@@ -158,6 +158,7 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
         boundRequests.set(binding, request.answered ? null : id)
       }
       if (request.answered || !actions.includes(action)) continue
+      openActions.add(action)
       const commentId = request.sourceId.replaceAll('-', '')
       const destination = !isJiraCard(card.id) && /^[a-f0-9]{32}$/i.test(commentId) ? `${url}#${commentId}` : null
       const source: OwnerRequestSource = { kind: 'notion', id, label: request.id, url: destination }
@@ -170,11 +171,11 @@ export function ownerReadyRequests(snapshot: SourceSnapshot, histories: Map<stri
       }
     }
     const action = card.properties['Next action']?.value ?? card.properties['Next Action']?.value
-    if (actions.includes('merge') && !publishedActions.has('merge')) {
+    if (actions.includes('merge') && !openActions.has('merge')) {
       const publication = typeof action === 'string' ? mergePublication(action) : null
       addMerge({ kind: 'notion', id: card.id, label: 'Merge action', url }, publication?.url ?? first(cardPulls(card).map(pull => pull.url)), publication?.head ?? null)
     }
-    if (actions.includes('decision') && !publishedActions.has('decision') && typeof action === 'string' && action.trim() && !mergePublication(action)) {
+    if (actions.includes('decision') && !openActions.has('decision') && typeof action === 'string' && action.trim() && !mergePublication(action)) {
       const id = JSON.stringify(['notion', card.id, 'Decision action'])
       addDecision(id, action, repository, fresh, { kind: 'notion', id, label: 'Decision action', url })
     }
