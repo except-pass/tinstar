@@ -9,7 +9,7 @@ import { adfText, JiraAttachmentPreflightError, JiraClient, JiraWriteError, jira
 import { CachedObservation, retainMissing } from './observation'
 import { mergePublication } from './ownerRequestEvidence'
 import {
-  checkJiraTransition, editJiraDecisions, formatJiraDecisions, jiraTransitionDestination, jiraWorkIdentity, JiraWorkInputError, readJiraDecisions,
+  checkJiraTransition, editJiraDecisions, formatJiraDecisions, jiraTransitionDestination, jiraWaitSchema, jiraWorkIdentity, JiraWorkInputError, readJiraDecisions,
   type JiraCreate, type JiraEdit, type JiraExternalBlocker, type JiraLink, type JiraTransition,
 } from './jiraWorkRules'
 import { CreationReceipts } from './workflowReceipts'
@@ -66,6 +66,12 @@ export type JiraHistoryCursor = { total: number; last: string | null }
 export type JiraTrackedChange = { field: 'status' | 'assignee'; from: string | null; to: string | null; byService: boolean; occurredAt: number | null; entryId: string }
 const coordinatorReviewNote = (body: string) => /^Operation: tsw-[a-f0-9]{64}-edit-review(?:-(?:attempt-\d+|retry-1))*$/m.test(body)
 type BeforeWrite = (current: JiraWorkCard) => void | Promise<void>
+type TransitionOffer = { name?: unknown; to?: { name?: unknown }; isAvailable?: boolean; id?: unknown }
+
+function offeredTransition(offers: TransitionOffer[] | undefined, verb: JiraTransition['verb'], to: string) {
+  const candidates = offers?.filter(candidate => candidate.name === verb && candidate.to?.name === to && candidate.isAvailable !== false)
+  return candidates?.length === 1 && nativeId(candidates[0]?.id) ? candidates[0].id : null
+}
 
 /** Native Jira work records share Tin Star's MCP and Jira transport. This
  * adapter only calls issue APIs and has no dispatch or Jira admin capability. */
@@ -277,6 +283,15 @@ export class JiraWork extends JiraClient {
 
   private externalPresent(issue: Issue) {
     return Object.values(issue.externalBlocker).some(Boolean)
+  }
+
+  private blockerFields(blocker: JiraExternalBlocker | null) {
+    const fields = this.config.fields
+    return {
+      [fields.blockerType]: blocker ? { value: blocker.type } : null,
+      [fields.blockerTarget]: blocker?.target ?? null,
+      [fields.blockerCondition]: blocker ? jiraText(blocker.unblocks_when) : null,
+    }
   }
 
   private linkView({ target_id: _target, ...link }: Link) { return link }
@@ -783,7 +798,7 @@ export class JiraWork extends JiraClient {
     }, !!mergeDueDate, beforeDispatch)
   }
 
-  private checkEdit(issue: Issue, input: JiraEdit, assigneeId: string | undefined) {
+  private checkEdit(issue: Issue, input: JiraEdit, assigneeId: string | null | undefined) {
     const equal = (actual: unknown, expected: unknown) => expected === undefined || isDeepStrictEqual(actual, expected)
     const questions = input.add_questions || input.answers ? readJiraDecisions(issue.decisions) : []
     const blocker = input.blocker === undefined ? undefined : input.blocker ?? { type: null, target: '', unblocks_when: '' }
@@ -928,8 +943,8 @@ export class JiraWork extends JiraClient {
       }
       const baseline = !attempt.dispatched && note ? await this.commentBaseline(id) : undefined
       const current = await this.read(id)
-      const assigneeId = input.assignee === undefined ? undefined : await this.findAssignableAccount(input.card_id, input.assignee)
-      if (assigneeId === null) {
+      const assigneeId = typeof input.assignee === 'string' ? await this.findAssignableAccount(input.card_id, input.assignee) : input.assignee
+      if (typeof input.assignee === 'string' && assigneeId === null) {
         throw new JiraWorkInputError('Choose one unambiguous assignable Jira user by display name')
       }
       if (attempt.dispatched) {
@@ -946,13 +961,9 @@ export class JiraWork extends JiraClient {
       const fields: Record<string, unknown> = {}
       if (input.name !== undefined) fields.summary = input.name
       if (input.owner !== undefined) fields[mapping.owner] = input.owner === null ? null : { value: input.owner }
-      if (assigneeId !== undefined) fields.assignee = { accountId: assigneeId }
+      if (assigneeId !== undefined) fields.assignee = assigneeId === null ? null : { accountId: assigneeId }
       if (input.description !== undefined) fields.description = input.description === null ? null : jiraText(input.description)
-      if (input.blocker !== undefined) {
-        fields[mapping.blockerType] = input.blocker ? { value: input.blocker.type } : null
-        fields[mapping.blockerTarget] = input.blocker?.target ?? null
-        fields[mapping.blockerCondition] = input.blocker ? jiraText(input.blocker.unblocks_when) : null
-      }
+      if (input.blocker !== undefined) Object.assign(fields, this.blockerFields(input.blocker))
       if (input.add_questions || input.answers) fields[mapping.decisions] = this.editDecisionDocument(current, input)
       if (beforeWrite) await beforeWrite(this.view(await this.read(id)))
       await attempt.dispatch()
@@ -1003,13 +1014,26 @@ export class JiraWork extends JiraClient {
     return { outcome: result.outcome, dispatched }
   }
 
+  async offersTransition(input: JiraTransition) {
+    const id = this.id(input.card_id)
+    const destination = jiraTransitionDestination(input)
+    await this.checkProject(id)
+    const response = await this.request(`issue/${id}/transitions`)
+    return !!destination && Boolean(offeredTransition(response.transitions, input.verb, destination))
+  }
+
   transition(input: JiraTransition, actor: string, beforeWrite?: BeforeWrite, deferAudit = false, handoffPreflight?: () => Promise<unknown>) {
     return this.mutate('transition', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = this.transitionAudit(input, actor)
+      const wait = input.verb === 'Block' ? jiraWaitSchema.safeParse({ blocker: input.blocker, next_check_in: input.next_check_in }) : undefined
+      if (wait && !wait.success) throw new JiraWorkInputError('Block requires a typed external blocker and a next_check_in date (YYYY-MM-DD)')
+      const waitMatches = (issue: Issue) => !wait || (!this.nativeBlockers(issue).length &&
+        isDeepStrictEqual(issue.externalBlocker, wait.data.blocker) && issue.due_date === wait.data.next_check_in)
       const readDestination = async (destination: string) => {
         const issue = await this.read(id)
         if (issue.status !== destination) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
+        if (!waitMatches(issue)) throw new JiraWorkUnconfirmed('Jira did not confirm the blocker and next check-in')
         return issue
       }
       if (attempt.dispatched) {
@@ -1023,18 +1047,30 @@ export class JiraWork extends JiraClient {
         }
         return attempt.confirm(await readDestination(destination))
       }
-      const destination = (issue: Issue) => {
-        const blocker = input.verb === 'Block' ? Boolean(this.blocker(issue)) : this.externalPresent(issue) || this.nativeBlockers(issue).length > 0
-        return checkJiraTransition({ ...issue, blocker }, input)
-      }
       const response = await this.request(`issue/${id}/transitions`)
       const current = await this.read(id)
-      const to = destination(current)
-      const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
-      if (candidates?.length !== 1 || !nativeId(candidates[0]?.id)) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
+      const to = checkJiraTransition({ ...current, blocker: this.externalPresent(current) || this.nativeBlockers(current).length > 0 }, input)
+      const transitionId = offeredTransition(response.transitions, input.verb, to)
+      if (!transitionId) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
+      if (wait && this.nativeBlockers(current).length) throw new JiraWorkInputError('Remove the native Jira blocker before choosing an external blocker')
       if (beforeWrite) await beforeWrite(this.view(current))
+      if (wait && !waitMatches(current)) {
+        // A screenless Jira transition accepts only the transition ID. Commit
+        // and verify the complete wait while still in the source status.
+        await this.request(`issue/${id}`, 'PUT', { fields: { ...this.blockerFields(wait.data.blocker), duedate: wait.data.next_check_in } }).catch(error => {
+          if (isWriteRejection(error)) throw error
+        })
+        const staged = await this.read(id)
+        if (!waitMatches(staged)) throw new JiraWorkUnconfirmed('Jira did not confirm the blocker and next check-in before Block')
+        if (staged.status !== current.status || staged.owner !== current.owner || staged.assignee_id !== current.assignee_id) {
+          throw new JiraWorkInputError('Jira ticket changed after saving the wait fields. Check the ticket before retrying Block.')
+        }
+      }
       await attempt.dispatch()
-      await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id } }).catch(error => {
+      await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: transitionId } }).catch(error => {
+        if (wait && isWriteRejection(error)) {
+          throw new JiraWorkUnconfirmed(`The blocker and next check-in are saved. Jira rejected Block (HTTP ${error.status}).`)
+        }
         if (!note || isWriteRejection(error)) throw error
       })
       const saved = await readDestination(to)

@@ -7,6 +7,7 @@ import type { SourceSnapshot } from '../server/reconciliation'
 import { dispatchForTask } from '../server/reconciliation/dispatchProvenance'
 import { workerReviewPublication } from '../server/reconciliation/ownerRequestEvidence'
 import { ageObservation } from '../server/reconciliation/observation'
+import { jiraWaitSchema, type JiraWait } from '../server/reconciliation/jiraWorkRules'
 import { tswEvidence } from '../server/reconciliation/tswSnapshot'
 import { isPublishedReviewDetail } from '../server/reconciliation/workerLinkReport'
 
@@ -18,6 +19,8 @@ type EventDetails =
   | { target: 'In Progress' }
   | { target: 'Ready for Review'; pull: string; head: string | null }
   | { target: 'Done' }
+  | { target: 'Decision'; question: string }
+  | ({ target: 'Waiting For' } & JiraWait)
 
 export type StatusEvent = EventDetails & {
   key: string
@@ -34,6 +37,14 @@ export type StatusSourceFinding = { home: string; key?: string; task?: string; r
 const eventId = (parts: unknown[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 const pullUrl = (value: unknown) => typeof value === 'string' && parsePullUrl(value) ? value : null
 const eventVerb = (value: string | null) => value?.trim().match(/^([a-z-]+)(?=\s|:|$)/i)?.[1]?.toLowerCase()
+export const isSideState = (target: StatusEvent['target'] | undefined) => target === 'Decision' || target === 'Waiting For'
+
+function declaredWait(summary: string) {
+  try {
+    const parsed = jiraWaitSchema.safeParse(JSON.parse(summary.slice('wait '.length)))
+    return parsed.success ? parsed.data : undefined
+  } catch { return undefined }
+}
 
 // TSW Owner dropdown values follow the owner/main convention agreed on 2026-11-23.
 const mateAuthority = new Map([
@@ -65,6 +76,19 @@ function classify(id: string, task: Task | undefined, row: Backlog | undefined, 
   if (terminal || mergedState || mergedEvent) {
     if (!pull) return 'completion-without-pull-evidence'
     return event({ target: 'Done' }, [pull, terminal?.completedOn ?? null], `First Mate reported delivery for ${id}. ${pull}`)
+  }
+
+  const request = task?.queue?.decisions.find(request => request.verb === 'needs-decision' || request.summary?.trimStart().startsWith('wait '))
+  if (request) {
+    const key = request.key?.trim()
+    const summary = request.summary?.trim()
+    if (!key || !summary) return 'side-state-request-missing-key-or-summary'
+    if (request.verb === 'needs-decision') {
+      return event({ target: 'Decision', question: summary.replace(/\r\n?/g, '\n') }, key, `First Mate requested a decision for ${id} (${key}).`)
+    }
+    const wait = declaredWait(summary)
+    if (!wait) return 'external-wait-invalid'
+    return event({ target: 'Waiting For', ...wait }, key, `First Mate declared an external wait for ${id} (${key}).`)
   }
 
   if (isPublishedReviewDetail(detail) && attempt?.yolo !== 'on') {
@@ -127,9 +151,10 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
         continue
       }
       const events = byKey.get(key) ?? []
-      const completed = signal.details.target === 'Done'
-      const subjectId = completed ? row?.id ?? id : id
-      const generation = completed ? null : task?.identity.spawn_gen ?? null
+      const side = isSideState(signal.details.target)
+      const stable = signal.details.target === 'Done' || side
+      const subjectId = stable ? row?.id ?? (side ? task?.backlog.id : undefined) ?? id : id
+      const generation = stable ? null : task?.identity.spawn_gen ?? null
       events.push({
         ...signal.details, ...authority(label), key, home, task: id, expiresAt: observation.expiresAt,
         id: eventId([home, subjectId, generation, signal.details.target, signal.witness]),

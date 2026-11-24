@@ -31,8 +31,8 @@ export const jiraTransitions: Record<Verb, [from: JiraStatus[], to: readonly Jir
   Deployed: [['Waiting for Prod Release'], ['Verify in Prod']],
   'Verify Passed': [['Verify in Prod'], ['Done']],
   'Complete Directly': [['In Progress'], ['Done']],
-  'Request Decision': [active.filter(value => value !== 'Decision'), ['Decision']],
-  Block: [active.filter(value => value !== 'Waiting For'), ['Waiting For']],
+  'Request Decision': [nonterminal.filter(value => value !== 'Decision'), ['Decision']],
+  Block: [nonterminal.filter(value => value !== 'Waiting For'), ['Waiting For']],
   'Answer Decision': [['Decision'], [...decisionExits, 'Verify in Prod']],
   'Resolve Wait': [['Waiting For'], [...waitExits, 'Verify in Prod']],
   Dequeue: [['Queued'], ['To Do']],
@@ -63,6 +63,8 @@ const externalBlocker = z.object({
   unblocks_when: multiline,
 }).strict()
 export type JiraExternalBlocker = z.infer<typeof externalBlocker>
+export const jiraWaitSchema = z.object({ blocker: externalBlocker, next_check_in: z.string().date() }).strict()
+export type JiraWait = z.infer<typeof jiraWaitSchema>
 
 export const jiraCreateSchema = z.object({
   provider: jiraCreationProvider.default('jira'), operation_id: operation, name: singleLine.max(255), owner: singleLine.optional(),
@@ -71,7 +73,7 @@ export const jiraCreateSchema = z.object({
 export const jiraEditSchema = z.object({
   kind: z.literal('jira_edit'), card_id: jiraWorkIdSchema, operation_id: operation,
   name: singleLine.max(255).optional(), description: multiline.nullable().optional(), owner: singleLine.nullable().optional(),
-  assignee: singleLine.optional(),
+  assignee: singleLine.nullable().optional(),
   add_questions: z.array(question.omit({ answer: true })).min(1).optional(),
   answers: z.array(z.object({ id: decisionId, answer: multiline }).strict()).min(1).optional(),
   blocker: externalBlocker.nullable().optional(), note: multiline.optional(),
@@ -82,13 +84,14 @@ const transitionArguments = z.object({
 })
 const revisions = { required_revision: singleLine.optional(), live_revision: singleLine.optional() }
 export const jiraTransitionSchema = z.union([
+  transitionArguments.extend({ verb: z.literal('Block'), ...jiraWaitSchema.shape }).strict(),
   transitionArguments.extend({ verb: z.literal('Deployed'), ...revisions }).strict(),
   transitionArguments.extend({ verb: z.enum(interruptVerbs), to: z.literal('Verify in Prod'), ...revisions }).strict(),
   transitionArguments.extend({ verb: z.literal('Answer Decision'), to: z.enum(decisionExits) }).strict(),
   transitionArguments.extend({ verb: z.literal('Resolve Wait'), to: z.enum(waitExits) }).strict(),
   transitionArguments.extend({ verb: z.enum(recoveryVerbs), to: z.enum(recovery) }).strict(),
   transitionArguments.extend({ verb: z.enum(dispositionVerbs), disposition: multiline.optional() }).strict(),
-  transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Deployed', ...interruptVerbs, ...dispositionVerbs, ...recoveryVerbs]) }).strict(
+  transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Block', 'Deployed', ...interruptVerbs, ...dispositionVerbs, ...recoveryVerbs]) }).strict(
     'Revision arguments are only accepted for Deployed or an interrupt exit into Verify in Prod',
   ),
 ])
@@ -211,7 +214,6 @@ export function checkJiraTransition(current: State, input: JiraTransition) {
     const items = readJiraDecisions(current.decisions)
     if (!items.length || items.some(item => item.answer === undefined)) throw new JiraWorkInputError('All Decision questions must be answered before leaving Decision with Answer Decision')
   }
-  if (input.verb === 'Block' && !current.blocker) throw new JiraWorkInputError('Set a primary blocker before blocking the ticket')
   if (input.verb === 'Resolve Wait' && current.blocker) throw new JiraWorkInputError('Clear the primary blocker after it resolves')
   return to
 }
