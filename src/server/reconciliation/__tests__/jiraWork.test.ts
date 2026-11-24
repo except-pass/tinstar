@@ -395,11 +395,16 @@ it('shows native Jira owner requests on Desk and leaves ordinary Clawson pickup 
   expect((await call('search_work', { refresh: true })).total).toBe(5)
   expect(f.requests.some(request => request.path === 'user/assignable/search')).toBe(false)
   expect(pickup.records[1].card.source.properties).not.toHaveProperty('Assignee')
+  const assigneeOnly = await sources.queue(owner, undefined, true, 'read')
+  expect(assigneeOnly.needsWill?.flatMap(item => item.evidence.map(link => link.url))).toEqual([`${config.url}/browse/${waiting.key}`])
   const fieldsBeforeLookup = { ...issue.fields }
   Object.assign(issue.fields, { status: { name: 'Waiting For' },
     [config.fields.blockerType]: { value: 'Actor' }, [config.fields.blockerTarget]: 'Will', [config.fields.blockerCondition]: 'Review the request' })
   const unavailableReviewer = await sources.queue(owner, undefined, true, 'read')
-  expect(unavailableReviewer.needsWill?.flatMap(item => item.evidence.map(link => link.url))).toEqual([`${config.url}/browse/${waiting.key}`])
+  expect(unavailableReviewer.needsWill?.flatMap(item => item.evidence.map(link => link.url)).sort())
+    .toEqual([issue, waiting].map(card => `${config.url}/browse/${card.key}`).sort())
+  expect(unavailableReviewer.needsWill?.find(item => item.evidence.some(link => link.url.endsWith('/TSW-101'))))
+    .toMatchObject({ action: 'Review the request', oneTouch: false })
   expect(unavailableReviewer.coverage.intentions.coverage).toBe('partial')
   Object.assign(issue.fields, fieldsBeforeLookup)
   f.search.directoryUnavailable = false

@@ -145,8 +145,16 @@ export class JiraWork extends JiraClient {
     for (const card of base.data.cards) {
       const assignee = this.reviewerCandidates.get(card)
       if (assignee && card.source) {
+        const id = this.id(card.id)
         try {
-          if (assignee === await this.findAssignableAccount(card.id, tswReviewer, signal)) {
+          await this.checkProject(id, signal)
+        } catch (error) {
+          if (accessDenied(error)) throw error
+          coverage = 'partial'
+          continue
+        }
+        try {
+          if (assignee === await this.lookupAssignableAccount(id, tswReviewer, signal)) {
             const verified = { ...card, source: { ...card.source, assignedToReviewer: true } }
             this.reviewerCandidates.set(verified, assignee)
             cards.push(verified)
@@ -155,7 +163,6 @@ export class JiraWork extends JiraClient {
         } catch (error) {
           if (accessDenied(error)) throw error
           coverage = 'partial'
-          continue
         }
       }
       cards.push(card)
@@ -648,9 +655,13 @@ export class JiraWork extends JiraClient {
     }
   }
 
-  async findAssignableAccount(cardId: string, name: string, signal?: AbortSignal) {
+  async findAssignableAccount(cardId: string, name: string) {
     const id = this.id(cardId)
-    await this.checkProject(id, signal)
+    await this.checkProject(id)
+    return this.lookupAssignableAccount(id, name)
+  }
+
+  private async lookupAssignableAccount(id: string, name: string, signal?: AbortSignal) {
     const users = await this.request(`user/assignable/search?${new URLSearchParams({ issueId: id, query: name, maxResults: '1000' })}`, 'GET', undefined, signal)
     if (!Array.isArray(users)) throw new Error('Incomplete Jira assignee search')
     const eligible = users.filter(user => user.active === true && typeof user.accountId === 'string' && user.accountId &&
