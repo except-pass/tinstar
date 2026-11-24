@@ -675,12 +675,53 @@ export class JiraWork extends JiraClient {
     return result
   }
 
-  edit(input: JiraEdit, actor: string, beforeWrite?: BeforeWrite) {
+  async tswReviewNote(cardId: string, pull: string) {
+    const id = this.id(cardId)
+    const signal = AbortSignal.timeout(12_000)
+    await this.checkProject(id, signal)
+    const after = await this.previousReviewExit(id, signal)
+    const account = await this.serviceAccountId()
+    let offset = 0
+    for (let page = 0; page < 5; page++) {
+      const { comments, total } = await this.notes(id, offset, signal)
+      for (const comment of comments) {
+        const body = comment.body
+        if (!body || comment.author_id !== account || !nativeId(comment.id) || !(Date.parse(comment.created_at) > after)) continue
+        const [line, ...metadata] = body.split('\n')
+        const request = mergePublication(line!, true)
+        const operation = metadata.find(line => /^Operation: tsw-[a-f0-9]{64}-edit-review(?:-|$)/.test(line))
+        if (!operation || request?.url !== pull || request.conditional) continue
+        const credits = metadata.find(line => line.startsWith('Publishers: '))
+        const publishers: string[] = credits ? JSON.parse(credits.slice('Publishers: '.length))
+          : (metadata.at(-1)?.match(/^Recorded via Tin Star \((.*)\)$/)?.[1] ?? '').split(', ').filter(Boolean)
+        if (!Array.isArray(publishers) || publishers.some(name => typeof name !== 'string')) throw new Error('Invalid Jira review credits')
+        return { id: comment.id, body, head: request.head, publishers }
+      }
+      offset += comments.length
+      if (offset >= total) return undefined
+    }
+    throw new Error('Jira review comments exceed the read budget')
+  }
+
+  edit(input: JiraEdit & { reviewComment?: { id: string; body: string } }, actor: string, beforeWrite?: BeforeWrite) {
     return this.mutate('edit', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = input.note ? `${input.note}\n\nRecorded via Tin Star (${actor})` : undefined
       if (!note && [input.name, input.owner, input.assignee, input.description, input.blocker, input.add_questions, input.answers].every(value => value === undefined)) {
         throw new JiraWorkInputError('Supply a ticket edit or comment')
+      }
+      if (input.reviewComment && note && beforeWrite) {
+        const { id: commentId, body } = input.reviewComment
+        await this.checkProject(id)
+        const current = await this.read(id)
+        if (!attempt.dispatched) {
+          await this.checkComment(id, body, commentId)
+          beforeWrite(this.view(await this.read(id)))
+          await attempt.dispatch()
+          await this.request(`issue/${id}/comment/${commentId}`, 'PUT', { body: jiraText(note) })
+        }
+        await this.checkComment(id, note, commentId)
+        return attempt.confirm(current)
       }
       const baseline = !attempt.dispatched && note ? await this.commentBaseline(id) : undefined
       const current = await this.read(id)
