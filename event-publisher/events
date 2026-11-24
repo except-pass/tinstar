@@ -142,24 +142,25 @@ async function pollProvider(observe, journal, interval, controller) {
 
 async function collect(journal, { homes, jira, repositories, deployment }, interval, secret, readToken) {
   const controller = signalController()
-  const providers = []
   const jobs = []
   let providerError
   let scratch, listener
+  const startProvider = (observe, seconds) => {
+    jobs.push(pollProvider(observe, journal, interval ? seconds : null, controller).catch(error => {
+      providerError ??= error
+      controller.abort()
+    }))
+  }
   try {
     if (homes.length) scratch = await mkdtemp(join(tmpdir(), 'event-publisher-'))
     const sources = homes.flatMap(sourcesFor)
     if (jira) sources.push(jira.source)
-    if (repositories.length) {
-      sources.push(githubSource)
-      providers.push([githubObserver({ repositories }), githubInterval])
-    }
-    if (deployment) {
-      sources.push(deploymentSource)
-      providers.push([observeDeploymentEndpoint, interval])
-    }
+    let observeGitHub = repositories.length ? githubObserver({ repositories }) : null
+    if (observeGitHub) sources.push(githubSource)
+    if (deployment) sources.push(deploymentSource)
     const taskCaches = new Map(homes.map(home => [home.id, {}]))
     journal.registerSources(sources, { reconcile: true })
+    if (deployment && !controller.signal.aborted) startProvider(observeDeploymentEndpoint, interval)
     if (jira && interval) {
       listener = await startJiraWebhook(journal, jira, secret, readToken)
       console.error(`Jira webhook listening on ${listener.url}`)
@@ -189,13 +190,9 @@ async function collect(journal, { homes, jira, repositories, deployment }, inter
       }
       // The first forge pass uses accepted task links. Later network reads run
       // on their own cadence so timeouts never delay First Mate or block Jira.
-      if (!jobs.length && !controller.signal.aborted) {
-        for (const [observe, seconds] of providers) {
-          jobs.push(pollProvider(observe, journal, interval ? seconds : null, controller).catch(error => {
-            providerError ??= error
-            controller.abort()
-          }))
-        }
+      if (observeGitHub && !controller.signal.aborted) {
+        startProvider(observeGitHub, githubInterval)
+        observeGitHub = null
       }
       // Always pause after a slow pass as well. Never overlap collector passes.
       if (interval) await pause(Math.max(1000 * interval - (performance.now() - start), 5000), controller.signal)
@@ -294,7 +291,7 @@ function eventText(event, replay, health) {
   if (source.provider === 'github' || source.provider === 'deployment') {
     const labels = [replay && 'replay', source.mode].filter(Boolean)
     const compact = source.provider === 'github' ? `${reference.repository}#${reference.number}` :
-      reference.endpoint ? `revision answering at ${reference.endpoint}` : reference.target
+      reference.endpoint ? `revision answering at ${reference.target}` : reference.target
     const category = source.provider === 'github' ? 'github/pr' : reference.endpoint ? 'deployment' : 'floor/deployment'
     const render = value => {
       if (change.field === 'checks') {

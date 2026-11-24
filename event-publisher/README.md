@@ -106,7 +106,7 @@ reaches a 1,000-request reserve and honors rate-limit retry instructions.
 `events sources` reports the linked, observed, failed and deferred PR counts.
 Long lists take multiple passes. Unavailable task-link discovery or check reads
 are reported in source health. Verified PR fields are journaled even when check
-reads fail, and the last verified check baseline is retained. Check statuses
+reads fail, and the last verified check baseline is retained for the same head. Check statuses
 posted only through the legacy commit-status API or another repository are
 outside this coverage.
 The service checks every accepted sample's exact repository and PR number.
@@ -192,12 +192,12 @@ const observations = parseFloorAudit(readFileSync(`${fixtures}/deployment-audit.
   target: 'fixture-floor',
   failureMarker: readFileSync(`${fixtures}/deployment-failure.synthetic.txt`, 'utf8'),
 })
+const observedAt = new Date().toISOString()
 journal.registerSources([source])
 for (const { event_type, ...record } of observations) {
-  const at = record.occurredAt
   journal.recordProviderPoll(source, {
-    startedAt: at, observedAt: at, health: 'ok', reason: null, counts: { observed: 1 },
-    entries: [{ ...record, startedAt: at, observedAt: at, related: [] }],
+    startedAt: observedAt, observedAt, health: 'ok', reason: null, counts: { observed: 1 },
+    entries: [{ ...record, startedAt: observedAt, observedAt, related: [] }],
   }, (_before, after) => ({ changes: [{ event_type, change: { after } }] }))
 }
 journal.close()

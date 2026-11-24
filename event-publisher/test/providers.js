@@ -1,6 +1,6 @@
 import { deepEqual, equal, match, ok, rejects } from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -193,6 +193,16 @@ test('GitHub retains check provenance through a partial merge poll and observes 
   const recovered = journal.events().at(-1)
   equal(recovered.event_type, 'pr.checks.changed')
   equal(recovered.observation.previous_snapshot, verified.observation.current_snapshot)
+  pr = { ...pr, head: { sha: nextRevision }, updated_at: at(24) }
+  checks = { total_count: 101, check_runs: [] }
+  equal(await resumed(journal), false)
+  pr = { ...pr, head: { sha: revision }, updated_at: at(26) }
+  checks = { total_count: 101, check_runs: [] }
+  equal(await resumed(journal), false)
+  checks = { total_count: 1, check_runs: [prCheck('success')] }
+  equal(await resumed(journal), true)
+  equal(journal.events().at(-1).event_type, 'pr.checks.observed')
+  equal(journal.events().at(-1).observation.previous_snapshot, undefined)
   pr = { ...pr, head: { sha: nextRevision }, updated_at: at(30) }
   checks = { total_count: 0, check_runs: [] }
   equal(await resumed(journal), true)
@@ -238,6 +248,29 @@ test('GitHub rechecks links after awaits and resolves associations at append tim
   }
 })
 
+test('GitHub defers targets discovered during the pass', async t => {
+  const journal = new Journal(await journalPath(t))
+  t.after(() => journal.close())
+  journal.registerSources([githubSource])
+  taskLinks(journal, openHome, { one: [pullUrl] })
+  let second = 10
+  const observe = githubObserver({
+    repositories: ['example/project'],
+    now: () => new Date(at(second++)),
+    get: async endpoint => {
+      if (endpoint.includes('/pulls/')) {
+        taskLinks(journal, openHome, { one: [pullUrl, pullUrl.replace('/12', '/13')] }, 5)
+        return githubResponse(pull())
+      }
+      return githubResponse({ total_count: 0, check_runs: [] })
+    },
+  })
+  equal(await observe(journal), false)
+  const status = journal.sources().find(source => source.type === 'pr')
+  equal(status.health, 'partial')
+  deepEqual(status.counts, { linked: 2, observed: 1, failed: 0, deferred: 1, checks_unavailable: 0 })
+})
+
 test('GitHub distinguishes an empty verified backlog from incomplete discovery', async t => {
   const journal = new Journal(await journalPath(t))
   t.after(() => journal.close())
@@ -257,6 +290,12 @@ test('GitHub distinguishes an empty verified backlog from incomplete discovery',
   equal(await observe(journal), true)
   equal(health(), 'unconnected')
   const [source] = sourcesFor(openHome)
+  journal.record({
+    source, health: 'ok', started_at: at(3), observed_at: at(4), entries: [],
+    pullRequests: { backlogAbsent: true, started_at: at(4), generated_at: at(5), observed_at: at(6) },
+  })
+  equal(await observe(journal), false)
+  equal(health(), 'unavailable')
   journal.record({ source, health: 'unavailable', started_at: at(5), observed_at: at(6) })
   equal(await observe(journal), false)
   equal(health(), 'unavailable')
@@ -331,6 +370,54 @@ test('GitHub rotates bounded pulls and stops at the shared reserve', async t => 
   equal(requests, 17)
   equal(journal.tail(), before)
   match(journal.sources().find(source => source.type === 'pr').reason, /quota reserve/)
+})
+
+test('GitHub reports completed coverage before a quota pause', async t => {
+  const journal = new Journal(await journalPath(t))
+  t.after(() => journal.close())
+  journal.registerSources([githubSource])
+  taskLinks(journal, openHome, { one: [pullUrl] })
+  let second = 10
+  let calls = 0
+  const observe = githubObserver({
+    repositories: ['example/project'],
+    now: () => new Date(at(second++)),
+    get: async endpoint => {
+      calls++
+      return endpoint.includes('/pulls/') ? githubResponse(pull()) :
+        githubResponse({ total_count: 0, check_runs: [] }, { remaining: '1000' })
+    },
+  })
+  equal(await observe(journal), true)
+  equal(journal.sources().find(source => source.type === 'pr').health, 'ok')
+  equal(await observe(journal), false)
+  equal(calls, 2)
+  match(journal.sources().find(source => source.type === 'pr').reason, /quota reserve/)
+})
+
+test('deployment observation starts before the first First Mate read', async t => {
+  const path = await journalPath(t)
+  const home = join(path, '..')
+  const config = join(home, 'config.json')
+  const preload = join(home, 'mock-fetch.mjs')
+  const log = join(home, 'startup.log')
+  const bin = join(home, 'bin')
+  await mkdir(bin)
+  await writeFile(join(bin, 'fm-tasks-axi.sh'), '#!/bin/sh\nprintf "firstmate\\n" >> "$EVENT_TEST_STARTUP_LOG"\nexit 1\n', { mode: 0o700 })
+  await writeFile(preload, `import { appendFileSync } from 'node:fs'
+globalThis.fetch = async () => {
+  appendFileSync(process.env.EVENT_TEST_STARTUP_LOG, 'deployment\\n')
+  return Response.json({ ok: true, data: { sha: '${revision}' } })
+}
+`)
+  await writeFile(config, JSON.stringify({ homes: [{ id: 'example-home', path: home }], deployment: true }))
+  await rejects(exec(process.execPath, ['--import', preload, cli, 'observe', '--db', path, '--config', config], {
+    env: { ...process.env, EVENT_TEST_STARTUP_LOG: log },
+  }), { code: 1 })
+  equal(await readFile(log, 'utf8'), 'deployment\nfirstmate\n')
+  const journal = new Journal(path, { readOnly: true })
+  t.after(() => journal.close())
+  equal(journal.events({ provider: 'deployment' })[0].change.after.revision, revision)
 })
 
 test('First Mate configuration leaves GitHub and deployment unconnected without opt-ins', async t => {
@@ -444,7 +531,7 @@ test('deployment observes an exact running build through outages and restart wit
   const status = await exec(cli, ['sources', '--db', path])
   ok(status.stdout.includes(`${deploymentSource.source_id} [live] ok · revision answering at ${endpoint}`))
   const replay = await exec(cli, ['replay', '--db', path, '--source', 'deployment', '--last', '2'])
-  equal(replay.stdout.trim().split('\n').filter(line => line.includes(`revision answering at ${endpoint}`)).length, 2)
+  equal(replay.stdout.trim().split('\n').filter(line => line.includes(`revision answering at ${first.evidence.source_reference.target}`)).length, 2)
   match(status.stdout, /deployment:lifecycle unconnected · deployment attempts, smoke, failure and rollback/)
   match(status.stdout, /github:linked-pulls unconnected/)
   match(status.stdout, /jira:ticket unconnected/)
