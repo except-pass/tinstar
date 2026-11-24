@@ -451,6 +451,26 @@ it('advances the same PR again after the owner rejects review', async () => {
   expect((await f.jira().readTswCard('TSW-1')).status).toBe('Ready for Review')
 })
 
+it('replans a rejected Fast-track with a new operation ID on the next pass', async () => {
+  const f = await tswFixture()
+  await f.create('rejected Fast-track')
+  await f.publish([tswTask('TSW-1')])
+  f.controls.refuseTransition = true
+  const first = await f.run(true)
+  expect(first.stopped).toBe(true)
+  const rejected = first.audits.find(entry => entry.result === 'write-rejected')!
+  expect(rejected.operationId).toMatch(/-queued$/)
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe('Backlog')
+
+  f.controls.refuseTransition = false
+  const second = await f.run(true)
+  expect(second.stopped).toBe(false)
+  expect(second.audits).toContainEqual(expect.objectContaining({
+    result: 'verified', operationId: `${rejected.operationId}-attempt-2`,
+  }))
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe('In Progress')
+})
+
 it.each(['edit', 'transition'] as const)('retries an unapplied dispatched TSW %s once with a derived ID', async kind => {
   const f = await tswFixture()
   await f.create('dispatch gap')

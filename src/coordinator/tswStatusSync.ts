@@ -9,9 +9,9 @@ import { collectTswEvents, type StatusEvent } from './tswStatusEvents'
 
 type Step = JiraTransition | JiraEdit
 type CardState = Pick<JiraWorkCard, 'status' | 'assignee_id' | 'owner'>
-type Pending = { eventId: string; input: Step; actor: string; before: CardState; unconfirmed?: number; retry?: boolean }
+type Pending = { eventId: string; input: Step; actor: string; before: CardState; unconfirmed?: number; retry?: boolean; rejectedAttempts?: number }
 type NoteRepair = { input: JiraTransition; actor: string; attempts: number; queuedAt?: number }
-type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean }
+type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean; rejectedSteps?: Record<string, number> }
 type StatusAudit = { provider: 'jira'; time: string; cardId: string | null; result: string; home?: string; task?: string; eventId?: string; operationId?: string; detail?: string }
 type Options = {
   jira?: Pick<JiraWork, 'readTswCard' | 'statusHistory' | 'edit' | 'transition' | 'findAssignableAccount' | 'repairTransitionAudit'>
@@ -22,9 +22,13 @@ type Options = {
 
 const linearVerbs = ['Fast-track', 'Queue', 'Start', 'Submit for Review', 'Accept Final', 'Complete Directly'] as const
 const noteRepairLimit = 3
+const stepAttemptLimit = 3
 const reviewer = 'William Gathright'
 const isEdit = (step: Step): step is JiraEdit => 'kind' in step
-const attemptId = ({ input, retry }: Pending) => retry ? `${input.operation_id}-retry-1` : input.operation_id
+function attemptId({ input, retry, rejectedAttempts = 0 }: Pending) {
+  const id = rejectedAttempts ? `${input.operation_id}-attempt-${rejectedAttempts + 1}` : input.operation_id
+  return retry ? `${id}-retry-1` : id
+}
 const cardState = ({ status, assignee_id, owner }: JiraWorkCard): CardState => ({ status, assignee_id, owner })
 
 function plan(event: StatusEvent, card: JiraWorkCard): Step[] | string {
@@ -226,7 +230,16 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           const result = isEdit(input) ? await jira.edit(input, actor, guard) : await jira.transition(input, actor, guard, true)
           card = await jira.readTswCard(key)
           history = await jira.statusHistory(card.id, checkpoint.cursor)
-          const outcome = result as { outcome: string; code?: string; message?: string }
+          const outcome = result as { outcome: string; code?: string; message?: string; card_id?: string }
+          const attempts = (pending.rejectedAttempts ?? 0) + 1 + Number(!!pending.retry)
+          if (outcome.outcome === 'not-saved' && outcome.code === 'jira-unavailable' && outcome.card_id === undefined) {
+            const { pending: _pending, ...prior } = checkpoint
+            checkpoint = { ...prior, rejectedSteps: { ...prior.rejectedSteps, [original.operation_id]: attempts } }
+            await save(key, checkpoint)
+            await log(attempts >= stepAttemptLimit ? 'rejected-cap-reached' : 'write-rejected', operation_id, outcome.message)
+            stopped = true
+            return false
+          }
           const verified = outcome.outcome === 'saved' && !outcome.message
           const missingNote = !isEdit(input) && (outcome.code === 'unconfirmed' || outcome.outcome === 'saved' && !!outcome.message)
           if ((verified || missingNote) && card.id === checkpoint.cardId && confirms(pending, card, history.changes)) {
@@ -251,7 +264,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
               if (pending.eventId !== event?.id) return true
             }
           }
-          if (outcome.code === 'unconfirmed' && !pending.retry && safeRetry && card.id === checkpoint.cardId &&
+          if (outcome.code === 'unconfirmed' && !pending.retry && attempts < stepAttemptLimit && safeRetry && card.id === checkpoint.cardId &&
             event?.id === pending.eventId && (!event.expiresAt || Date.parse(event.expiresAt) > now())) {
             const unconfirmed = (pending.unconfirmed ?? 0) + 1
             const retry = unconfirmed >= 2
@@ -294,7 +307,13 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
         if (!resumed) processed++
         for (const step of steps) {
           const input = identify(step, event, card.status, checkpoint.statusVersion)
-          const pending = { eventId, input, actor: event.actor, before: cardState(card) }
+          const rejectedAttempts = checkpoint.rejectedSteps?.[input.operation_id] ?? 0
+          if (rejectedAttempts >= stepAttemptLimit) {
+            await log('rejected-cap-reached', input.operation_id)
+            stopped = true
+            break
+          }
+          const pending = { eventId, input, actor: event.actor, before: cardState(card), rejectedAttempts }
           checkpoint = { ...checkpoint, cursor: history.cursor, pending }
           history = { ...history, changes: [] }
           await save(key, checkpoint)

@@ -56,7 +56,7 @@ function classify(id: string, task: Task | undefined, row: Backlog | undefined, 
   const attempt = task?.[tswEvidence]
   const terminal = [source, attempt].find(s => s?.merged || s?.completion === 'merged' || s?.completion === 'done')
   const pull = pullUrl(terminal?.pull) ?? pullUrl(task?.pr.url) ?? pullUrl(source?.pull) ?? pullUrl(attempt?.pull)
-  const mergedState = /^(?:(?:run passed|checks green): )?PR merged(?:\b|:)/i.test(detail)
+  const mergedState = detail === 'checks green: PR merged (ci monitor ended)' || /^(?:run passed: )?PR merged(?:\b|:)/i.test(detail)
   const mergedEvent = verb === 'merged' || verb === 'landed' || verb === 'done' &&
     /^(?:merged\b|landed\b|PR https:\/\/github\.com\/\S+\/pull\/\d+ merged\b)/i.test(summary ?? '')
   if (terminal || mergedState || mergedEvent) {
