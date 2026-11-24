@@ -825,6 +825,12 @@ it.each([false, true])('records and queues a verified Jira handoff after create 
   const nativeCandidate = { ...input, target: { ...input.target, candidate_ids: ['jira:sample.atlassian.net:10001:60001'] } }
   expect(validate(nativeCandidate)).toBe(false)
   expect(await first.client.callTool({ name: 'submit_handoff', arguments: nativeCandidate })).toMatchObject({ isError: true })
+  const nativeId = nativeCandidate.target.candidate_ids[0]
+  const existingTarget = { ...input, target: { card_id: nativeId } }
+  expect(validate(existingTarget)).toBe(true)
+  const nativeParent = { ...input, target: { card_id: 'a'.repeat(32) }, parent_card_id: nativeId }
+  expect(validate(nativeParent)).toBe(false)
+  expect(await first.client.callTool({ name: 'submit_handoff', arguments: nativeParent })).toMatchObject({ isError: true })
   for (const provider of ['jira', 'notion']) {
     const argumentsWithProvider = { ...input, target: { ...input.target, provider } }
     expect(validate(argumentsWithProvider)).toBe(false)

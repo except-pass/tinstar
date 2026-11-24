@@ -94,7 +94,6 @@ export const createWorkSchema = z.object({ operation_id: z.string().min(1).max(1
   properties: ordinaryPropertiesSchema.omit({ Name: true, Area: true }).optional(), content: contentSchema.optional(),
 }).strict()
 export type CreateWorkInput = z.infer<typeof createWorkSchema>
-const handoffCardId = z.union([cardIdSchema, jiraWorkIdSchema])
 const jiraCreationTargetMessage = 'Jira is the only creation target. Use provider "jira".'
 export const jiraCreationProvider = z.literal('jira', { errorMap: () => ({ message: jiraCreationTargetMessage }) })
 const reference = z.string().url().max(2048).refine(value => /^https?:/.test(value), 'Use a durable HTTP reference')
@@ -102,12 +101,12 @@ export const submitHandoffSchema = z.object({
   lease_token: leaseTokenSchema,
   submission_id: identity.refine(value => value.length <= 128, 'Maximum 128 characters'),
   target: z.union([
-    z.object({ card_id: handoffCardId }).strict(),
+    z.object({ card_id: z.union([cardIdSchema, jiraWorkIdSchema]) }).strict(),
     z.object({ external_ref: identity.refine(value => value.length <= 512, 'Maximum 512 characters'), candidate_ids: z.array(cardIdSchema).max(20).default([]) }).strict(),
   ]),
   title: label, area: label, owner: label,
   initiative: ordinaryPropertiesSchema.shape.Initiative, epic: ordinaryPropertiesSchema.shape.Epic,
-  priority: label.optional(), parent_card_id: handoffCardId.optional(),
+  priority: label.optional(), parent_card_id: cardIdSchema.optional(),
   objective: z.string().min(1).max(12000), spec_markdown: z.string().min(1).max(1000000),
   acceptance_criteria: z.array(z.string().min(1).max(100000)).min(1).max(200),
   decisions: z.array(z.string().min(1).max(100000)).max(200),
