@@ -3,11 +3,13 @@ import { once } from 'node:events'
 import { mkdtemp, readFile, realpath, rmdir } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { parseArgs } from 'node:util'
 import { observeHome, sourcesFor } from './firstmate.js'
 import { Journal, JournalConfigurationError } from './journal.js'
 import { jiraConfig, JiraWebhookConfigurationError, startJiraWebhook } from './jira.js'
+import { migrationReceipt, MigrationReceiptError, routingReplayCheck } from './routing.js'
 
 const usage = `Usage
   events serve --config <file> [--interval <seconds>]
@@ -16,9 +18,11 @@ const usage = `Usage
   events replay [--last <count> | --after <sequence>] [filters] [--json]
   events inspect <event-id>
   events sources
+  events record-migration <receipt.json>
+  events routing-metrics-input < routing-observations.jsonl
 
 Filters
-  --source firstmate|jira    --type task|worker|ticket    --entity <entity-id>
+  --source firstmate|jira|routing    --type task|worker|ticket|mate    --entity <entity-id>
 All commands accept --db <path>. The default is ~/srv/event-publisher/journal.sqlite.
 EVENTS_DB and EVENTS_CONFIG provide defaults for --db and --config.`
 
@@ -41,6 +45,8 @@ const commandOptions = {
   replay: ['after', 'last', 'source', 'type', 'entity', 'json'],
   inspect: [],
   sources: [],
+  'record-migration': [],
+  'routing-metrics-input': [],
 }
 const pageSize = 200
 
@@ -203,6 +209,12 @@ function eventText(event, replay, health) {
     const projection = omissions?.length ? ` · partial projection (${omissions.join(', ')})` : ''
     return `${time} ${replay ? '[replay] ' : ''}jira/ticket ${reference.issue_key} · ${jiraEventLabel(event)}${projection} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
   }
+  if (source.provider === 'routing') {
+    const context = route => `${route.machine}/${route.runtime}/${route.provider}`
+    const labels = [replay && 'replay', source.mode === 'fixture' && 'controlled proof'].filter(Boolean)
+    const prefix = labels.length ? `[${labels.join('/')}] ` : ''
+    return `${time} ${prefix}routing/mate ${subject.id} · ${context(change.before)} → ${context(change.after)} · effective ${event.effective_start_at} · #${event.sequence} ${event.event_id}`
+  }
   const compact = [reference.task_id, reference.spawn_gen].filter(Boolean).join('@')
   let meaning = change.field
     ? Object.hasOwn(change, 'before')
@@ -259,6 +271,36 @@ async function watch(journal, after, filters, json) {
   }
 }
 
+async function readMigration(path) {
+  let input
+  try {
+    input = JSON.parse(await readFile(path, 'utf8'))
+  } catch {
+    throw new UsageError('cannot read the migration receipt as JSON')
+  }
+  return migrationReceipt(input, new Date().toISOString())
+}
+
+async function routingMetricsInput(journal) {
+  const replayWarning = routingReplayCheck(journal.migrationReceipts())
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
+  let lineNumber = 0
+  for await (const line of lines) {
+    lineNumber++
+    if (!line.trim()) continue
+    let row
+    try {
+      row = JSON.parse(line)
+    } catch {
+      console.error(JSON.stringify({ warning: 'routing.invalid_json', line: lineNumber }))
+      continue
+    }
+    const warning = replayWarning(row)
+    if (warning) console.error(JSON.stringify(warning))
+    else if (!process.stdout.write(line + '\n')) await once(process.stdout, 'drain')
+  }
+}
+
 async function main() {
   let args
   try {
@@ -271,7 +313,8 @@ async function main() {
     console.log(usage)
     return
   }
-  if (!Object.hasOwn(commandOptions, command) || extra.length || (command === 'inspect') !== Boolean(detail)) {
+  if (!Object.hasOwn(commandOptions, command) || extra.length ||
+      ['inspect', 'record-migration'].includes(command) !== Boolean(detail)) {
     throw new UsageError('invalid command or arguments')
   }
   for (const key of Object.keys(values)) {
@@ -279,17 +322,18 @@ async function main() {
       throw new UsageError(`--${key} is unsupported for ${command}`)
     }
   }
-  if (values.type !== undefined && !['task', 'worker', 'ticket'].includes(values.type)) throw new UsageError('--type must be task, worker or ticket')
+  if (values.type !== undefined && !['task', 'worker', 'ticket', 'mate'].includes(values.type)) throw new UsageError('--type must be task, worker, ticket or mate')
   if (values.after !== undefined && values.last !== undefined) throw new UsageError('choose --after or --last')
   const after = values.after === undefined ? undefined : integer(values.after, '--after', 0)
   const last = integer(values.last ?? '100', '--last', 1)
-  if (values.source !== undefined && !['firstmate', 'jira'].includes(values.source)) throw new UsageError('--source must be firstmate or jira')
+  if (values.source !== undefined && !['firstmate', 'jira', 'routing'].includes(values.source)) throw new UsageError('--source must be firstmate, jira or routing')
   const filters = { type: values.type, entity: values.entity, provider: values.source }
   const path = resolve(values.db ?? process.env.EVENTS_DB ?? join(homedir(), 'srv/event-publisher/journal.sqlite'))
-  const writer = command === 'serve' || command === 'observe'
+  const collector = command === 'serve' || command === 'observe'
   const interval = command === 'serve' ? integer(values.interval ?? '20', '--interval', 15) : null
   if (interval > 3600) throw new UsageError('--interval must be at most 3600 seconds')
-  const config = writer ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
+  const config = collector ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
+  const migration = command === 'record-migration' ? await readMigration(detail) : null
   const secret = process.env.EVENTS_JIRA_WEBHOOK_SECRET
   const readToken = process.env.EVENTS_JIRA_READ_TOKEN
   // First Mate polling starts subprocesses. Keep Jira credentials in this process.
@@ -299,11 +343,15 @@ async function main() {
     throw new UsageError('set EVENTS_JIRA_WEBHOOK_SECRET from the Jira admin webhook secret')
   }
   if (command === 'observe' && !config.homes.length) throw new UsageError('use events serve to receive Jira webhooks')
-  const journal = new Journal(path, { readOnly: !writer })
+  const journal = new Journal(path, { readOnly: !collector && !migration })
   try {
-    if (writer) {
+    if (collector) {
       const healthy = await collect(journal, config, interval, secret, readToken)
       if (command === 'observe' && !healthy) process.exitCode = 1
+    } else if (migration) {
+      console.log(JSON.stringify(journal.recordMigration(migration)))
+    } else if (command === 'routing-metrics-input') {
+      await routingMetricsInput(journal)
     } else if (command === 'watch') {
       await watch(journal, after, filters, values.json)
     } else if (command === 'inspect') {
@@ -312,7 +360,8 @@ async function main() {
       console.log(JSON.stringify(event, null, 2))
     } else if (command === 'sources') {
       for (const source of journal.sources()) {
-        const last = source.provider === 'jira' ? 'last signed delivery' : 'last accepted inventory'
+        const last = source.provider === 'jira' ? 'last signed delivery' : source.provider === 'routing'
+          ? 'last recorded migration' : 'last accepted inventory'
         console.log(`${healthText(source)} · last attempt ${age(source.last_attempt_at)} · ${last} ${age(source.last_success_at)}`)
       }
     } else {
@@ -337,9 +386,10 @@ process.stdout.on('error', error => {
 try {
   await main()
 } catch (error) {
-  const message = error instanceof UsageError || error instanceof JournalConfigurationError || error instanceof JiraWebhookConfigurationError ? error.message
+  const usageError = error instanceof UsageError || error instanceof MigrationReceiptError
+  const message = usageError || error instanceof JournalConfigurationError || error instanceof JiraWebhookConfigurationError ? error.message
     : error.code === 'ERR_SQLITE_ERROR' ? 'cannot access the journal; check its path, permissions and writer'
     : 'publisher failed; check the journal path and permissions'
   console.error(`events: ${message}`)
-  process.exitCode = error instanceof UsageError ? 2 : 1
+  process.exitCode = usageError ? 2 : 1
 }

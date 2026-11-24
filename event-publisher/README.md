@@ -1,8 +1,8 @@
 # Event Publisher
 
-A standalone, read-only observer for First Mate tasks, worker incarnations and
-signed Jira ticket changes. All sources share one SQLite journal and terminal
-reader.
+A standalone publisher for First Mate task and worker observations, signed
+Jira ticket changes, and operator-recorded mate migrations. All sources share
+one SQLite journal and terminal reader.
 
 ## Start on the farm host
 
@@ -177,6 +177,68 @@ events sources
 Run `npm test -- --test-concurrency=2` from this directory. The Jira tests use synthetic deliveries and a temporary journal. They cover the loopback boundary, HMAC, redaction, transaction rollback,
 restart and replay. Validate native issue, comment and link delivery coverage
 against the actual project before accepting the integration.
+
+## Record a mate migration
+
+Use a stable `mate_id` that stays the same across machine, runtime, and provider
+changes. The effective start is when the destination began handling work. Give
+it a timezone and cite the operator, handoff, or source record that establishes
+the change. Use the existing service account's journal access.
+
+The following receipt is a controlled example. Save it as `receipt.json` and
+use a separate private journal for the example.
+
+```json
+{
+  "mate_id": "controlled-hulk-worker",
+  "old": { "machine": "Hulk", "runtime": "Cursor", "provider": "Grok" },
+  "new": { "machine": "Hulk", "runtime": "Codex", "provider": "OpenAI" },
+  "effective_start_at": "2026-11-23T19:34:00Z",
+  "recorded_by": "example-operator",
+  "source_reference": "controlled proof",
+  "controlled": true
+}
+```
+
+```sh
+proof_dir=$(mktemp -d)
+events record-migration receipt.json --db "$proof_dir/journal.sqlite"
+events replay --db "$proof_dir/journal.sqlite" --source routing --type mate --after 0 --json
+```
+
+The command returns the durable `mate.migration.recorded` receipt. The mate ID,
+old and new contexts, and normalized effective instant determine the event ID.
+Repeating the command returns the original receipt with its first provenance
+and observation time. For actual migrations, omit `controlled` and supply the
+real operator and source reference. Use a source identifier or link without
+credentials.
+
+### Exclude replayed routing timestamps from metrics
+
+The routing report's activity ledger is maintained outside this repository.
+Pass its attributed observations as JSON Lines to `routing-metrics-input`
+before selecting first-ready observations, counting events, or calculating
+durations. Each row can carry the report's original fields. The filter uses
+`observation_id`, `mate_id`, `route` (machine, runtime, provider), and
+`occurred_at` (the original timestamp for the metric, with a timezone).
+
+```json
+{"observation_id":"controlled-ready-replay","mate_id":"controlled-hulk-worker","route":{"machine":"Hulk","runtime":"Codex","provider":"OpenAI"},"occurred_at":"2026-11-23T19:33:59Z"}
+{"observation_id":"controlled-ready-current","mate_id":"controlled-hulk-worker","route":{"machine":"Hulk","runtime":"Codex","provider":"OpenAI"},"occurred_at":"2026-11-23T19:34:00Z"}
+```
+
+```sh
+events routing-metrics-input --db "$proof_dir/journal.sqlite" < routing-observations.jsonl
+```
+
+The first row yields a JSON warning on stderr with its identity, original
+time, and the cutoff and receipt ID. The second row passes through to stdout.
+The filter uses the latest effective start for the exact mate and destination
+route, even when receipts were recorded out of order. Rows with another route
+or insufficient attribution pass through for the report's existing handling.
+Blank lines are ignored. Invalid JSON produces a line-number warning and the
+filter continues. The filter opens the journal read-only and leaves the
+activity ledger intact.
 
 ## Re-observe and troubleshoot
 
