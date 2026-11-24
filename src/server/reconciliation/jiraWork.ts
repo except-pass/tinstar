@@ -405,7 +405,7 @@ export class JiraWork extends JiraClient {
   }
 
   private async mutate<T extends (ReturnType<JiraWork['saved']> & { message?: string }) | { outcome: 'card-canceled' }>(
-    verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<T>, retryRateLimit = false,
+    verb: string, input: WriteInput, actor: string, run: (attempt: Attempt) => Promise<T>, retryRateLimit = false, preflight?: () => Promise<unknown>,
   ) {
     const key = this.receiptKey(actor, input.operation_id)
     const marker = `tinstar.work.${digest(key)}`
@@ -414,6 +414,15 @@ export class JiraWork extends JiraClient {
     const cardId = 'card_id' in input ? input.card_id : undefined
     let unlock: Awaited<ReturnType<typeof acquireLock>> | undefined
     try {
+      let preflightComplete = false
+      if (preflight) {
+        const prior = await this.receipts.get(key)
+        if (prior && prior.input !== verb) throw new JiraWorkInputError('Operation ID was used for another operation kind')
+        if (!prior?.jiraWork?.dispatched && !prior?.jiraWork?.outcome) {
+          await preflight()
+          preflightComplete = true
+        }
+      }
       await mkdir(this.root, { recursive: true, mode: 0o700 })
       // Link and blocker edits share a lock so two local callers cannot create
       // conflicting primaries or overwrite an answer derived from the same read.
@@ -424,6 +433,7 @@ export class JiraWork extends JiraClient {
       if (prior?.jiraWork?.outcome) return prior.jiraWork.outcome
       const dispatched = prior?.jiraWork?.dispatched === true
       pending = dispatched
+      if (preflight && !dispatched && !preflightComplete) throw new JiraWorkInputError('Jira dispatch changed during preflight. Retry the same operation.')
       if (!prior) await this.receipts.putJiraWork(key, verb, false)
       return await run({
         marker, dispatched,
@@ -568,7 +578,6 @@ export class JiraWork extends JiraClient {
         id = await this.findCreated(stamp)
         if (!id) throw new JiraWorkUnconfirmed('Jira search did not find the operation property')
       } else {
-        await beforeDispatch?.()
         await attempt.dispatch()
         const result = await this.request('issue', 'POST', {
           fields: {
@@ -597,7 +606,7 @@ export class JiraWork extends JiraClient {
         throw new JiraWorkUnconfirmed('Jira did not confirm the merge handoff fields and due date')
       }
       return attempt.confirm(issue)
-    }, !!mergeDueDate)
+    }, !!mergeDueDate, beforeDispatch)
   }
 
   private checkEdit(issue: Issue, input: JiraEdit, assigneeId: string | undefined) {
@@ -806,9 +815,7 @@ export class JiraWork extends JiraClient {
         const blocker = input.verb === 'Block' ? Boolean(this.blocker(issue)) : this.externalPresent(issue) || this.nativeBlockers(issue).length > 0
         return checkJiraTransition({ ...issue, blocker }, input)
       }
-      destination(await this.read(id))
       const response = await this.request(`issue/${id}/transitions`)
-      await handoffPreflight?.()
       const current = await this.read(id)
       const to = destination(current)
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
@@ -824,7 +831,7 @@ export class JiraWork extends JiraClient {
         throw new JiraWorkUnconfirmed('Jira ticket was canceled before the audit comment could be posted')
       }
       return attempt.confirm(await readDestination(to))
-    }, !!handoffPreflight)
+    }, !!handoffPreflight, handoffPreflight)
   }
 
   private async resolveLinkTarget(key: string) {

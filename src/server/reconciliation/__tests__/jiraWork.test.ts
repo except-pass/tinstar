@@ -493,6 +493,28 @@ it('queues one Jira admin-merge handoff and lets Clawson pick up, comment and re
   expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue')).toHaveLength(1)
 })
 
+it('allows unrelated Jira writes while release preflight is waiting', async () => {
+  const f = await fixture()
+  const { call, sources } = await f.connect()
+  const unrelated = f.make('60101', 'WORK-101', config.projectId)
+  f.issues.set(unrelated.id, unrelated)
+  let entered!: () => void, resume!: () => void
+  const enteredPreflight = new Promise<void>(resolve => { entered = resolve })
+  const paused = new Promise<void>(resolve => { resume = resolve })
+  const prepare = vi.fn(mergePlan).mockImplementationOnce(mergePlan).mockImplementationOnce(async () => {
+    entered()
+    await paused
+    return mergePlan()
+  })
+  const handoff = sources.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)
+  try {
+    await enteredPreflight
+    expect(await call('update_work', { kind: 'jira_edit', operation_id: 'unrelated-note',
+      card_id: 'jira:sample.atlassian.net:10001:60101', note: 'Unrelated pickup acknowledged.' })).toMatchObject({ outcome: 'saved' })
+  } finally { resume() }
+  expect(await handoff).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
+})
+
 it('rechecks an undispatched merge handoff and rejects changed fields before Fast-track', async () => {
   const f = await fixture()
   const { sources } = await f.connect()
@@ -1365,7 +1387,9 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   expect(invalid).toMatchObject({ outcome: 'not-saved', code: 'invalid-work' })
   const beforeRefusedRetry = f.requests.length
   expect(await restarted.call('transition_work', refused)).toEqual(invalid)
-  expect(f.requests.slice(beforeRefusedRetry).map(request => request.method)).toEqual(['GET', 'GET'])
+  expect(f.requests.slice(beforeRefusedRetry).map(request => [request.method, request.path])).toEqual([
+    ['GET', 'issue/60001/transitions'], ['GET', 'issue/60001'], ['GET', 'issue/60001'],
+  ])
   expect(await moveAgain('stop', 'Stop and Requeue', { disposition: 'The previous test process exited.', evidence: 'The reproduction and assertions are ready.' })).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
   expect(await moveAgain('start-again', 'Start', { evidence: 'The reproduction started.' })).toMatchObject({ outcome: 'saved' })
   expect(await moveAgain('direct', 'Complete Directly', { evidence: 'The reproduction passed. No review or production change remains.' })).toMatchObject({ outcome: 'saved', card: { status: 'Done' } })
