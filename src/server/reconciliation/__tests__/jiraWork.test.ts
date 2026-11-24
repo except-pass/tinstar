@@ -549,15 +549,31 @@ it.each(['creation', 'transition'])('recovers an admin-merge handoff after losin
     expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({ code: 'queue-unconfirmed' })
     expect(f.issues.get('60001')?.fields.status.name).toBe('Backlog')
     prepare.mockImplementation(mergePlan)
-  } else {
-    const issue = f.issues.get('60001')!
-    issue.fields.status = { name: 'In Progress' }
-    issue.fields[config.fields.owner] = { value: 'Firstmate' }
   }
   expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({
-    outcome: 'saved', card: phase === 'creation' ? { status: 'Queued', owner: 'Clawson' } : { status: 'In Progress', owner: 'Firstmate' },
+    outcome: 'saved', card: { status: 'Queued', owner: 'Clawson' },
   })
   expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue')).toHaveLength(1)
+  expect(f.requests.filter(request => request.method === 'POST' && request.path.endsWith('/transitions'))).toHaveLength(1)
+})
+
+it.each(['Backlog', 'Queued', 'In Progress'])('keeps a handoff unconfirmed after a lost transition with %s readback', async status => {
+  const f = await fixture()
+  const { sources } = await f.connect()
+  if (status === 'Backlog') f.controls.beforeWrite = 'POST issue/60001/transitions'
+  else f.controls.loseEdit = true
+  expect(await sources.workflow.createClawsonMerge(mergeSelection, mergeActor, mergePlan)).toMatchObject({ outcome: 'partially-saved' })
+  const issue = f.issues.get('60001')!
+  if (status !== 'Backlog') {
+    issue.fields[config.fields.owner] = { value: 'Firstmate' }
+    issue.fields.status = { name: status }
+  }
+  const { sources: restarted } = await f.connect()
+  const prepare = vi.fn(mergePlan)
+  expect(await restarted.workflow.createClawsonMerge(mergeSelection, mergeActor, prepare)).toMatchObject({
+    outcome: 'partially-saved', code: 'queue-unconfirmed',
+  })
+  expect(prepare).not.toHaveBeenCalled()
   expect(f.requests.filter(request => request.method === 'POST' && request.path.endsWith('/transitions'))).toHaveLength(1)
 })
 

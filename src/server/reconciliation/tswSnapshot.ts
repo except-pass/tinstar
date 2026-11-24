@@ -2,7 +2,6 @@ import { parseDispatchProvenance, type DispatchProvenance } from './dispatchProv
 import { record, text } from './values'
 
 export const tswProjectId = '10639'
-export const tswReviewer = 'William Gathright'
 export const tswKey = (value: string) => /^TSW-[1-9]\d*$/.test(value) ? value : null
 export const tswEvidence = Symbol('TSW status evidence')
 type Evidence = {

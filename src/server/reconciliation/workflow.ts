@@ -575,6 +575,8 @@ export class WorkflowOperations {
           try { await prepare() } catch (error) { throw new JiraWorkInputError((error as Error).message) }
         })
         if (!('card' in queued)) return result('partially-saved', 'queue-unconfirmed', `The Jira ticket exists, but pickup is unconfirmed. ${queued.message}`, savedFields)
+        if (!matches(queued.card)) return result('partially-saved', 'queue-unconfirmed',
+          'The Jira ticket exists, but pickup is unconfirmed. The handoff fields changed. Check the ticket.', ['card'])
         card = queued.card
         await this.creations.put(key, signature, card.id)
         this.onRecordedChange?.(card.id)

@@ -97,9 +97,10 @@ The button shows the Jira ticket link and preserves the selection. Retry the
 same click if creation or queueing remains unconfirmed. Tin Star uses the Jira
 operation property to find an already-created ticket. Before releasing the
 ticket to Clawson for the first time, Tin Star checks current PR state again.
-A recorded release remains delivered after the ticket changes hands. If Jira
-rate-limits a write, retry the same click once the limit clears. Tin Star does
-not execute the merge commands.
+A retry confirms release only while the ticket still shows the approved handoff
+fields and Queued status. If the ticket has already changed hands, check it
+in Jira. If Jira rate-limits a write, retry the same click once the limit clears.
+Tin Star does not execute the merge commands.
 
 A First Mate suggested action with the optional `merge` target documented in the
 [Ask reply format](features/ask.md#outbound-only-mac-puller) uses this same handoff

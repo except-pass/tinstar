@@ -792,7 +792,6 @@ export class JiraWork extends JiraClient {
         return issue
       }
       if (attempt.dispatched) {
-        if (handoffPreflight) return attempt.confirm(await this.read(id))
         const destination = jiraTransitionDestination(input)
         if (!destination) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
         try {
@@ -819,7 +818,6 @@ export class JiraWork extends JiraClient {
       await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id } }).catch(error => {
         if (!note || isWriteRejection(error)) throw error
       })
-      if (handoffPreflight) return attempt.confirm(await this.read(id))
       const saved = await readDestination(to)
       if (!note) return attempt.confirm(saved)
       if (!await this.postTransitionAudit(id, note, deferAudit)) {
