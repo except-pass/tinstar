@@ -1,8 +1,9 @@
 # Coordinator-side worker-link writer design
 
-Status: the narrow coordinator CLI is implemented as
-`npm run worker-links:adapter`. Tin Star's server, browser and MCP remain
-read-only. Live rollout and the real Notion-to-gutter acceptance proof belong to
+The coordinator CLI implements this Notion worker-link design through
+`npm run worker-links:adapter`. Tin Star's server, browser and MCP keep
+these worker links read-only. The same CLI also supports [First Mate status sync for Jira](features/jira-work.md#first-mate-status-sync).
+Live rollout and the real Notion-to-gutter acceptance proof belong to
 First Mate after merge; automated tests use fake Notion responses only.
 
 ## Approved dispatch provenance
@@ -51,9 +52,8 @@ other credential holders from concurrent relationship edits during the pilot.
 There is no Notion compare-and-swap or distributed lock. Per-card ordering cannot
 protect against an external editor changing the property after its reread.
 
-Default mode only collects and reports. `--apply` explicitly authorizes writes
-under the [adapter repair rules](notion-worker-links.md#coordinator-adapter)
-and requires both a token **file path** and `--max-cards 1..5`.
+See the [Notion adapter reference](notion-worker-links.md#coordinator-adapter)
+for report-only and apply options.
 It processes one card at a time, adding at most ten worker references per run.
 Filters and batch limits queue remaining decisions for another invocation.
 
@@ -103,8 +103,8 @@ contains candidate IDs, source field paths and freshness for the coordinator's
 existing supervision workflow. Repeated evidence routes to that same item until
 First Mate closes the episode after verified disposition/readback and refreshed
 Tin Star evidence. Investigation handoff and deduplication also belong to that coordinator workflow,
-not this CLI. The adapter emits routing records; it does not create cards,
-change progress, send nudges or add a privileged MCP path.
+not this CLI. The Notion writer emits routing records and limits its writes to
+the worker-link property.
 
 The owner-only next step is First Mate's reviewed report-only run, followed by a
 bounded apply using its credential and a recorded ordinary Tin Star refresh.

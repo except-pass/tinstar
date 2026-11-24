@@ -246,7 +246,7 @@ export class ReconciliationSources {
     if (force) { entry.until = 0; if (entry.pending) entry.again = true }
     if (!entry.pending && Date.now() >= entry.until) {
       entry.failed = false
-      entry.pending = this.queue(req, undefined, false, 'reconcile', authorized).then(value => { if (!entry.again) entry.value = value }, () => { entry.failed = true }).finally(() => {
+      entry.pending = this.queue(req, undefined, false, 'reconcile', authorized ? 'full' : undefined).then(value => { if (!entry.again) entry.value = value }, () => { entry.failed = true }).finally(() => {
         entry.pending = undefined
         entry.until = entry.again ? 0 : Date.now() + 20_000
         entry.again = false
@@ -490,7 +490,7 @@ export class ReconciliationSources {
    * Reuse the display's shared refresh for recovery and review prose; exact
    * workflow writes still perform their own fresh source/lease checks. */
   async workViews() {
-    const queue = await this.queue(undefined, undefined, true, 'read', true)
+    const queue = await this.queue(undefined, undefined, true, 'read', 'summary')
     // A fresh tool census can observe source closure outside this process.
     // Do not serve a pre-answer display or publish an older in-flight refresh.
     this.invalidateQueueDisplays()
@@ -590,13 +590,13 @@ export class ReconciliationSources {
     return read
   }
 
-  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile', withOwnerReady = false) {
+  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile', ownerReady?: 'summary' | 'full') {
     let reviewWarning: string | null = null
     const reviewRecoveries = mode === 'reconcile' ? await this.workflow.reconcileReviews().catch(() => null) : null
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
     if (mode === 'reconcile') try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = !!await this.authorizePulls?.(req)
-    const jiraOwnerRead = withOwnerReady ? this.jiraWork?.ownerRequests.get(force) : undefined
+    const jiraOwnerRead = ownerReady ? this.jiraWork?.ownerRequests.get(force) : undefined
     const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile'), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => (!requestKey || item.id === requestKey) && item.kind === 'merge')
@@ -698,11 +698,13 @@ export class ReconciliationSources {
     const histories = new Map(ids.map(id => [id, contexts.get(id)?.blocks ?? []]))
     const publications = (await Promise.all(queue.items.map(item => this.proposalSource.forRequest(item.id, item.cardIds, histories)))).flat()
     queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized, publications)
-    if (withOwnerReady) {
+    if (ownerReady) {
       const jira = await jiraOwnerRead
       const ownerContexts = new Map(contexts)
-      const supplementalIds = this.orderOwnerHistories(ownerCards(snapshot).map(card => card.id)
-        .filter(id => !ordinaryHistoryIds.includes(id)), this.supplementalOwnerHistoryCursor).slice(0, 5)
+      const supplementalIds = ownerReady === 'full'
+        ? this.orderOwnerHistories(ownerCards(snapshot).map(card => card.id)
+          .filter(id => !ordinaryHistoryIds.includes(id)), this.supplementalOwnerHistoryCursor).slice(0, 5)
+        : []
       if (supplementalIds.length) {
         this.supplementalOwnerHistoryCursor = supplementalIds.at(-1)
         let timer: ReturnType<typeof setTimeout> | undefined

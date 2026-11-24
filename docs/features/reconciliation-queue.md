@@ -38,7 +38,9 @@ as resolved while durable audit confirmation finishes in the background.
 
 The owner can expand **Owner-ready by repository** in Decisions Workbench
 while Main is unavailable. The same source grouping is available in
-`get_work_views.ownerReady`. With the existing MCP PR-read grant,
+`get_work_views.ownerReady` using the ordinary 20-card history budget.
+Decisions reserves up to five additional history reads for the bundle.
+With the existing MCP PR-read grant,
 `list_prs({ view: "owner-ready" })` adds live forge evidence. Select
 **Recheck current requests** in Decisions or call
 `list_prs({ view: "owner-ready", recheck: true })` when Main returns.

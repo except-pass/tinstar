@@ -86,7 +86,14 @@ export class DomainReadTools {
 }
 
 export function registerDomainReadTools(server: ToolRegistrar, readers?: DomainReadTools, request?: IncomingMessage) {
-  server.registerTool('list_prs', { description: 'Read the scoped open PR inventory used by PR Operations. Use view owner-ready for the Decisions Workbench repository bundles with scoped live heads and readiness. Set recheck true with that view for one read-only return reconciliation of current requests. Requires a configured grant verifying installation and caller credentials for an existing owner.', inputSchema: { offset: pagination.offset.removeDefault().optional(), limit: pagination.limit.removeDefault().optional(), view: z.literal('owner-ready').optional(), recheck: z.boolean().optional() }, annotations: readAnnotations }, async input => result(readers ? await readers.listPulls(input, request) : unauthorized))
+  const ownerOptions = { view: z.literal('owner-ready').optional(), recheck: z.boolean().optional() }
+  server.registerTool('list_prs', {
+    description: 'Read the scoped open PR inventory used by PR Operations. Pagination applies to ordinary inventory only. Use view owner-ready for the Decisions Workbench repository bundles with scoped live heads and readiness. Set recheck true with that view for one read-only return reconciliation of current requests. Requires a configured grant verifying installation and caller credentials for an existing owner.',
+    discoverySchema: { ...pagination, ...ownerOptions },
+    // Apply inventory defaults in listPulls so owner-ready can reject explicitly supplied pagination.
+    inputSchema: { offset: pagination.offset.removeDefault().optional(), limit: pagination.limit.removeDefault().optional(), ...ownerOptions },
+    annotations: readAnnotations,
+  }, async input => result(readers ? await readers.listPulls(input, request) : unauthorized))
   server.registerTool('get_pr', { description: 'Inspect one PR URL at its captured head using shared PR Operations detail/check/review/file and attribution readers. Refresh list_prs after a head change. Partial/stale evidence is not merge readiness. No patches or terminal transcripts. Requires a configured verified owner binding.', inputSchema: { url: pullUrl, head: z.string().regex(/^[a-f0-9]{40,64}$/), include_files: z.boolean().default(false), ...pagination }, annotations: readAnnotations }, async input => result(readers ? await readers.getPull(input, request) : unauthorized))
   server.registerTool('get_release_status', { description: 'Read the Releases PR-first queue, shared card links, production receipt/ancestry reconciliation and opt-in verification requirements. Missing/stale/partial evidence stays explicit and never proves shipment. offset/limit paginate native releases, pulls, card exceptions, eligibility cards and targets independently. Published production release membership is distinct from deployment proof. Read-only.', inputSchema: pagination, annotations: readAnnotations }, async input => result(readers ? await readers.releaseStatus(input) : { outcome: 'unavailable', message: 'Release reader unavailable; queue and production status are unknown.' }))
 }
