@@ -89,16 +89,14 @@ Replay notices go to stderr so the JSON payloads stay identical.
 
 ## Observe cmsandbox production tags
 
-On Hulk, add `"cmsandboxTags": true` inside the existing `github` configuration
-object. Keep its other keys. The observer uses the service account's existing
+On Hulk, set `"github": { "cmsandboxTags": true }` in the publisher configuration.
+Keep any other keys already in `github`. This source can run on its own or
+alongside other sources. The observer uses the service account's existing
 authenticated `gh` CLI with read access to `fortresspower/cmsandbox`. It reads
 all pages of GitHub's tag catalog and keeps refs named `vMAJOR.MINOR.PATCH`.
 It polls on startup and every 90 seconds after a pass, independently of fleet
 reads. It uses conditional GETs and shares the linked-PR observer's quota
-reserve and backoff. Hulk’s deployed service journal is
-`~/srv/event-publisher/data/journal.sqlite`. The standalone setup above uses
-`~/srv/event-publisher/journal.sqlite`. The [Main wake check](cmsandbox-tag-wake.md)
-defaults to the deployed service journal.
+reserve and backoff.
 
 The first complete inventory records all current tags as a silent baseline.
 Restarting with the same inventory produces no new events. Subsequent
@@ -117,11 +115,14 @@ when evidence changes for that exact tag and SHA. PR evidence identifies the
 consecutive tag range and any separately confirmed ancestry for card-linked
 PRs. Card links come from the projection's verified active associations, and
 component runs include the attempt, workflow status and freshness. Incomplete
-reads retain last-known entries. Complete coverage can correct earlier evidence.
-The publisher checks at most one due tag per pass and checks completed evidence
-less often.
+reads retain last-known entries where the source has no conclusive update.
+Retained runs are marked `last_known` when fresh run evidence is unavailable.
+The publisher checks at most one due push whose tag and SHA still match the
+latest inventory and whose tag has no pending absence. Due enrichment continues
+when an inventory read fails, and `events sources` still reports the inventory
+failure. Complete evidence with finished runs is checked less often.
 A tag and its Actions runs describe release activity. PROD delivery requires
-separate verification.
+separate verification. The observer only writes to the journal.
 
 ```sh
 events sources

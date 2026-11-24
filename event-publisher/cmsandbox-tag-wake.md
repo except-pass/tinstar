@@ -12,20 +12,18 @@ and read access through the installed `events replay` CLI.
 | `TAG_WAKE_REMOTE_DB` | `/home/farm/srv/event-publisher/data/journal.sqlite` |
 | `TAG_WAKE_CURSOR` | `cmsandbox-tag-wake.cursor` alongside the installed check |
 
-The database default is Hulk’s deployed service journal at
-`~/srv/event-publisher/data/journal.sqlite` under the Hulk service account.
-For a standalone publisher using `~/srv/event-publisher/journal.sqlite`,
-set `TAG_WAKE_REMOTE_DB` to that journal’s absolute path on Hulk.
+The database default is Hulk’s deployed service journal. For a standalone
+publisher, set `TAG_WAKE_REMOTE_DB` to the absolute journal path configured on
+Hulk. See the [standalone setup](README.md#start-on-the-farm-host).
 
 The cursor is a single decimal sequence in the Hulk journal. Give the check a
 writable cursor directory. With no cursor file, the check reads after sequence
-zero. The first complete inventory establishes a silent baseline. Startup and
-restart with an unchanged inventory produce no new wake lines. To start replay
-at a later point against an existing journal, put the last acknowledged
-sequence in the cursor file before enabling the check.
+zero. To start replay at a later point against an existing journal, put the last
+acknowledged sequence in the cursor file before enabling the check.
 
-Stdout has one line per observed `tag.pushed` event, in journal order. These lines
-report release activity before PROD delivery is verified.
+Stdout has one line per live cmsandbox `tag.pushed` event, in journal order.
+See the [tag observer contract](README.md#observe-cmsandbox-production-tags)
+for when the publisher records these events and what they signify.
 
 ```text
 tag pushed fortresspower/cmsandbox <tag> <commit-sha> <observed-at-UTC> <created|moved|restored> #<sequence>
