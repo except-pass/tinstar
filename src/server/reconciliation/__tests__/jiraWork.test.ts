@@ -93,7 +93,7 @@ async function fixture(projectId = config.projectId, withNotion = false) {
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
   const search = { directoryUnavailable: false, rateLimit: '', deniedRead: '', pageSize: 100, failFrom: Infinity, failureStatus: 503, indexed: new Map<string, Record<string, any>>() }
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
+  const controls = { loseCreate: false, loseEdit: false, loseStagingRead: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'unavailable' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   const attachments = new Map<string, unknown>()
@@ -306,6 +306,10 @@ async function fixture(projectId = config.projectId, withNotion = false) {
       }
       if (controls.delayedComment) {
         issue.comments.push({ id: 'delayed', body: controls.delayedComment, created: controls.delayedCommentTime || created, updated: controls.delayedCommentTime || created, author: { accountId: controls.delayedCommentAuthor } })
+      }
+      if (controls.loseStagingRead && !part && body.fields.duedate) {
+        controls.loseStagingRead = false
+        controls.beforeWrite = `GET issue/${issue.id}`
       }
       if (controls.loseEdit) { controls.loseEdit = false; throw new Error('Dropped issue write response') }
       return response(undefined, 204)
@@ -855,6 +859,45 @@ it('combines review signals from two mates after filtering an answered decision'
   await f.publishBackup([tswTask(key, detail)])
   const result = await f.run(true)
   expect(result.plans[0]?.event).toMatchObject({ target: 'Ready for Review', actor: 'Firstmate backup, Firstmate fleet' })
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Ready for Review' })
+})
+
+it('does not retire an undispatched mate wait after a separate service-account wait', async () => {
+  const f = await tswFixture()
+  const { card: { id: card_id, key } } = await f.create('unrelated wait')
+  const request = { verb: 'blocked', key: 'mate-wait', summary: `wait ${JSON.stringify(typedWait)}` }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [request] } })])
+  expect((await f.run(true, 1, '-waiting-for')).stopped).toBe(true)
+  const other = { ...typedWait, blocker: { ...typedWait.blocker, target: 'team:other' } }
+  expect(await f.call('transition_work', { card_id, operation_id: 'other-wait', verb: 'Block', ...other })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('update_work', { card_id, operation_id: 'clear', kind: 'jira_edit', blocker: null })).toMatchObject({ outcome: 'saved' })
+  expect(await f.call('transition_work', { card_id, operation_id: 'resolve', verb: 'Resolve Wait', to: 'To Do', evidence: 'Resolved.' }))
+    .toMatchObject({ outcome: 'saved' })
+  expect((await f.run(true)).stopped).toBe(false)
+  expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Waiting For', blocker: typedWait.blocker })
+})
+
+it('arbitrates equivalent reviews after skipping a staged decision Jira no longer offers', async () => {
+  const f = await tswFixture()
+  const { card: { key } } = await f.create('unoffered decision')
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'In Progress' }
+  const decision = { verb: 'needs-decision', key: 'window', summary: 'Which window?' }
+  await f.publish([tswTask(key, '', 'off', { hints: { open_decisions: [decision] } })])
+  expect((await f.run(true, 1, '-decision')).stopped).toBe(true)
+  issue.fields.status = { name: 'To Do' }
+  f.appendHistory(issue.id, [{ fieldId: 'status', fromString: 'In Progress', toString: 'To Do' }], 'jira-owner')
+  f.controls.transitionList = transitions.filter(transition => transition.name !== 'Request Decision')
+  const detail = 'checks green: PR ready for review'
+  await f.publish([tswTask(key, detail, 'off', { hints: {
+    last_event_text: `done: PR ${fixturePull} checks green at head ${fixtureHead}`, open_decisions: [decision],
+  } })])
+  await f.publishBackup([tswTask(key, detail)])
+  for (const apply of [false, true]) {
+    const result = await f.run(apply)
+    expect(result.audits).toContainEqual(expect.objectContaining({ result: 'side-state-transition-unavailable' }))
+    expect(result.plans[0]?.event).toMatchObject({ target: 'Ready for Review', actor: 'Firstmate backup, Firstmate fleet' })
+  }
   expect(await f.jira().readTswCard(key)).toMatchObject({ status: 'Ready for Review' })
 })
 
@@ -1983,14 +2026,42 @@ it('requires typed Block arguments and confirms the Jira wait before and after t
   const input = { ...block, ...typedWait }
   expect(await call('transition_work', input)).toMatchObject({ outcome: 'partially-saved', code: 'unconfirmed' })
   expect(writes().map(request => request.path)).toEqual(['issue/60001'])
+  expect(await call('transition_work', input)).toMatchObject({ outcome: 'partially-saved', code: 'invalid-work' })
+  const fresh = { ...input, operation_id: 'fresh-block' }
   f.controls.loseEdit = true
-  expect(await call('transition_work', input)).toMatchObject({ outcome: 'saved', card: { status: 'Waiting For' } })
+  expect(await call('transition_work', fresh)).toMatchObject({ outcome: 'saved', card: { status: 'Waiting For' } })
   expect(writes().map(request => request.path)).toEqual(['issue/60001', 'issue/60001', 'issue/60001/transitions'])
   expect(await call('get_work', { card_id, details: false })).toMatchObject({ outcome: 'available', card: {
     status: 'Waiting For', blocker: typedWait.blocker, due_date: typedWait.next_check_in,
   } })
-  expect(await call('transition_work', input)).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+  expect(await call('transition_work', fresh)).toMatchObject({ outcome: 'saved', code: 'already-saved' })
   expect(writes()).toHaveLength(3)
+})
+
+it.each(['unchanged', 'blocker', 'date'])('reconciles a staged Block retry with Jira fields %s', async change => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Staging retry fixture', owner: 'Avery',
+  })
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'In Progress' }
+  const input = { card_id, operation_id: 'block', verb: 'Block', ...typedWait }
+  f.controls.loseStagingRead = true
+  expect(await call('transition_work', input)).toMatchObject({ outcome: 'partially-saved', code: 'unconfirmed' })
+  const target = change === 'blocker' ? 'team:other' : typedWait.blocker.target
+  const date = change === 'date' ? '2026-12-02' : typedWait.next_check_in
+  issue.fields[config.fields.blockerTarget] = target
+  issue.fields.duedate = date
+  expect(await call('transition_work', input)).toMatchObject(change === 'unchanged'
+    ? { outcome: 'saved' }
+    : { outcome: 'partially-saved', code: 'invalid-work' })
+  const writes = f.requests.filter(request => request.method !== 'GET' && request.path.startsWith('issue/60001'))
+  expect(writes.map(request => request.path)).toEqual(change === 'unchanged'
+    ? ['issue/60001', 'issue/60001/transitions'] : ['issue/60001'])
+  expect(await call('get_work', { card_id, details: false })).toMatchObject({ card: {
+    status: change === 'unchanged' ? 'Waiting For' : 'In Progress', blocker: { ...typedWait.blocker, target }, due_date: date,
+  } })
 })
 
 it('requires actual description text for Queue and Start', async () => {

@@ -57,6 +57,7 @@ type Issue = {
 type Attempt = {
   marker: string
   dispatched: boolean
+  staged: boolean
   stage: (write: () => Promise<unknown>) => Promise<void>
   dispatch: () => Promise<void>
   confirm: (card: Issue) => ReturnType<JiraWork['saved']>
@@ -628,7 +629,7 @@ export class JiraWork extends JiraClient {
       if (preflight && !dispatched && !preflightComplete) throw new JiraWorkInputError('Jira dispatch changed during preflight. Retry the same operation.')
       if (!prior) await this.receipts.putJiraWork(key, verb, false)
       return await run({
-        marker, dispatched,
+        marker, dispatched, staged,
         stage: async write => {
           const previouslyStaged = staged
           await this.receipts.putJiraWork(key, verb, false, undefined, true)
@@ -672,7 +673,8 @@ export class JiraWork extends JiraClient {
       const unconfirmed = (pending || staged) && !rejected
       const result = {
         outcome: unconfirmed || staged ? 'partially-saved' as const : 'not-saved' as const,
-        code: unconfirmed ? 'unconfirmed' as const : error instanceof JiraWorkInputError ? 'invalid-work' as const : 'jira-unavailable' as const,
+        code: error instanceof JiraWorkInputError && !pending ? 'invalid-work' as const
+          : unconfirmed ? 'unconfirmed' as const : 'jira-unavailable' as const,
         operation_id: input.operation_id, ...(!rejected && cardId ? { card_id: cardId } : {}),
         message: staged ? `Blocker and next check-in may have been saved. Check Jira. ${this.message(error)}`
           : unconfirmed ? `Unconfirmed. Check Jira. ${this.message(error)}` : this.message(error),
@@ -1032,6 +1034,21 @@ export class JiraWork extends JiraClient {
     return { outcome: result.outcome, dispatched }
   }
 
+  async hasTransitionAudit(input: JiraTransition, actor: string) {
+    const note = this.transitionAudit(input, actor)
+    if (!note || !await this.writeDispatched(actor, input.operation_id)) return false
+    const id = this.id(input.card_id)
+    await this.checkProject(id)
+    try {
+      await this.checkComment(id, note)
+      await this.checkProject(id)
+      return true
+    } catch (error) {
+      if (error instanceof JiraWorkUnconfirmed) return false
+      throw error
+    }
+  }
+
   async offersTransition(input: JiraTransition) {
     const id = this.id(input.card_id)
     const destination = jiraTransitionDestination(input)
@@ -1073,6 +1090,7 @@ export class JiraWork extends JiraClient {
       if (wait && this.nativeBlockers(current).length) throw new JiraWorkInputError('Remove the native Jira blocker before choosing an external blocker')
       if (beforeWrite) await beforeWrite(this.view(current))
       if (wait && !waitMatches(current)) {
+        if (attempt.staged) throw new JiraWorkInputError('The staged wait no longer matches Jira. Check the blocker and next check-in before starting a new operation.')
         // A screenless Jira transition accepts only the transition ID. Commit
         // and verify the complete wait while still in the source status.
         await attempt.stage(() => this.request(`issue/${id}`, 'PUT', {

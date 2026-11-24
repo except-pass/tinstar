@@ -12,11 +12,10 @@ type Step = JiraTransition | JiraEdit
 type CardState = Pick<JiraWorkCard, 'status' | 'assignee_id' | 'owner'>
 type Pending = { eventId: string; target?: StatusEvent['target']; input: Step; actor: string; before: CardState; unconfirmed?: number; retry?: boolean; rejectedAttempts?: number }
 type NoteRepair = { input: JiraTransition; actor: string; attempts: number; queuedAt?: number }
-type DecisionQuestion = { eventId: string; id: string }
-type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; target?: StatusEvent['target']; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean; rejectedSteps?: Record<string, number>; handledEvents?: string[]; appliedEvents?: string[]; reviewNotes?: string[]; decisionQuestion?: DecisionQuestion; decisionQuestions?: Record<string, string> }
+type Checkpoint = { cardId: string; cursor: JiraHistoryCursor; eventId: string; target?: StatusEvent['target']; completed: string[]; pending?: Pending; noteRepairs?: NoteRepair[]; statusVersion?: string; preserveAssignee?: boolean; rejectedSteps?: Record<string, number>; handledEvents?: string[]; appliedEvents?: string[]; reviewNotes?: string[]; decisionQuestions?: Record<string, string> }
 type StatusAudit = { provider: 'jira'; time: string; cardId: string | null; result: string; home?: string; task?: string; eventId?: string; operationId?: string; detail?: string }
 type Options = {
-  jira?: Pick<JiraWork, 'readTswCard' | 'statusHistory' | 'tswReviewNote' | 'edit' | 'transition' | 'findAssignableAccount' | 'repairTransitionAudit' | 'offersTransition'>
+  jira?: Pick<JiraWork, 'readTswCard' | 'statusHistory' | 'tswReviewNote' | 'edit' | 'transition' | 'findAssignableAccount' | 'repairTransitionAudit' | 'offersTransition' | 'writeDispatched' | 'hasTransitionAudit'>
   apply: boolean; maxCards?: number; cards?: string[]; stateFile: string
   audit: (entry: StatusAudit) => Promise<void>
   now?: () => number
@@ -31,6 +30,8 @@ function attemptId({ input, retry, rejectedAttempts = 0 }: Pending) {
   const id = rejectedAttempts ? `${input.operation_id}-attempt-${rejectedAttempts + 1}` : input.operation_id
   return retry ? `${id}-retry-1` : id
 }
+const transitionAttempt = (input: JiraTransition, operation_id: string): JiraTransition =>
+  ({ ...input, operation_id, evidence: input.evidence + `\nOperation: ${operation_id}` })
 const cardState = ({ status, assignee_id, owner }: JiraWorkCard): CardState => ({ status, assignee_id, owner })
 
 function planDecision(event: Extract<StatusEvent, { target: 'Decision' }>, card: JiraWorkCard, stagedId?: string): Step[] | string {
@@ -240,11 +241,12 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
         if (previous && previous.cardId !== card.id) { await log('issue-identity-changed'); continue }
         let history = await jira.statusHistory(card.id, previous?.cursor)
         let checkpoint: Checkpoint = previous ?? { cardId: card.id, cursor: history.cursor, eventId, completed: [] }
-        const { decisionQuestion, decisionQuestions = {} } = checkpoint
-        const stagedQuestions = { ...(decisionQuestion && { [decisionQuestion.eventId]: decisionQuestion.id }), ...decisionQuestions }
+        const stagedQuestions = { ...checkpoint.decisionQuestions }
         const previousTarget = () => checkpoint.target ?? candidates.find(candidate => candidate.id === checkpoint.eventId)?.target ??
           (checkpoint.pending?.eventId === checkpoint.eventId ? checkpoint.pending?.target : undefined)
-        if (history.changes.length && (!checkpoint.pending || !confirms(checkpoint.pending, card, history.changes))) {
+        const pendingAtStart = checkpoint.pending
+        if (history.changes.length && (!pendingAtStart || !confirms(pendingAtStart, card, history.changes) ||
+          isSideState(pendingAtStart.target) && !await jira.writeDispatched(pendingAtStart.actor, attemptId(pendingAtStart)))) {
           const { pending, ...prior } = checkpoint
           const handledEvents = new Set(prior.handledEvents)
           const priorTarget = previousTarget()
@@ -254,12 +256,14 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
             const target = pending.target ?? candidates.find(candidate => candidate.id === pending.eventId)?.target
             if (!isEdit(input) && (input.verb === 'Block' || input.verb === 'Request Decision')) {
               const change = history.changes.find(change => change.field === 'status')
-              if (change?.byService && change.from === pending.before.status && change.to === jiraTransitionDestination(input)) {
+              if (change?.byService && change.from === pending.before.status && change.to === jiraTransitionDestination(input) &&
+                await jira.hasTransitionAudit(transitionAttempt(input, attemptId(pending)), pending.actor)) {
                 handledEvents.add(pending.eventId)
               }
             } else if (isEdit(input) && target === 'Decision') {
               const question = input.add_questions?.[0]
-              if (question && card.decision_questions?.some(item => item.id === question.id && item.question === question.question)) {
+              if (question && card.decision_questions?.some(item => item.id === question.id && item.question === question.question) &&
+                await jira.writeDispatched(pending.actor, attemptId(pending))) {
                 stagedQuestions[pending.eventId] = question.id
               }
             } else if (target !== 'Waiting For') {
@@ -282,7 +286,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           const reference = `\nOperation: ${operation_id}`
           const input = isEdit(original)
             ? { ...original, operation_id, ...(original.note && { note: original.note + reference }) }
-            : { ...original, operation_id, evidence: original.evidence + reference }
+            : transitionAttempt(original, operation_id)
           const alreadyChanged = history.changes.length > 0 &&
             !(pending.retry && isEdit(input) && confirms(pending, card, history.changes))
           const expected = { ...cardState(card), updated_at: card.updated_at, id: card.id, key: card.key }
@@ -333,7 +337,8 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           }
           const verified = outcome.outcome === 'saved' && !outcome.message
           const missingNote = !isEdit(input) && (outcome.code === 'unconfirmed' || outcome.outcome === 'saved' && !!outcome.message)
-          if ((verified || missingNote) && card.id === checkpoint.cardId && confirms(pending, card, history.changes)) {
+          if ((verified || missingNote) && card.id === checkpoint.cardId && confirms(pending, card, history.changes) &&
+            (!isSideState(pending.target) || await jira.writeDispatched(actor, operation_id))) {
             const { pending: _pending, ...prior } = checkpoint
             const appliedEvents = new Set(prior.appliedEvents)
             const handledEvents = new Set(prior.handledEvents)
@@ -405,22 +410,41 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           const id = identify(step, candidate, card.status, checkpoint.statusVersion).operation_id
           return (checkpoint.rejectedSteps?.[id] ?? 0) >= stepAttemptLimit ? id : undefined
         }
-        const excluded = new Set<string>()
-        for (const candidate of candidates) {
-          if (handled(candidate.id)) continue
-          if (!isSideState(candidate.target)) continue
-          const proposed = plan(candidate, card, undefined, false, stagedQuestions[candidate.id])
-          const next = typeof proposed === 'string' ? undefined : remaining(candidate, proposed)[0]
-          const operationId = next && capped(candidate, next)
-          if (!operationId) continue
-          excluded.add(candidate.id)
-          await audit(key, 'rejected-cap-reached', { home: candidate.home, task: candidate.task, eventId: candidate.id, operationId })
+        const sideUnavailable = async (candidate: StatusEvent, steps: Step[]) => {
+          const transition = steps.find((step): step is JiraTransition => !isEdit(step))
+          if (transition && !await jira.offersTransition(transition)) return 'side-state-transition-unavailable'
         }
-        const eligible = subjects.map(subject => subject.filter(candidate => !handled(candidate.id) && !excluded.has(candidate.id)))
-        for (const candidate of candidates.filter(candidate => handled(candidate.id))) {
-          await audit(key, 'event-already-applied', { home: candidate.home, task: candidate.task, eventId: candidate.id })
+        const select = async () => {
+          const eligible: StatusEvent[][] = []
+          for (const subject of subjects) {
+            const choices: StatusEvent[] = []
+            for (const candidate of subject) {
+              let reason: string | undefined
+              let operationId: string | undefined
+              if (handled(candidate.id)) {
+                reason = 'event-already-applied'
+              } else if (isSideState(candidate.target)) {
+                const proposed = plan(candidate, card, undefined, false, stagedQuestions[candidate.id])
+                if (typeof proposed === 'string') {
+                  reason = proposed
+                } else {
+                  const steps = remaining(candidate, proposed)
+                  const [next] = steps
+                  operationId = next && capped(candidate, next)
+                  reason = !next ? 'event-already-applied' : operationId ? 'rejected-cap-reached' : await sideUnavailable(candidate, steps)
+                }
+              }
+              if (reason) {
+                await audit(key, reason, { home: candidate.home, task: candidate.task, eventId: candidate.id, operationId })
+              } else {
+                choices.push(candidate)
+              }
+            }
+            eligible.push(choices)
+          }
+          return arbitrate(key, eligible)
         }
-        const selected = await arbitrate(key, eligible)
+        let selected = await select()
         event = selected.find(candidate => candidate.id === checkpoint.pending?.eventId) ?? selected[0]
         eventId = event?.id ?? checkpoint.pending?.eventId ?? ''
 
@@ -429,6 +453,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           if (!resumed) processed++
           resumed = true
           if (!await execute(checkpoint.pending)) continue
+          selected = await select()
         }
         for (const candidate of selected) {
           event = candidate
@@ -462,12 +487,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
               continue
             }
           }
-          const sideTransition = isSideState(event.target) && steps.find((step): step is JiraTransition => !isEdit(step))
-          if (sideTransition && !await jira.offersTransition(sideTransition)) {
-            await log('side-state-transition-unavailable')
-            continue
-          }
-          const cappedOperation = capped(event, next)
+          const cappedOperation = !isSideState(event.target) && capped(event, next)
           if (cappedOperation) {
             await log('rejected-cap-reached', cappedOperation)
             continue
