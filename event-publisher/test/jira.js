@@ -284,6 +284,17 @@ globalThis.fetch = async () => {
   match(terminal, /\[replay\] jira\/ticket WORK-1 · comment 84001 created/)
   match(terminal, /↵ Second line/)
   ok(!terminal.includes(secret))
+  const mergeNote = `Will: merge https://github.com/fixture/project/pull/123 head ${'a'.repeat(40)}`
+  const mergePublication = webhookEvent('comment_created', {
+    comment: { id: '84002', author: { accountId: 'fixture-service' }, body: mergeNote },
+  })
+  equal((await post('merge-publication', mergePublication)).status, 204)
+  equal((await post('merge-publication', mergePublication)).status, 204)
+  const mergeEvents = lines((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout)
+    .filter(event => event.evidence.source_reference.comment_id === '84002')
+  equal(mergeEvents.length, 1)
+  equal(mergeEvents[0].event_type, 'ticket.comment.created')
+  equal(mergeEvents[0].change.after, mergeNote)
   const mixed = { ...evidence.comment, id: '85001', body: { type: 'doc', content: [
     { type: 'paragraph', content: [
       { type: 'text', text: 'Review with ' }, { type: 'mention', attrs: { id: 'account' } },

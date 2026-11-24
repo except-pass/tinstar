@@ -34,7 +34,10 @@ const cardState = ({ status, assignee_id, owner }: JiraWorkCard): CardState => (
 
 function plan(event: StatusEvent, card: JiraWorkCard, existing: ReviewNote | undefined, recorded: boolean): Step[] | string {
   if (['Done', 'Canceled'].includes(card.status)) return 'terminal-card'
-  if (card.status === event.target) return 'already-at-target'
+  const review = card.status === 'Ready for Review'
+  const replacement = review && event.target === 'Ready for Review' && !!event.head &&
+    !!existing?.current && existing.current !== event.head
+  if (card.status === event.target && !replacement) return 'already-at-target'
   if (event.target === 'Ready for Review') {
     if (!event.head) return 'review-head-unverified'
     if (existing?.current !== event.head && (recorded || existing?.heads.has(event.head))) return 'review-note-needs-attention'
@@ -42,8 +45,7 @@ function plan(event: StatusEvent, card: JiraWorkCard, existing: ReviewNote | und
   const queuedFrom = { Backlog: 'Fast-track', 'To Do': 'Queue' } as const
   const queue = queuedFrom[card.status as keyof typeof queuedFrom]
   const active = card.status === 'In Progress'
-  const review = card.status === 'Ready for Review'
-  if (!queue && card.status !== 'Queued' && !active && !(review && event.target === 'Done')) return 'preserve-current-status'
+  if (!queue && card.status !== 'Queued' && !active && !(review && event.target === 'Done') && !replacement) return 'preserve-current-status'
   if ((queue || card.status === 'Queued') && !card.description.trim()) {
     return 'missing-queue-or-start-instructions'
   }
@@ -61,15 +63,15 @@ function plan(event: StatusEvent, card: JiraWorkCard, existing: ReviewNote | und
     steps.push({ ...transition, operation_id: destination.toLowerCase().replaceAll(' ', '-') })
   }
 
-  if (!card.owner) edit('owner', { owner: event.owner })
+  if (!card.owner && !replacement) edit('owner', { owner: event.owner })
   if (queue) move(queue)
   // A review or completion PR also supplies evidence for an intermediate Start.
   if (!active && !review) move('Start')
   if (event.target === 'Ready for Review') {
     if (existing?.current !== event.head) {
-      edit('review', { assignee: reviewer, note: `Will: merge ${event.pull} head ${event.head}\nPublishers: ${JSON.stringify(event.publishers)}` })
+      edit('review', { ...(replacement ? {} : { assignee: reviewer }), note: `Will: merge ${event.pull} head ${event.head}\nPublishers: ${JSON.stringify(event.publishers)}` })
     }
-    move('Submit for Review')
+    if (!replacement) move('Submit for Review')
   }
   if (event.target === 'Done') move(review ? 'Accept Final' : 'Complete Directly')
   return steps
@@ -324,7 +326,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
           await log('event-already-applied')
           continue
         }
-        const existing = event.target === 'Ready for Review' && event.head && card.status !== event.target
+        const existing = event.target === 'Ready for Review' && event.head
           ? await jira.tswReviewNote(card.id, event.pull) : undefined
         if (apply && event.target === 'Ready for Review' && event.head && existing?.heads.has(event.head) &&
             !checkpoint.reviewNotes?.includes(eventId)) {
@@ -338,7 +340,7 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
         const steps = proposed.filter(step => checkpoint.eventId !== eventId ||
           !checkpoint.completed.includes(identify(step, event, card.status, checkpoint.statusVersion).operation_id))
         if (!steps.length) { await log('event-already-applied'); continue }
-        if (event.target === 'Ready for Review') {
+        if (event.target === 'Ready for Review' && card.status !== event.target) {
           const reviewerId = await jira.findAssignableAccount(card.id, reviewer)
           if (!reviewerId || checkpoint.preserveAssignee && card.assignee_id !== reviewerId) {
             await log('reviewer-blocked')
