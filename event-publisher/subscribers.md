@@ -6,6 +6,10 @@ connects independently with its own local receipt journal. Give each independent
 delivery destination its own durable consumer. One host can supervise several
 bridges.
 
+For either flavor, `event_id` must be 1–256 characters using ASCII letters,
+digits, colons, underscores, or hyphens. Keep the same ID on retries. The
+envelope's `topic` must equal the broker subject and match a configured filter.
+
 ## Mate
 
 Run the bridge on the host of the configured home. The local configuration
@@ -105,6 +109,10 @@ topics use separate credentials scoped to the approved destinations.
 Start with the bridge seed in `EVENTS_NATS_NKEY_SEED`. Set
 `EVENTS_WEBHOOK_TOKEN` from the endpoint credential for the webhook flavor.
 Load secrets from Clavis or the host's service credential provider.
+Pass the JSON file with `--config`. Use `--db` to select a local receipt journal.
+Without `--db`, the CLI uses `EVENTS_DB` or, if unset,
+`$HOME/srv/event-publisher/journal.sqlite`. The subscriber creates the journal
+if it does not exist.
 
 ```sh
 EVENTS_NATS_NKEY_SEED="$(clavis get tinstar/jetstream-hilda.seed)" \

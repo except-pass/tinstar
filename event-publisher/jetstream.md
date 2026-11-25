@@ -107,6 +107,9 @@ in its `jetstream` block. If it is missing, add it, validate the config with
 `nats-server.service`, and confirm the existing file-backed stream is available.
 Keep the existing store directory.
 
+Follow the [subscriber recovery steps](subscribers.md#stream-recovery) before
+recreating the stream during this cutover.
+
 Stop the named live relay if it is running and keep it stopped throughout
 the isolated proof. Keep Hulk's signed Jira ingress and publisher running
 throughout the cutover. Prepare an empty Serena stream with no deduplication
