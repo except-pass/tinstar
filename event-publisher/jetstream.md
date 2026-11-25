@@ -107,6 +107,9 @@ in its `jetstream` block. If it is missing, add it, validate the config with
 `nats-server.service`, and confirm the existing file-backed stream is available.
 Keep the existing store directory.
 
+Follow the [subscriber recovery steps](subscribers.md#stream-recovery) before
+recreating the stream during this cutover.
+
 Stop the named live relay if it is running and keep it stopped throughout
 the isolated proof. Keep Hulk's signed Jira ingress and publisher running
 throughout the cutover. Prepare an empty Serena stream with no deduplication
@@ -182,6 +185,9 @@ visibility as Hulk journal readers. This restriction applies to management
 API retrieval and replay as well as live delivery. JetStream retains facts
 within the stream's 30-day and 256 MiB limits. Facts that age out or are evicted
 under the size limit remain available from the journal.
+
+Before recreating or replacing any stream in this runbook, follow the
+[subscriber recovery steps](subscribers.md#stream-recovery).
 
 After any broker disk fault, suspected stream loss, or broker or stream
 replacement, stop the named relay. Delete and recreate the file-backed stream

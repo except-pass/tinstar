@@ -3,13 +3,27 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { jetstream } from '@nats-io/jetstream'
 import { connect, nkeyAuthenticator } from '@nats-io/transport-node'
 
-const namePattern = /^[a-zA-Z0-9_-]+$/
+export const natsName = /^[a-zA-Z0-9_-]+$/
 const eventTypePattern = /^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/
 const pageSize = 100
 
 export class RelayConfigurationError extends Error {}
 
 class RelayTransportError extends Error {}
+
+export function isBrokerServer(server) {
+  const endpoint = typeof server === 'string' && URL.parse(server)
+  return endpoint && ['nats:', 'tls:'].includes(endpoint.protocol) && endpoint.hostname &&
+    !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash &&
+    (!endpoint.pathname || endpoint.pathname === '/')
+}
+
+export function connectBroker(server, name, inboxPrefix, seed) {
+  const authenticator = nkeyAuthenticator(Buffer.from(seed))
+  const tls = new URL(server).protocol === 'tls:' ? { rejectUnauthorized: true } : undefined
+  return connect({ servers: server, name, inboxPrefix, authenticator, tls,
+    reconnect: false, timeout: 5000, pingInterval: 10_000 })
+}
 
 export async function readRelayConfig(path) {
   if (!path) throw new RelayConfigurationError('set --config')
@@ -20,13 +34,10 @@ export async function readRelayConfig(path) {
     throw new RelayConfigurationError('cannot read the JetStream relay configuration as JSON')
   }
   const { name, server, stream, eventTypes } = config ?? {}
-  const endpoint = typeof server === 'string' && URL.parse(server)
-  if (typeof name !== 'string' || !namePattern.test(name) || typeof stream !== 'string' || !namePattern.test(stream)) {
+  if (typeof name !== 'string' || !natsName.test(name) || typeof stream !== 'string' || !natsName.test(stream)) {
     throw new RelayConfigurationError('name and stream must use letters, digits, hyphens or underscores')
   }
-  if (!endpoint || !['nats:', 'tls:'].includes(endpoint.protocol) || !endpoint.hostname ||
-      endpoint.username || endpoint.password || endpoint.search || endpoint.hash ||
-      (endpoint.pathname && endpoint.pathname !== '/')) {
+  if (!isBrokerServer(server)) {
     throw new RelayConfigurationError('server must be a NATS URL without credentials or a path')
   }
   if (!Array.isArray(eventTypes) || eventTypes.length === 0 ||
@@ -70,16 +81,12 @@ export async function runRelay(journal, config, seed, signal) {
   let nc
   let js
   let delay = 1000
-  const authenticator = nkeyAuthenticator(Buffer.from(seed))
-  const tls = new URL(config.server).protocol === 'tls:' ? { rejectUnauthorized: true } : undefined
   try {
     while (!signal.aborted) {
       try {
         if (!nc || nc.isClosed()) {
           try {
-            nc = await connect({ servers: config.server, name: config.name, authenticator, tls,
-              inboxPrefix: `_INBOX.tinstar_relay.${config.name}`,
-              reconnect: false, timeout: 5000, pingInterval: 10_000 })
+            nc = await connectBroker(config.server, config.name, `_INBOX.tinstar_relay.${config.name}`, seed)
             js = jetstream(nc, { timeout: 5000, checkAPI: false })
           } catch (error) {
             throw new RelayTransportError(`broker connection failed (${error.name})`)

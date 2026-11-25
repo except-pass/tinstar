@@ -9,16 +9,18 @@ import { parseArgs } from 'node:util'
 import { deploymentLifecycleSource, deploymentSource, observeDeploymentEndpoint } from './deployment.js'
 import { observeHome, sourcesFor } from './firstmate.js'
 import { githubInterval, githubObserver, githubReader, githubSource, repositoryPattern } from './github.js'
-import { Journal, JournalConfigurationError, RelayCheckpointError } from './journal.js'
+import { Journal, JournalConfigurationError, RelayCheckpointError, SubscriberJournalError } from './journal.js'
 import { jiraConfig, JiraWebhookConfigurationError, startJiraWebhook } from './jira.js'
 import { readRelayConfig, RelayConfigurationError, runRelay } from './jetstream.js'
 import { releaseTagObserver, tagInterval, tagSource } from './releaseTags.js'
 import { migrationReceipt, MigrationReceiptError, routingReplayCheck } from './routing.js'
+import { readSubscriberConfig, runSubscriber, SubscriberConfigurationError } from './subscriber.js'
 
 const usage = `Usage
   events serve --config <file> [--interval <seconds>]
   events observe --config <file>
   events relay --config <file>
+  events subscribe --config <file> [--db <subscriber-journal>]
   events watch [--after <sequence>] [filters] [--json]
   events replay [--last <count> | --after <sequence>] [filters] [--json]
   events inspect <event-id>
@@ -49,6 +51,7 @@ const commandOptions = {
   serve: ['config', 'interval'],
   observe: ['config'],
   relay: ['config'],
+  subscribe: ['config'],
   watch: ['after', 'source', 'type', 'entity', 'json'],
   replay: ['after', 'last', 'source', 'type', 'entity', 'json'],
   inspect: [],
@@ -445,15 +448,24 @@ async function main() {
   const path = resolve(values.db ?? configuredPath)
   const collector = command === 'serve' || command === 'observe'
   const relay = command === 'relay'
+  const subscriber = command === 'subscribe' ? await readSubscriberConfig(values.config) : null
   const interval = command === 'serve' ? integer(values.interval ?? '20', '--interval', 15) : null
   if (interval > 3600) throw new UsageError('--interval must be at most 3600 seconds')
   const config = collector ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
   const relayConfig = relay ? await readRelayConfig(values.config) : null
   const seed = process.env.EVENTS_NATS_NKEY_SEED?.trim()
+  const webhookToken = process.env.EVENTS_WEBHOOK_TOKEN?.trim()
   delete process.env.EVENTS_NATS_NKEY_SEED
+  delete process.env.EVENTS_WEBHOOK_TOKEN
   if (relay) {
     if (!seed) throw new RelayConfigurationError('set EVENTS_NATS_NKEY_SEED from the relay credential')
     await access(path).catch(() => { throw new RelayConfigurationError('relay requires an existing journal at --db or EVENTS_DB') })
+  }
+  if (subscriber) {
+    if (!seed) throw new SubscriberConfigurationError('set EVENTS_NATS_NKEY_SEED from the subscriber credential')
+    if (subscriber.flavor === 'webhook' && !webhookToken) {
+      throw new SubscriberConfigurationError('set EVENTS_WEBHOOK_TOKEN from the destination credential')
+    }
   }
   const migration = command === 'record-migration' ? await readMigration(detail) : null
   if (migration?.source.mode === 'fixture' && (!values.db || path === configuredPath || path === defaultPath)) {
@@ -468,15 +480,16 @@ async function main() {
     throw new UsageError('set EVENTS_JIRA_WEBHOOK_SECRET from the Jira admin webhook secret')
   }
   if (command === 'observe' && !config.homes.length && !config.deployment && !config.tags) throw new UsageError('use events serve to receive Jira webhooks')
-  const journal = new Journal(path, { readOnly: !collector && !migration && !relay })
+  const journal = new Journal(path, { readOnly: !collector && !migration && !relay && !subscriber })
   try {
     if (collector) {
       const healthy = await collect(journal, config, interval, secret, readToken)
       if (command === 'observe' && !healthy) process.exitCode = 1
-    } else if (relay) {
+    } else if (relay || subscriber) {
       const controller = signalController()
       try {
-        await runRelay(journal, relayConfig, seed, controller.signal)
+        if (relay) await runRelay(journal, relayConfig, seed, controller.signal)
+        else await runSubscriber(journal, subscriber, seed, webhookToken, controller.signal)
       } finally {
         controller.close()
       }
@@ -501,6 +514,11 @@ async function main() {
         const reason = transport.reason ? ` · ${transport.reason}` : ''
         console.log(`jetstream:${transport.name} last recorded state ${transport.health} · ${transport.stream} · processed through #${transport.sequence} · last broker ack ${age(transport.last_ack_at)} · last status update ${age(transport.updated_at)}${reason}`)
       }
+      for (const bridge of journal.subscriberStatus()) {
+        const reason = bridge.reason ? ` · ${bridge.reason}` : ''
+        const receipt = bridge.request_id ? ` · request ${bridge.request_id} · receipt ${bridge.receipt_id ?? 'pending'}` : ''
+        console.log(`jetstream-subscriber:${bridge.name} last recorded state ${bridge.health} · ${bridge.stream}/${bridge.name} · ${bridge.flavor} · last status update ${age(bridge.updated_at)}${receipt}${reason}`)
+      }
     } else {
       const statuses = new Map(journal.sources().map(source => [source.source_id, source]))
       if (values.json) console.error('Replay from the journal')
@@ -523,9 +541,10 @@ process.stdout.on('error', error => {
 try {
   await main()
 } catch (error) {
-  const usageError = error instanceof UsageError || error instanceof MigrationReceiptError || error instanceof RelayConfigurationError
+  const usageError = error instanceof UsageError || error instanceof MigrationReceiptError ||
+    error instanceof RelayConfigurationError || error instanceof SubscriberConfigurationError
   const message = usageError || error instanceof JournalConfigurationError || error instanceof JiraWebhookConfigurationError ||
-    error instanceof RelayCheckpointError ? error.message
+    error instanceof RelayCheckpointError || error instanceof SubscriberJournalError ? error.message
     : error.code === 'ERR_SQLITE_ERROR' ? 'cannot access the journal; check its path, permissions and writer'
     : 'publisher failed; check the journal path and permissions'
   console.error(`events: ${message}`)

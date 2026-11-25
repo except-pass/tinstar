@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -81,6 +81,26 @@ CREATE TABLE IF NOT EXISTS jetstream_relays (
   reason TEXT,
   last_ack_at TEXT,
   updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS jetstream_subscribers (
+  name TEXT PRIMARY KEY,
+  stream TEXT NOT NULL,
+  flavor TEXT NOT NULL,
+  destination_fingerprint TEXT NOT NULL,
+  failure_sequence INTEGER,
+  health TEXT NOT NULL DEFAULT 'pending',
+  reason TEXT,
+  request_id TEXT,
+  receipt_id TEXT,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS jetstream_subscriber_receipts (
+  name TEXT NOT NULL REFERENCES jetstream_subscribers(name),
+  request_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  receipt_id TEXT NOT NULL,
+  delivered_at TEXT NOT NULL,
+  PRIMARY KEY (name, request_id)
 );
 `
 
@@ -188,6 +208,7 @@ function releaseTagEvent(subject, tag, sha, observed_at, event_type, label, chan
 
 export class JournalConfigurationError extends Error {}
 export class RelayCheckpointError extends Error {}
+export class SubscriberJournalError extends Error {}
 
 export class Journal {
   constructor(path, { readOnly = false } = {}) {
@@ -859,6 +880,69 @@ export class Journal {
   relayStatus() {
     const present = this.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'jetstream_relays'").get()
     return present ? this.db.prepare('SELECT * FROM jetstream_relays ORDER BY name').all() : []
+  }
+
+  registerSubscriber({ name, stream, flavor, destination }) {
+    const route = flavor === 'mate' ? destination.home : destination.url.origin + destination.url.pathname
+    const fingerprint = createHash('sha256').update(JSON.stringify([flavor, route])).digest('hex')
+    try {
+      this.db.prepare(`
+        INSERT INTO jetstream_subscribers (name, stream, flavor, destination_fingerprint) VALUES (?, ?, ?, ?)
+        ON CONFLICT(name) DO NOTHING
+      `).run(name, stream, flavor, fingerprint)
+      const previous = this.db.prepare('SELECT stream, destination_fingerprint FROM jetstream_subscribers WHERE name = ?').get(name)
+      if (previous.stream !== stream || previous.destination_fingerprint !== fingerprint) {
+        throw new JournalConfigurationError('subscriber stream or destination does not match its journal registration; use a distinct subscriber name and durable')
+      }
+    } catch (error) {
+      if (error instanceof JournalConfigurationError) throw error
+      throw new SubscriberJournalError(`JetStream subscriber ${name} could not initialize its journal`)
+    }
+  }
+
+  updateSubscriber(name, health, reason = null, { sequence = null, requestId = null, receiptId = null } = {}) {
+    try {
+      this.db.prepare(`
+        UPDATE jetstream_subscribers
+        SET health = ?, updated_at = ?,
+            reason = CASE WHEN failure_sequence IS NULL OR failure_sequence = :sequence THEN :reason ELSE reason END,
+            failure_sequence = CASE WHEN failure_sequence IS NULL OR failure_sequence = :sequence
+                                    THEN CASE WHEN :reason IS NOT NULL THEN :sequence END ELSE failure_sequence END,
+            request_id = CASE WHEN :sequence IS NOT NULL AND (failure_sequence IS NULL OR failure_sequence = :sequence)
+                              THEN :requestId ELSE request_id END,
+            receipt_id = CASE WHEN :sequence IS NOT NULL AND (failure_sequence IS NULL OR failure_sequence = :sequence)
+                              THEN :receiptId ELSE receipt_id END
+        WHERE name = ?
+      `).run({ sequence, reason, requestId, receiptId }, health, new Date().toISOString(), name)
+    } catch {
+      throw new SubscriberJournalError(`JetStream subscriber ${name} could not save its delivery status`)
+    }
+  }
+
+  subscriberReceipt(name, requestId) {
+    try {
+      return this.db.prepare(`
+        SELECT receipt_id FROM jetstream_subscriber_receipts WHERE name = ? AND request_id = ?
+      `).get(name, requestId)?.receipt_id
+    } catch {
+      throw new SubscriberJournalError(`JetStream subscriber ${name} could not read receipt ${requestId}`)
+    }
+  }
+
+  recordSubscriberReceipt(name, requestId, eventId, receiptId) {
+    try {
+      this.db.prepare(`
+        INSERT INTO jetstream_subscriber_receipts (name, request_id, event_id, receipt_id, delivered_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(name, request_id) DO NOTHING
+      `).run(name, requestId, eventId, receiptId, new Date().toISOString())
+    } catch {
+      throw new SubscriberJournalError(`JetStream subscriber ${name} could not save receipt ${requestId}`)
+    }
+  }
+
+  subscriberStatus() {
+    const present = this.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'jetstream_subscribers'").get()
+    return present ? this.db.prepare('SELECT * FROM jetstream_subscribers ORDER BY name').all() : []
   }
 
   inspect(id) {
