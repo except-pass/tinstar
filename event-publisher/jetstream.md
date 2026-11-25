@@ -183,6 +183,9 @@ API retrieval and replay as well as live delivery. JetStream retains facts
 within the stream's 30-day and 256 MiB limits. Facts that age out or are evicted
 under the size limit remain available from the journal.
 
+Before recreating or replacing any stream in this runbook, follow the
+[subscriber recovery steps](subscribers.md#stream-recovery).
+
 After any broker disk fault, suspected stream loss, or broker or stream
 replacement, stop the named relay. Delete and recreate the file-backed stream
 or provision a replacement on a broker configured with `sync_interval: always`.

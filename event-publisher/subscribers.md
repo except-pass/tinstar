@@ -128,6 +128,17 @@ a changed destination under an existing subscriber name. To migrate, coordinate
 the publishing cutover so new messages wait in the publishing outbox while
 you drain the old subscriber on its original route.
 Confirm pending and acknowledgment counts reach zero, then register a new name
-with its own durable and switch publishing to the new route. If a pre-fingerprint
-journal already contains a subscriber registration, drain it with the original
-bridge and configuration before upgrading.
+with its own durable and switch publishing to the new route.
+
+## Stream recovery
+
+Follow the [relay recovery and checkpoint reset steps](jetstream.md#facts-and-recovery)
+when recreating or replacing a stream. Stop every Mate and webhook subscriber
+on that stream before recreating it, and keep them stopped until their local
+state has been reset. For each subscriber, use its local journal and delete
+only rows for its name from `jetstream_subscriber_receipts` and then
+`jetstream_subscribers` in one transaction. The registration row also stores
+the failure status.
+Alternatively, register the subscriber under a new name with its own durable.
+Provision the consumer on the replacement stream before restarting the bridge.
+A recreated stream can reuse sequence numbers for different messages.

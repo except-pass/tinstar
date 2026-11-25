@@ -159,19 +159,6 @@ function openJournal(path, readOnly) {
     if (!readOnly) {
       db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL')
       db.exec(schema)
-      const hasLegacySubscriberSchema = () => db.prepare('PRAGMA table_info(jetstream_subscribers)')
-        .all().some(column => column.name === 'consumer')
-      if (hasLegacySubscriberSchema()) {
-        db.exec('BEGIN IMMEDIATE')
-        if (hasLegacySubscriberSchema()) {
-          db.exec(`
-            ALTER TABLE jetstream_subscribers DROP COLUMN consumer;
-            ALTER TABLE jetstream_subscribers ADD COLUMN destination_fingerprint TEXT;
-            ALTER TABLE jetstream_subscribers ADD COLUMN failure_sequence INTEGER;
-          `)
-        }
-        db.exec('COMMIT')
-      }
     }
   } catch (error) {
     db.close()
