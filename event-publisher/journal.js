@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -85,8 +85,9 @@ CREATE TABLE IF NOT EXISTS jetstream_relays (
 CREATE TABLE IF NOT EXISTS jetstream_subscribers (
   name TEXT PRIMARY KEY,
   stream TEXT NOT NULL,
-  consumer TEXT NOT NULL,
   flavor TEXT NOT NULL,
+  destination_fingerprint TEXT NOT NULL,
+  failure_sequence INTEGER,
   health TEXT NOT NULL DEFAULT 'pending',
   reason TEXT,
   request_id TEXT,
@@ -158,6 +159,19 @@ function openJournal(path, readOnly) {
     if (!readOnly) {
       db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL')
       db.exec(schema)
+      const hasLegacySubscriberSchema = () => db.prepare('PRAGMA table_info(jetstream_subscribers)')
+        .all().some(column => column.name === 'consumer')
+      if (hasLegacySubscriberSchema()) {
+        db.exec('BEGIN IMMEDIATE')
+        if (hasLegacySubscriberSchema()) {
+          db.exec(`
+            ALTER TABLE jetstream_subscribers DROP COLUMN consumer;
+            ALTER TABLE jetstream_subscribers ADD COLUMN destination_fingerprint TEXT;
+            ALTER TABLE jetstream_subscribers ADD COLUMN failure_sequence INTEGER;
+          `)
+        }
+        db.exec('COMMIT')
+      }
     }
   } catch (error) {
     db.close()
@@ -881,17 +895,17 @@ export class Journal {
     return present ? this.db.prepare('SELECT * FROM jetstream_relays ORDER BY name').all() : []
   }
 
-  registerSubscriber({ name, stream, consumer, flavor }) {
+  registerSubscriber({ name, stream, flavor, destination }) {
+    const route = flavor === 'mate' ? destination.home : destination.url.origin + destination.url.pathname
+    const fingerprint = createHash('sha256').update(JSON.stringify([flavor, route])).digest('hex')
     try {
       this.db.prepare(`
-        INSERT INTO jetstream_subscribers (name, stream, consumer, flavor) VALUES (?, ?, ?, ?)
+        INSERT INTO jetstream_subscribers (name, stream, flavor, destination_fingerprint) VALUES (?, ?, ?, ?)
         ON CONFLICT(name) DO NOTHING
-      `).run(name, stream, consumer, flavor)
-      const previous = this.db.prepare('SELECT stream, consumer, flavor FROM jetstream_subscribers WHERE name = ?').get(name)
-      if (previous.stream !== stream || previous.consumer !== consumer || previous.flavor !== flavor) {
-        // A new delivery route needs its own receipt namespace so old receipts
-        // cannot suppress delivery on the new durable.
-        throw new JournalConfigurationError('use a distinct subscriber name when changing stream, durable or flavor')
+      `).run(name, stream, flavor, fingerprint)
+      const previous = this.db.prepare('SELECT stream, destination_fingerprint FROM jetstream_subscribers WHERE name = ?').get(name)
+      if (previous.stream !== stream || previous.destination_fingerprint !== fingerprint) {
+        throw new JournalConfigurationError('subscriber stream or destination does not match its journal registration; use a distinct subscriber name and durable')
       }
     } catch (error) {
       if (error instanceof JournalConfigurationError) throw error
@@ -899,14 +913,20 @@ export class Journal {
     }
   }
 
-  updateSubscriber(name, health, reason = null, requestId = null, receiptId = null) {
+  updateSubscriber(name, health, reason = null, { sequence = null, requestId = null, receiptId = null } = {}) {
     try {
       this.db.prepare(`
         UPDATE jetstream_subscribers
-        SET health = ?, reason = ?, request_id = COALESCE(?, request_id),
-            receipt_id = CASE WHEN ? IS NULL THEN receipt_id ELSE ? END, updated_at = ?
+        SET health = ?, updated_at = ?,
+            reason = CASE WHEN failure_sequence IS NULL OR failure_sequence = :sequence THEN :reason ELSE reason END,
+            failure_sequence = CASE WHEN failure_sequence IS NULL OR failure_sequence = :sequence
+                                    THEN CASE WHEN :reason IS NOT NULL THEN :sequence END ELSE failure_sequence END,
+            request_id = CASE WHEN :sequence IS NOT NULL AND (failure_sequence IS NULL OR failure_sequence = :sequence)
+                              THEN :requestId ELSE request_id END,
+            receipt_id = CASE WHEN :sequence IS NOT NULL AND (failure_sequence IS NULL OR failure_sequence = :sequence)
+                              THEN :receiptId ELSE receipt_id END
         WHERE name = ?
-      `).run(health, reason, requestId, requestId, receiptId, new Date().toISOString(), name)
+      `).run({ sequence, reason, requestId, receiptId }, health, new Date().toISOString(), name)
     } catch {
       throw new SubscriberJournalError(`JetStream subscriber ${name} could not save its delivery status`)
     }

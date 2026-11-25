@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Journal } from '../journal.js'
-import { deliverMessage, deliveryRequestId, readSubscriberConfig } from '../subscriber.js'
+import { deliverMessage, deliveryRequestId, readSubscriberConfig, runSubscriber } from '../subscriber.js'
 
 async function sandbox(t) {
   const directory = await mkdtemp(join(tmpdir(), 'tinstar-subscriber-'))
@@ -14,9 +14,9 @@ async function sandbox(t) {
   return directory
 }
 
-function delivery(event, { subject = event.topic, loseAck = false } = {}) {
+function delivery(event, { subject = event.topic, loseAck = false, seq = 7 } = {}) {
   return {
-    subject, seq: 7, info: { deliveryCount: 1 }, json: () => event, acks: 0, retries: [],
+    subject, seq, info: { deliveryCount: 1 }, json: () => event, acks: 0, retries: [],
     nak(delay) { this.retries.push(delay) },
     async ackAck() {
       this.acks++
@@ -29,18 +29,19 @@ function delivery(event, { subject = event.topic, loseAck = false } = {}) {
 test('webhook retries a failed POST and re-acks a durably received event after a lost confirmation', async t => {
   const directory = await sandbox(t)
   const requests = []
+  let unavailable = true
   const server = createServer(async (request, response) => {
     const body = []
     for await (const chunk of request) body.push(chunk)
     requests.push({ authorization: request.headers.authorization, key: request.headers['idempotency-key'],
       body: JSON.parse(Buffer.concat(body)) })
-    response.writeHead(requests.length === 1 ? 503 : 204).end()
+    response.writeHead(unavailable ? 503 : 204).end()
   })
   server.listen(0, '127.0.0.1')
   t.after(() => server.close())
   await once(server, 'listening')
   const config = {
-    name: 'controlled-webhook', flavor: 'webhook', stream: 'TINSTAR_FACTS', consumer: 'webhook',
+    name: 'controlled-webhook', flavor: 'webhook', stream: 'TINSTAR_FACTS',
     topics: ['tinstar.fact.jira.ticket.*'], destination: { url: new URL(`http://127.0.0.1:${server.address().port}/receive`) },
   }
   const event = {
@@ -62,6 +63,7 @@ test('webhook retries a failed POST and re-acks a durably received event after a
     equal(journal.subscriberReceipt(config.name, requestId), undefined)
     match(journal.subscriberStatus()[0].reason, /HTTP 503/)
 
+    unavailable = false
     const accepted = delivery(event, { loseAck: true })
     await rejects(deliverMessage(journal, config, accepted, token), /broker did not confirm/)
     equal(journal.subscriberReceipt(config.name, requestId), requestId)
@@ -74,12 +76,31 @@ test('webhook retries a failed POST and re-acks a durably received event after a
 
     journal.close()
     journal = new Journal(path)
+    await rejects(
+      runSubscriber(journal, { ...config, destination: { url: new URL('/other', config.destination.url) } },
+        undefined, token, AbortSignal.abort()),
+      /destination does not match its journal registration/,
+    )
     journal.registerSubscriber(config)
     const redelivery = delivery(event)
     await deliverMessage(journal, config, redelivery, token)
     equal(redelivery.acks, 1)
     equal(requests.length, 2)
     equal(journal.subscriberStatus()[0].health, 'ok')
+
+    const pending = { ...event, event_id: 'event:pending' }
+    unavailable = true
+    await deliverMessage(journal, config, delivery(pending, { seq: 8 }), token)
+    unavailable = false
+    const other = delivery({ ...event, event_id: 'event:other' }, { seq: 9 })
+    await deliverMessage(journal, config, other, token)
+    equal(other.acks, 1)
+    match(journal.subscriberStatus()[0].reason, /stream message #8: webhook returned HTTP 503/)
+    await runSubscriber(journal, config, undefined, token, AbortSignal.abort())
+    journal.updateSubscriber(config.name, 'connected')
+    match(journal.subscriberStatus()[0].reason, /stream message #8: webhook returned HTTP 503/)
+    await deliverMessage(journal, config, delivery(pending, { seq: 8 }), token)
+    equal(journal.subscriberStatus()[0].reason, null)
   } finally {
     journal.close()
   }
@@ -101,7 +122,7 @@ cat >/dev/null
 printf '{"schema":"fm-inbox-note.v1","request_id":"%s","id":"fixture-note","saved":true,"announced":true}\\n' "$3"
 `, { mode: 0o700 })
   const config = {
-    name: 'controlled-mate', flavor: 'mate', stream: 'TINSTAR_INBOX', consumer: 'mate',
+    name: 'controlled-mate', flavor: 'mate', stream: 'TINSTAR_INBOX',
     topics: ['inbox.mate.test'], destination: { home },
   }
   const event = { schema: 'tinstar.inbox.v1', event_id: 'event:mate-test', topic: 'inbox.mate.test', body: 'Controlled test note' }
@@ -109,11 +130,6 @@ printf '{"schema":"fm-inbox-note.v1","request_id":"%s","id":"fixture-note","save
   const journal = new Journal(join(home, 'receipts.sqlite'))
   try {
     journal.registerSubscriber(config)
-    const misrouted = delivery(event, { subject: 'inbox.mate.someone-else' })
-    await deliverMessage(journal, config, misrouted)
-    equal(misrouted.acks, 0)
-    await rejects(readFile(join(home, 'calls')), { code: 'ENOENT' })
-
     const first = delivery(event)
     await deliverMessage(journal, config, first)
     equal(first.acks, 0)
@@ -130,6 +146,15 @@ printf '{"schema":"fm-inbox-note.v1","request_id":"%s","id":"fixture-note","save
     equal(redelivery.acks, 1)
     equal(await readFile(join(home, 'note'), 'utf8'), event.body)
     equal(await readFile(join(home, 'calls'), 'utf8'), `${requestId}\n${requestId}\n`)
+    await rejects(
+      runSubscriber(journal, { ...config, destination: { home: join(home, 'other') } },
+        undefined, undefined, AbortSignal.abort()),
+      /destination does not match its journal registration/,
+    )
+    const misrouted = delivery(event, { subject: 'inbox.mate.someone-else', seq: 8 })
+    await deliverMessage(journal, config, misrouted)
+    equal(misrouted.acks, 0)
+    equal(await readFile(join(home, 'calls'), 'utf8'), `${requestId}\n${requestId}\n`)
   } finally {
     journal.close()
   }
@@ -142,7 +167,7 @@ test('subscriber configuration fixes destinations locally and disallows plaintex
   await writeFile(path, JSON.stringify({ ...base, flavor: 'mate', topics: ['inbox.mate.*'], destination: { home: directory } }))
   await rejects(readSubscriberConfig(path), /one exact inbox/)
   await writeFile(path, JSON.stringify({ ...base, flavor: 'mate', topics: ['inbox.mate.proof'], destination: { home: directory } }))
-  deepEqual(await readSubscriberConfig(path), { ...base, consumer: 'proof', flavor: 'mate',
+  deepEqual(await readSubscriberConfig(path), { ...base, flavor: 'mate',
     topics: ['inbox.mate.proof'], destination: { home: directory } })
   await writeFile(path, JSON.stringify({ ...base, flavor: 'webhook', topics: ['tinstar.fact.>'],
     destination: { url: 'http://example.test/events' } }))

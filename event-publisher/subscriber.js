@@ -38,9 +38,9 @@ export async function readSubscriberConfig(path) {
   } catch {
     throw new SubscriberConfigurationError('cannot read the subscriber configuration as JSON')
   }
-  const { name, flavor, stream, consumer = name, server, topics } = config ?? {}
-  if (![name, stream, consumer].every(value => typeof value === 'string' && natsName.test(value))) {
-    throw new SubscriberConfigurationError('name, stream and consumer must use letters, digits, hyphens or underscores')
+  const { name, flavor, stream, server, topics } = config ?? {}
+  if (![name, stream].every(value => typeof value === 'string' && natsName.test(value))) {
+    throw new SubscriberConfigurationError('name and stream must use letters, digits, hyphens or underscores')
   }
   if (!isBrokerServer(server)) throw new SubscriberConfigurationError('server must be a NATS URL without credentials or a path')
   if (!Array.isArray(topics) || topics.length === 0 || !topics.every(validTopicFilter)) {
@@ -56,7 +56,7 @@ export async function readSubscriberConfig(path) {
   } catch (error) {
     throw new SubscriberConfigurationError(error.message)
   }
-  return { name, flavor, stream, consumer, server, topics: [...new Set(topics)].sort(), destination }
+  return { name, flavor, stream, server, topics: [...new Set(topics)].sort(), destination }
 }
 
 function readMessage(message, topics) {
@@ -93,7 +93,7 @@ export async function deliverMessage(journal, config, message, token) {
   } catch (error) {
     if (!(error instanceof DeliveryError)) throw error
     const reason = `stream message #${message.seq}: ${error.message}`
-    journal.updateSubscriber(config.name, 'retrying', reason, requestId, error.receiptId)
+    journal.updateSubscriber(config.name, 'retrying', reason, { sequence: message.seq, requestId, receiptId: error.receiptId })
     console.error(`JetStream subscriber ${config.name}: ${reason}`)
     const attempt = message.info.deliveryCount
     message.nak(Math.min(60, 2 ** Math.min(attempt, 6)) * 1000)
@@ -101,10 +101,10 @@ export async function deliverMessage(journal, config, message, token) {
   }
   // A lost broker acknowledgment can cause redelivery. The durable local
   // receipt makes the next attempt skip the external side effect.
-  journal.updateSubscriber(config.name, 'received', null, requestId, receiptId)
+  journal.updateSubscriber(config.name, 'received', null, { sequence: message.seq, requestId, receiptId })
   const confirmed = await message.ackAck({ timeout: 5000 }).catch(() => false)
   if (!confirmed) throw new DeliveryError('broker did not confirm the acknowledgment')
-  journal.updateSubscriber(config.name, 'ok', null, requestId, receiptId)
+  journal.updateSubscriber(config.name, 'ok', null, { sequence: message.seq, requestId, receiptId })
 }
 
 export async function runSubscriber(journal, config, seed, token, signal) {
@@ -115,7 +115,7 @@ export async function runSubscriber(journal, config, seed, token, signal) {
     try {
       const prefix = `_INBOX.tinstar_subscriber.${config.name}`
       nc = await connectBroker(config.server, config.name, prefix, seed)
-      const consumer = await jetstream(nc, { timeout: 5000, checkAPI: false }).consumers.get(config.stream, config.consumer)
+      const consumer = await jetstream(nc, { timeout: 5000, checkAPI: false }).consumers.get(config.stream, config.name)
       const { config: durable } = await consumer.info(true)
       const filters = durable.filter_subjects ?? (durable.filter_subject ? [durable.filter_subject] : [])
       if (durable.ack_policy !== 'explicit' || durable.deliver_subject ||

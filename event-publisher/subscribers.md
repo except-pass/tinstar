@@ -51,17 +51,18 @@ Use the home's normal receipt tools to verify handling or any later execution.
 ## Webhook
 
 Provision a separate consumer for the topics the operator approves forwarding
-to the endpoint. Replace the example destination with the exact approved
-GrokBot ingress URL when available.
+to the owner-operated endpoint. Any external webhook route requires an
+approved audience policy covering its topics and forwarded fields before
+it is enabled. GrokBot is deferred to a follow-up.
 
 ```json
 {
-  "name": "grokbot",
+  "name": "owner-webhook",
   "flavor": "webhook",
   "server": "nats://127.0.0.1:14222",
   "stream": "TINSTAR_FACTS",
-  "topics": ["tinstar.fact.jira.ticket.*"],
-  "destination": {"url": "https://grokbot.example.invalid/engineering/events"}
+  "topics": ["tinstar.fact.example.controlled"],
+  "destination": {"url": "https://owner.example.invalid/engineering/events"}
 }
 ```
 
@@ -76,8 +77,8 @@ controlled local proof. Redirects are rejected.
 
 ## Broker and bridge setup
 
-The `consumer` config field optionally names an existing durable and defaults
-to `name`. Provision an explicit-ack pull consumer with the same topic
+Use the subscriber `name` as the durable name. Provision an explicit-ack
+pull consumer with the same topic
 filters. Set an acknowledgment wait that exceeds the bridge's 15-second
 destination timeout and the local receipt write. For example, with the
 authenticated JetStream manager from the [broker runbook](jetstream.md):
@@ -115,9 +116,18 @@ The bridge stores its receipt before acknowledging the broker message.
 On redelivery with the same topic and event ID, the persisted receipt lets it
 acknowledge without repeating the destination action. The `received` state
 shows a persisted receipt while the bridge awaits broker acknowledgment.
-Supervisor output and
-`events sources` identify pending delivery failures, including saved notes
-whose wake could not be announced. Repair the route or credential and let the
-bridge retry. Preserve the local journal and use the same name and durable when
-restarting the same route. Choose a new name and durable for a new destination
-so the old delivery receipts do not suppress its work.
+Supervisor output records delivery failures, including saved notes whose wake
+could not be announced. `events sources` retains the first unresolved delivery
+failure until that message reaches its destination. For the full backlog, inspect
+the broker consumer with `manager.consumers.info(stream, name)`. Check
+`num_pending` for messages awaiting delivery, `num_ack_pending` for outstanding
+acknowledgments, and `num_redelivered` for messages undergoing redelivery.
+
+Preserve the local journal when restarting the same route. The journal refuses
+a changed destination under an existing subscriber name. To migrate, coordinate
+the publishing cutover so new messages wait in the publishing outbox while
+you drain the old subscriber on its original route.
+Confirm pending and acknowledgment counts reach zero, then register a new name
+with its own durable and switch publishing to the new route. If a pre-fingerprint
+journal already contains a subscriber registration, drain it with the original
+bridge and configuration before upgrading.

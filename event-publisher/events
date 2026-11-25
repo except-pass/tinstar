@@ -517,7 +517,7 @@ async function main() {
       for (const bridge of journal.subscriberStatus()) {
         const reason = bridge.reason ? ` · ${bridge.reason}` : ''
         const receipt = bridge.request_id ? ` · request ${bridge.request_id} · receipt ${bridge.receipt_id ?? 'pending'}` : ''
-        console.log(`jetstream-subscriber:${bridge.name} last recorded state ${bridge.health} · ${bridge.stream}/${bridge.consumer} · ${bridge.flavor} · last status update ${age(bridge.updated_at)}${receipt}${reason}`)
+        console.log(`jetstream-subscriber:${bridge.name} last recorded state ${bridge.health} · ${bridge.stream}/${bridge.name} · ${bridge.flavor} · last status update ${age(bridge.updated_at)}${receipt}${reason}`)
       }
     } else {
       const statuses = new Map(journal.sources().map(source => [source.source_id, source]))
